@@ -42,7 +42,7 @@
  */
 static DEFINE_PER_CPU(unsigned long, cpu_scale);
 
-unsigned long scale_cpu_capacity(struct sched_domain *sd, int cpu)
+unsigned long arm_arch_scale_cpu_capacity(struct sched_domain *sd, int cpu)
 {
 #ifdef CONFIG_CPU_FREQ
 	unsigned long max_freq_scale = cpufreq_scale_max_freq_capacity(cpu);
