@@ -1217,6 +1217,12 @@ static int __cpufreq_add_dev(struct device *dev, struct subsys_interface *sif)
 	 * managing offline cpus here.
 	 */
 	cpumask_and(policy->cpus, policy->cpus, cpu_online_mask);
+	
+	if (last_min > -1)
+		policy->min = last_min;
+	
+	if (last_max > -1)
+		policy->max = last_max;
 
 	if (!recover_policy) {
 		policy->user_policy.min = policy->min;
