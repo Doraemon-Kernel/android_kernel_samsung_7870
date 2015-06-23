@@ -501,6 +501,9 @@ static struct ctl_table kern_table[] = {
 		.procname	= "sched_cfs_boost",
 		.data		= &sysctl_sched_cfs_boost,
 		.maxlen		= sizeof(sysctl_sched_cfs_boost),
+#ifdef CONFIG_CGROUP_SCHEDTUNE
+		.mode		= 0444,
+#else
 		.mode		= 0644,
 		.proc_handler	= &sysctl_sched_cfs_boost_handler,
 		.extra1		= &zero,
