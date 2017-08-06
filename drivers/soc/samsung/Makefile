@@ -26,3 +26,4 @@ obj-$(CONFIG_EXYNOS_CPU_HOTPLUG)	+= exynos-cpu_hotplug.o
 obj-$(CONFIG_EXYNOS_HOTPLUG_GOVERNOR)	+= exynos-hotplug_governor.o
 
 obj-$(CONFIG_SEC_INCELL) += sec_incell.o
+obj-$(CONFIG_STATE_NOTIFIER)	+= state_notifier.o
