@@ -4596,6 +4596,7 @@ static long effective_load(struct task_group *tg, int cpu, long wl, long wg)
 
 	return wl;
 }
+
 #else
 
 static long effective_load(struct task_group *tg, int cpu, long wl, long wg)
@@ -4603,6 +4604,11 @@ static long effective_load(struct task_group *tg, int cpu, long wl, long wg)
 	return wl;
 }
 #endif
+
+static inline bool energy_aware(void)
+{
+	return sched_feat(ENERGY_AWARE);
+}
 
 static int wake_wide(struct task_struct *p)
 {
