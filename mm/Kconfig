@@ -738,3 +738,11 @@ config FAULT_AROUND_4KB
 	default n
 	help
 	  Reduce fault around bytes to 4KB for android GO models.
+
+config VM_MAX_READAHEAD
+	int "default max readahead window size"
+	default 128
+	help
+	 This sets the VM_MAX_READAHEAD value to allow the readahead window
+	 to grow to a maximum size of configured. This will benefit sequential
+	 read throughput and thus early boot performance.
