@@ -207,6 +207,4 @@ obj-$(CONFIG_SENSORS_SSP)	+= sensorhub/
 obj-$(CONFIG_GPS_BCMxxxxx)	+= gps/
 obj-$(CONFIG_GPS_BCM4752)	+= gps/
 
-# DTS_EAGLE START
 obj-$(CONFIG_AINUR_DTS_SW) += dts_eagle/
-# DTS_EAGLE END
