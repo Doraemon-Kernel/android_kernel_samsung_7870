@@ -24,11 +24,15 @@
 #include <linux/reboot.h>
 #include <linux/exynos-ss.h>
 
+#include <linux/devfreq_boost.h>
+
 #include <soc/samsung/exynos-devfreq.h>
 #include <soc/samsung/tmu.h>
 #include <soc/samsung/ect_parser.h>
 
 #include "../governor.h"
+
+
 
 static int exynos_devfreq_tmu_notifier(struct notifier_block *nb,
 					unsigned long event, void *v);
@@ -1578,6 +1582,9 @@ static int exynos_devfreq_probe(struct platform_device *pdev)
 		ret = -EINVAL;
 		goto err_devfreq;
 	}
+
+	if (data->devfreq_type == DEVFREQ_MIF)
+		devfreq_register_boost_device(DEVFREQ_EXYNOS_MIF, data->devfreq);
 
 	data->devfreq->min_freq = data->min_freq;
 	data->devfreq->max_freq = data->max_freq;
