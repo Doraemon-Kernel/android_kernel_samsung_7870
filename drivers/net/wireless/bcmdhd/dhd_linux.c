@@ -342,8 +342,10 @@ static int do_dhd_log_dump(dhd_pub_t *dhdp);
 extern int argos_task_affinity_setup_label(struct task_struct *p, const char *label,
 	struct cpumask * affinity_cpu_mask, struct cpumask * default_cpu_mask);
 
+#ifdef CONFIG_SCHED_HMP
 extern struct cpumask hmp_slow_cpu_mask;
 extern struct cpumask hmp_fast_cpu_mask;
+#endif
 extern void set_cpucore_for_interrupt(cpumask_var_t default_cpu_mask,
 	cpumask_var_t affinity_cpu_mask);
 #endif /* CUSTOMER_HW4 && ARGOS_CPU_SCHEDULER */
