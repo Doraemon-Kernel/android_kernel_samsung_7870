@@ -2,3 +2,9 @@
 #
 # AresKernel
 #
+# CONFIG_AUDIT is not set
+# CONFIG_AUDITSYSCALL is not set
+# CONFIG_AUDIT_WATCH is not set
+# CONFIG_AUDIT_TREE is not set
+# CONFIG_AUDIT_GENERIC is not set
+# CONFIG_AUDIT_COMPAT_GENERIC is not set
