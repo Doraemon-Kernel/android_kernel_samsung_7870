@@ -154,16 +154,16 @@ struct sync_fence_cb {
 struct sync_fence {
 	struct file		*file;
 	struct kref		kref;
-	union {
-		char			name[32];
-		struct llist_node	rmnode;
-	};
+	char			name[32];
 #ifdef CONFIG_DEBUG_FS
 	struct list_head	sync_fence_list;
 #endif
 	int num_fences;
 
-	wait_queue_head_t	wq;
+	union {
+		wait_queue_head_t	wq;
+		struct llist_node	rmnode;
+	};
 	atomic_t		status;
 
 	struct sync_fence_cb	cbs[];

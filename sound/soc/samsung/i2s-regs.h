@@ -98,15 +98,16 @@
 #define MOD_SLAVE		(1 << 11)
 #define MOD_RCLKSRC		(1 << 10)
 
-#if defined(CONFIG_SOC_EXYNOS7420) || defined(CONFIG_SOC_EXYNOS8890)
+/*
+ * H/W Guide suggests that it is not allowed to change TXR mode while I2S is
+ * running. So I2S should use dedicated TXR mode as TX RX simultaneous mode.
+ * Since it is not possible to know beforehand whether the I2S operation would
+ * be only TX/RX or simultaneous TX RX, it is better to always set TXR mode.
+ */
 #define MOD_TXR_TXONLY		2
 #define MOD_TXR_RXONLY		2
 #define MOD_TXR_TXRX		2
-#else
-#define MOD_TXR_TXONLY		0
-#define MOD_TXR_RXONLY		1
-#define MOD_TXR_TXRX		2
-#endif
+
 #define MOD_TXR_SHIFT		8
 #define MOD_TXR_MASK		3
 
@@ -135,6 +136,19 @@
 #define MOD_BCLK_24FS		3
 #define MOD_BCLK_MASK		3
 #define MOD_8BIT		(1 << 0)
+
+#define I2S_STR_MOD_LRP_SHIFT		15
+#define I2S_STR_MOD_LRP			BIT(I2S_STR_MOD_LRP_SHIFT)
+#define I2S_STR_MOD_CDCLKCON		MOD_CDCLKCON
+#define I2S_STR_MOD_SLAVE		MOD_SLAVE
+#define I2S_STR_MOD_RCLKSRC		MOD_RCLKSRC
+#define I2S_STR_MOD_TXR_SHIFT		MOD_TXR_SHIFT
+#define I2S_STR_MOD_TXR_MASK		MOD_TXR_MASK
+#define I2S_STR_MOD_SDF_SHIFT		6
+#define I2S_STR_MOD_RCLK_SHIFT		MOD_RCLK_SHIFT
+#define I2S_STR_MOD_RCLK_MASK		0x7
+#define I2S_STR_MOD_BCLK_SHIFT		0
+#define I2S_STR_MOD_BCLK_MASK		0x7
 
 #define EXYNOS5420_MOD_LRP		(1 << 15)
 #define EXYNOS5420_MOD_CDCLKCON		MOD_CDCLKCON

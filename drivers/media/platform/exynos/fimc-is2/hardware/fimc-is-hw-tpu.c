@@ -24,7 +24,8 @@ const struct fimc_is_hw_ip_ops fimc_is_hw_tpu_ops = {
 	.load_setfile		= fimc_is_hw_tpu_load_setfile,
 	.apply_setfile		= fimc_is_hw_tpu_apply_setfile,
 	.delete_setfile		= fimc_is_hw_tpu_delete_setfile,
-	.size_dump		= fimc_is_hw_tpu_size_dump
+	.size_dump		= fimc_is_hw_tpu_size_dump,
+	.clk_gate		= fimc_is_hardware_clk_gate
 };
 
 int fimc_is_hw_tpu_probe(struct fimc_is_hw_ip *hw_ip, struct fimc_is_interface *itf,
@@ -42,13 +43,13 @@ int fimc_is_hw_tpu_probe(struct fimc_is_hw_ip *hw_ip, struct fimc_is_interface *
 	hw_ip->ops  = &fimc_is_hw_tpu_ops;
 	hw_ip->itf  = itf;
 	hw_ip->itfc = itfc;
-	hw_ip->fcount = 0;
+	atomic_set(&hw_ip->fcount, 0);
 	hw_ip->internal_fcount = 0;
 	hw_ip->is_leader = true;
-	atomic_set(&hw_ip->Vvalid, 0);
-	atomic_set(&hw_ip->otf_start, 0);
-	atomic_set(&hw_ip->ref_count, 0);
-	init_waitqueue_head(&hw_ip->wait_queue);
+	atomic_set(&hw_ip->status.Vvalid, V_BLANK);
+	atomic_set(&hw_ip->status.otf_start, 0);
+	atomic_set(&hw_ip->rsccount, 0);
+	init_waitqueue_head(&hw_ip->status.wait_queue);
 
 	hw_slot = fimc_is_hw_slot_id(id);
 	if (!valid_hw_slot_id(hw_slot)) {
@@ -102,7 +103,7 @@ int fimc_is_hw_tpu_close(struct fimc_is_hw_ip *hw_ip, u32 instance)
 	if (!test_bit(HW_OPEN, &hw_ip->state))
 		return 0;
 
-	info_hw("[%d]close (%d)(%d)\n", instance, hw_ip->id, atomic_read(&hw_ip->ref_count));
+	info_hw("[%d]close (%d)(%d)\n", instance, hw_ip->id, atomic_read(&hw_ip->rsccount));
 
 	return ret;
 }
@@ -132,7 +133,7 @@ int fimc_is_hw_tpu_enable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_ma
 
 	BUG_ON(!hw_ip);
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
 	if (!test_bit(HW_INIT, &hw_ip->state)) {
@@ -154,10 +155,11 @@ int fimc_is_hw_tpu_disable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_m
 
 	BUG_ON(!hw_ip);
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
-	info_hw("[%d][ID:%d]stream_off \n", instance, hw_ip->id);
+	info_hw("[%d][ID:%d]tpu_disable: Vvalid(%d)\n", instance, hw_ip->id,
+		atomic_read(&hw_ip->status.Vvalid));
 
 	if (test_bit(HW_RUN, &hw_ip->state)) {
 		/* disable tpu */
@@ -178,7 +180,7 @@ int fimc_is_hw_tpu_set_param(struct fimc_is_hw_ip *hw_ip, struct is_region *regi
 	BUG_ON(!hw_ip);
 	BUG_ON(!region);
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
 	if (!test_bit(HW_INIT, &hw_ip->state)) {
@@ -219,7 +221,7 @@ int fimc_is_hw_tpu_load_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 {
 	int ret = 0;
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
 	if (!test_bit(HW_INIT, &hw_ip->state)) {
@@ -236,7 +238,7 @@ int fimc_is_hw_tpu_apply_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 	u32 setfile_index = 0;
 	int ret = 0;
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
 	if (!test_bit(HW_INIT, &hw_ip->state)) {
@@ -261,7 +263,7 @@ int fimc_is_hw_tpu_delete_setfile(struct fimc_is_hw_ip *hw_ip, u32 instance,
 {
 	int ret = 0;
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
 	if (hw_ip->setfile_info.num == 0)

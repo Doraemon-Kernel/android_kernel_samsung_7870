@@ -58,6 +58,7 @@ struct exynos_powermode_info {
 	 */
 	int		sicd_enabled;
 	int		sicd_entered;
+	int		sicd_factory;
 
 	/*
 	 * During intializing time, wakeup_mask and idle_ip_mask is intialized
@@ -66,24 +67,17 @@ struct exynos_powermode_info {
 	 */
 	unsigned int	wakeup_mask[NUM_SYS_POWERDOWN][NUM_WAKEUP_MASK];
 	int		idle_ip_mask[NUM_SYS_POWERDOWN][NUM_IDLE_IP];
-
-	/* For debugging using exynos snapshot. */
-	char *syspwr_modes[NUM_SYS_POWERDOWN];
 };
 
 static struct exynos_powermode_info *pm_info;
 
-char *sys_powerdown_str[NUM_SYS_POWERDOWN] = {
-	"SICD",
-	"SICD_CPD",
-	"SICD_AUD",
-	"AFTR",
-	"STOP",
-        "DSTOP",
-	"LPD",
-	"ALPA",
-	"SLEEP"
-};
+int is_sicd_factory(void)
+{
+	if (pm_info->sicd_factory)
+		return true;
+	else
+		return false;
+}
 
 /******************************************************************************
  *                                  IDLE_IP                                   *
@@ -185,7 +179,7 @@ static int is_idle_ip_index_used(struct device_node *node, int ip_index)
 
 	proplen = of_property_count_u32_elems(node, "ref-idle-ip");
 
-	if (!proplen)
+	if (proplen <= 0)
 		return false;
 
 	if (!of_property_read_u32_array(node, "ref-idle-ip",
@@ -440,17 +434,6 @@ static void update_cluster_idle_state(int idle, unsigned int cpu)
 	cluster_idle_state[get_cluster_id(cpu)] = idle;
 }
 
-static bool check_mode_available(unsigned int mode)
-{
-	int index;
-
-	for_each_idle_ip(index)
-		if (exynos_check_idle_ip_stat(mode, index))
-			return false;
-
-	return true;
-}
-
 #if defined(CONFIG_SEC_PM) && defined(CONFIG_MUIC_NOTIFIER)
 static bool jig_is_attached;
 
@@ -467,12 +450,18 @@ static inline bool is_jig_attached(void)
 
 /**
  * If AP put into SICD, console cannot work normally. For development,
- * support sysfs to enable or disable SICD. Refer below :
+ * support sysfs to enable or disable SICD.
+ * And It is possible to use console by SICD factory mode.
+ * Refer below :
  *
  * echo 0/1 > /sys/power/sicd (0:disable, 1:enable)
+ * or
+ * echo 0/1 > /sys/power/sicd_factory_mode (0:disable, 1:enable)
  */
-static int is_sicd_available(unsigned int cpu, unsigned int *sicd_mode)
+static int is_sicd_available(unsigned int cpu)
 {
+	int index;
+
 	if (!pm_info->sicd_enabled)
 		return false;
 
@@ -490,44 +479,14 @@ static int is_sicd_available(unsigned int cpu, unsigned int *sicd_mode)
 	if (is_cpus_busy(pm_info->sicd_residency, cpu_online_mask))
 		return false;
 
-	if (check_mode_available(SYS_SICD_AUD)) {
-		*sicd_mode = SYS_SICD_AUD;
-		return true;
-	}
+	if (!exynos_check_cp_status())
+		return false;
 
-	if (check_mode_available(SYS_SICD)) {
-		if (check_cluster_idle_state(cpu))
-			*sicd_mode = SYS_SICD_CPD;
-		else
-			*sicd_mode = SYS_SICD;
+	for_each_idle_ip(index)
+		if (exynos_check_idle_ip_stat(SYS_SICD, index))
+			return false;
 
-		return true;
-	}
-
-	return false;
-}
-
-static int get_powermode_psci_state(unsigned int mode)
-{
-	int state;
-
-	switch (mode) {
-	case SYS_SICD:
-		state = PSCI_SYSTEM_IDLE;
-		break;
-	case SYS_SICD_CPD:
-		state = PSCI_SYSTEM_IDLE_CLUSTER_SLEEP;
-		break;
-	case SYS_SICD_AUD:
-		state = PSCI_SYSTEM_IDLE_AUDIO;
-		break;
-	default:
-		pr_err("%s: Invalid power mode %d\n", __func__, mode);
-		state = -EINVAL;
-		break;
-	}
-
-	return state;
+	return true;
 }
 
 /**
@@ -538,7 +497,6 @@ static int get_powermode_psci_state(unsigned int mode)
 int enter_c2(unsigned int cpu, int index)
 {
 	unsigned int cluster = get_cluster_id(cpu);
-	unsigned int sicd_mode;
 
 	exynos_cpu.power_down(cpu);
 
@@ -560,15 +518,21 @@ int enter_c2(unsigned int cpu, int index)
 		index = PSCI_CLUSTER_SLEEP;
 	}
 
-	if (is_sicd_available(cpu, &sicd_mode)) {
-		exynos_prepare_sys_powerdown(sicd_mode);
-		index = get_powermode_psci_state(sicd_mode);
+	if (is_sicd_available(cpu)) {
+		if (check_cluster_idle_state(cpu)) {
+#if defined(CONFIG_SOC_EXYNOS8890)
+			exynos_prepare_sys_powerdown(SYS_SICD_CPD);
+			index = PSCI_SYSTEM_IDLE_CLUSTER_SLEEP;
+#endif
+		} else {
+			exynos_prepare_sys_powerdown(SYS_SICD);
+			index = PSCI_SYSTEM_IDLE;
+		}
 
 		s3c24xx_serial_fifo_wait();
-		pm_info->sicd_entered = sicd_mode;
+		pm_info->sicd_entered = SYS_SICD;
 
-		exynos_ss_cpuidle(pm_info->syspwr_modes[pm_info->sicd_entered],
-				  0, 0, ESS_FLAG_IN);
+		exynos_ss_cpuidle(EXYNOS_SS_SICD_INDEX, 0, 0, ESS_FLAG_IN);
 	}
 out:
 	spin_unlock(&c2_lock);
@@ -590,10 +554,9 @@ void wakeup_from_c2(unsigned int cpu, int early_wakeup)
 
 	if (pm_info->sicd_entered != -1) {
 		exynos_wakeup_sys_powerdown(pm_info->sicd_entered, early_wakeup);
-		exynos_ss_cpuidle(pm_info->syspwr_modes[pm_info->sicd_entered],
-				  0, 0, ESS_FLAG_OUT);
-
 		pm_info->sicd_entered = -1;
+
+		exynos_ss_cpuidle(EXYNOS_SS_SICD_INDEX, 0, 0, ESS_FLAG_OUT);
 	}
 
 	update_c2_state(false, cpu);
@@ -635,14 +598,18 @@ static ssize_t store_##file_name(struct kobject *kobj,	\
 static struct kobj_attribute _name =			\
 __ATTR(_name, 0644, show_##_name, store_##_name)
 
-
+#ifdef CONFIG_PM
 show_one(blocking_cpd, cpd_blocked);
 show_one(sicd, sicd_enabled);
+show_one(sicd_factory_mode, sicd_factory);
 store_one(blocking_cpd, cpd_blocked);
 store_one(sicd, sicd_enabled);
+store_one(sicd_factory_mode, sicd_factory);
 
 attr_rw(blocking_cpd);
 attr_rw(sicd);
+attr_rw(sicd_factory_mode);
+#endif
 
 /******************************************************************************
  *                          Wakeup mask configuration                         *
@@ -706,14 +673,10 @@ void exynos_prepare_sys_powerdown(enum sys_powerdown mode)
 
 	switch (mode) {
 	case SYS_SICD:
-		exynos_pm_notify(SICD_ENTER);
+		exynos_pm_sicd_enter();
 		break;
-	case SYS_SICD_AUD:
-		exynos_pm_notify(SICD_AUD_ENTER);
-		break;
-	case SYS_ALPA:
-		exynos_pm_notify(LPA_ENTER);
 	case SYS_AFTR:
+		exynos_cpu.power_down(cpu);
 		exynos_cpu.power_down(cpu);
 		break;
 	default:
@@ -735,13 +698,8 @@ void exynos_wakeup_sys_powerdown(enum sys_powerdown mode, bool early_wakeup)
 
 	switch (mode) {
 	case SYS_SICD:
-		exynos_pm_notify(SICD_EXIT);
+		exynos_pm_sicd_exit();
 		break;
-	case SYS_SICD_AUD:
-		exynos_pm_notify(SICD_AUD_EXIT);
-		break;
-	case SYS_ALPA:
-		exynos_pm_notify(LPA_EXIT);
 	case SYS_AFTR:
 		if (early_wakeup)
 			exynos_cpu.power_up(cpu);
@@ -757,10 +715,50 @@ void exynos_wakeup_sys_powerdown(enum sys_powerdown mode, bool early_wakeup)
  */
 int determine_lpm(void)
 {
-	if (check_mode_available(SYS_ALPA))
-		return SYS_ALPA;
+#if !defined(CONFIG_SOC_EXYNOS7870)
+	int index;
+#endif
 
+	if (!exynos_check_cp_status())
+		return SYS_AFTR;
+
+#if !defined(CONFIG_SOC_EXYNOS7870)
+	for_each_idle_ip(index) {
+		if (exynos_check_idle_ip_stat(SYS_ALPA, index))
+			return SYS_AFTR;
+	}
+	return SYS_ALPA;
+#else
 	return SYS_AFTR;
+#endif
+}
+
+void exynos_prepare_cp_call(void)
+{
+	exynos_set_idle_ip_mask(SYS_SLEEP);
+	exynos_set_wakeupmask(SYS_SLEEP);
+
+#if !defined(CONFIG_SOC_EXYNOS7870)
+	cal_pm_enter(SYS_ALPA);
+#else
+	cal_pm_enter(SYS_LPD);
+#endif
+}
+
+void exynos_wakeup_cp_call(bool early_wakeup)
+{
+
+#if !defined(CONFIG_SOC_EXYNOS7870)
+	if (early_wakeup)
+		cal_pm_earlywakeup(SYS_ALPA);
+	else
+		cal_pm_exit(SYS_ALPA);
+#else
+	if (early_wakeup)
+		cal_pm_earlywakeup(SYS_LPD);
+	else
+		cal_pm_exit(SYS_LPD);
+#endif
 }
 
 /*
@@ -829,20 +827,23 @@ int __init exynos_powermode_init(void)
 
 	dt_init_exynos_powermode();
 
-	for_each_syspower_mode(mode) {
+	pm_info->sicd_entered = -1;
+
+	for_each_syspower_mode(mode)
 		for_each_idle_ip(index)
 			pm_info->idle_ip_mask[mode][index] = 0xFFFFFFFF;
 
-		pm_info->syspwr_modes[mode] = get_sys_powerdown_str(mode);
-	}
-
-	pm_info->sicd_entered = -1;
-
+#ifdef CONFIG_PM
 	if (sysfs_create_file(power_kobj, &blocking_cpd.attr))
 		pr_err("%s: failed to create sysfs to control CPD\n", __func__);
 
 	if (sysfs_create_file(power_kobj, &sicd.attr))
 		pr_err("%s: failed to create sysfs to control CPD\n", __func__);
+
+	if (sysfs_create_file(power_kobj, &sicd_factory_mode.attr))
+		pr_err("%s: failed to create sysfs to control SICD Factory mode\n", __func__);
+
+#endif
 
 	register_hotcpu_notifier(&cpuidle_hotcpu_notifier);
 
@@ -868,10 +869,8 @@ static int exynos_cpuidle_muic_notifier(struct notifier_block *nb,
 	case ATTACHED_DEV_JIG_UART_OFF_VB_MUIC:
 	case ATTACHED_DEV_JIG_UART_OFF_VB_OTG_MUIC:
 	case ATTACHED_DEV_JIG_UART_OFF_VB_FG_MUIC:
-#ifdef CONFIG_CCIC_NOTIFIER
 	case ATTACHED_DEV_JIG_UART_ON_MUIC:
 	case ATTACHED_DEV_JIG_UART_ON_VB_MUIC:
-#endif
 		if (action == MUIC_NOTIFY_CMD_DETACH)
 			jig_is_attached = false;
 		else if (action == MUIC_NOTIFY_CMD_ATTACH)

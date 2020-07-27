@@ -21,7 +21,6 @@
 #define MAX_SUSPEND_ABORT_LEN 256
 
 void log_wakeup_reason(int irq);
-void log_mbox_wakeup(void);
 int check_wakeup_reason(int irq);
 
 #ifdef CONFIG_ARCH_EXYNOS

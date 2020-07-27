@@ -301,7 +301,6 @@ enum {
 	p1_disp_pll = 0x0A020000,
 	p1_aud_pll,
 	p1_mfc_pll,
-	p1_bus3_pll,
 	vclk_group_p1_end,
 	num_of_p1 = vclk_group_p1_end - 0x0A020000,
 
@@ -418,7 +417,6 @@ enum {
 	dvfs_int,
 	dvfs_cam,
 	dvfs_disp,
-	dvs_g3dm,
 	vclk_group_dfs_end,
 	num_of_dfs = vclk_group_dfs_end - 0x0A070000,
 };

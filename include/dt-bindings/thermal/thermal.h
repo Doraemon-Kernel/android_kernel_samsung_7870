@@ -22,8 +22,5 @@
 #define DISABLE				(0)
 #define ENABLE				(1)
 
-#define NORMAL_SENSOR	(0)
-#define VIRTUAL_SENSOR	(1)
-
 #endif
 

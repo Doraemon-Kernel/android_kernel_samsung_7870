@@ -85,8 +85,6 @@ struct cpufreq_policy {
 	void			*governor_data;
 	bool			governor_enabled; /* governor start/stop flag */
 
-	unsigned int		hcpus_count; /* number of core to be offed */
-
 	struct work_struct	update; /* if update_policy() needs to be
 					 * called, but you're in IRQ context */
 
@@ -598,7 +596,6 @@ static inline int cpufreq_boost_enabled(void)
 #endif
 /* the following funtion is for cpufreq core use only */
 struct cpufreq_frequency_table *cpufreq_frequency_get_table(unsigned int cpu);
-struct cpufreq_frequency_table *cpufreq_get_info_table(unsigned int cpu);
 
 /* the following are really really optional */
 extern struct freq_attr cpufreq_freq_attr_scaling_available_freqs;

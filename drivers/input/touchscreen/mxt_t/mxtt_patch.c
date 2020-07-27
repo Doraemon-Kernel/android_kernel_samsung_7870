@@ -226,12 +226,12 @@ struct touch_pos{
 
 #ifndef __mxt_patch_debug
 #define __mxt_patch_debug(_data, ...)	if(data->patch.debug) \
-	input_info(true, &(_data)->client->dev, __VA_ARGS__);
+	tsp_debug_info(true, &(_data)->client->dev, __VA_ARGS__);
 #endif
 
 #ifndef __mxt_patch_ddebug
 #define __mxt_patch_ddebug(_data, ...)	if(data->patch.debug>1) \
-	input_info(true, &(_data)->client->dev, __VA_ARGS__);
+	tsp_debug_info(true, &(_data)->client->dev, __VA_ARGS__);
 #endif
 
 static void mxt_patch_dump_source(struct mxt_data *data, bool do_action);
@@ -281,11 +281,55 @@ static int mxt_patch_stop_timer(struct mxt_data *data)
 	}
 	return ret;
 }
+#if TSP_INFORM_CHARGER
+/*
+ OPT= 0:ALL, 2:BATT ONLY, 3:TA ONLY
+*/
+static int mxt_patch_check_tacfg(struct mxt_data *data, u8 option, u8 ta_mode)
+{
+	if(option&0x02){
+		if(ta_mode){//TA
+			if((option&0x01)==0){
+				__mxt_patch_ddebug(data, "|- SCFG BATT SKIP");
+				return 1;
+			}
+		}
+		else{// BATT
+			if((option&0x01)==1){
+				__mxt_patch_ddebug(data, "|- SCFG TA SKIP");
+				return 1;
+			}
+		}
+	}
+
+	if (option&0x04) {
+#if defined(CONFIG_N1A_3G)
+		if (data->setdata) {
+			__mxt_patch_ddebug(data, "|- SCFG RF");
+			return 0;
+		} else {
+			__mxt_patch_ddebug(data, "|- SCFG RF SKIP");
+			return 1;
+		}
+#else
+		__mxt_patch_ddebug(data, "|- SCFG RF SKIP");
+		return 1;
+#endif
+	}
+	return 0;
+}
+#endif
 
 static int mxt_patch_write_stage_cfg(struct mxt_data *data,
 		struct stage_cfg* pscfg, bool do_action)
 {
 	if(do_action){
+#if TSP_INFORM_CHARGER
+		if(mxt_patch_check_tacfg(data, pscfg->option,
+			data->charging_mode)){
+			return 0;
+		}
+#endif
 		__mxt_patch_ddebug(data, "|- SCFG_WRITE: OBJECT_TYPE:%d"
 			" OFFSET:%d VAL:%d OPT:%d\n",
 			pscfg->obj_type, pscfg->offset,
@@ -300,6 +344,12 @@ static int mxt_patch_write_action_cfg(struct mxt_data *data,
 		struct action_cfg* pacfg, bool do_action)
 {
 	if(do_action){
+#if TSP_INFORM_CHARGER
+		if(mxt_patch_check_tacfg(data, pacfg->option,
+			data->charging_mode)){
+			return 0;
+		}
+#endif
 		__mxt_patch_ddebug(data, "|-- ACFG_WRITE: OBJECT_TYPE:%d"
 			" OFFSET:%d VAL:%d OPT:%d\n",
 			pacfg->obj_type, pacfg->offset,
@@ -403,7 +453,7 @@ static bool mxt_patch_check_locked(struct mxt_data *data,
 	//OLD DIFF
 	diffx = x - tpos->oldx[tid];
 	diffy = y - tpos->oldy[tid];
-	distance = (int)abs(diffx) + (int)abs(diffy);
+	distance = abs(diffx) + abs(diffy);
 
 	// INIT DIFF
 	if((tpos->initx[tid] != 0)&&(tpos->inity[tid] != 0)){
@@ -498,7 +548,7 @@ static void mxt_patch_check_pattern(struct mxt_data *data,
 					MXT_PATCH_T71_PTN_CAL, &tpos->cal_enable);
 
 	    if (error) {
-		    input_err(true, &data->client->dev, "%s: Error read T71 [%d]\n",
+		    dev_err(&data->client->dev, "%s: Error read T71 [%d]\n",
 				    __func__, error);
 	    } else {
 			if(tpos->cal_enable){
@@ -1074,7 +1124,7 @@ static int mxt_patch_parse_header(struct mxt_data *data,
 		ppheader->event_cnt);
 
 	if(ppheader->version != MXT_PATCH_VERSION){
-		input_err(true, &data->client->dev, "MXT_PATCH_VERSION ERR\n");
+		dev_err(&data->client->dev, "MXT_PATCH_VERSION ERR\n");
 	}
 
 	ulpos = sizeof(struct patch_header);
@@ -1128,7 +1178,7 @@ static int mxt_patch_run_stage(struct mxt_data *data)
 	//__mxt_patch_debug(data, "RUN STAGE:%d\n", cur_stage);
 
 	if(!ppatch || !pstage_addr){
-		input_err(true, &data->client->dev, "%s pstage_addr is null\n", __func__);
+		dev_err(&data->client->dev, "%s pstage_addr is null\n", __func__);
 		return 1;
 	}
 	psdef = (struct stage_def*)(ppatch+pstage_addr[cur_stage]);
@@ -1145,7 +1195,7 @@ static int mxt_patch_run_stage(struct mxt_data *data)
 	data->patch.tline_addr = kzalloc(tline_cnt*sizeof(u16), GFP_KERNEL);
 	data->patch.check_cnt  = kzalloc(tline_cnt*sizeof(u16), GFP_KERNEL);
 	if (!data->patch.tline_addr || !data->patch.check_cnt){
-		input_err(true, &data->client->dev, "tline_addr alloc error\n");
+		dev_err(&data->client->dev, "tline_addr alloc error\n");
 		return 1;
 	}
 
@@ -1175,7 +1225,7 @@ static int mxt_patch_test_source(struct mxt_data *data, u16* psrc_item)
 #endif
 
 	if(!ppatch || !pstage_addr){
-		input_err(true, &data->client->dev, "%s pstage_addr is null\n", __func__);
+		dev_err(&data->client->dev, "%s pstage_addr is null\n", __func__);
 		return 1;
 	}
 	if(!data->patch.run_stage){
@@ -1186,7 +1236,7 @@ static int mxt_patch_test_source(struct mxt_data *data, u16* psrc_item)
 			u16* ptline_addr = data->patch.tline_addr;
 			u16* pcheck_cnt = data->patch.check_cnt;
 			if(!ptline_addr || !pcheck_cnt){
-				input_err(true, &data->client->dev, "ptline_addr is null\n");
+				dev_err(&data->client->dev, "ptline_addr is null\n");
 				return 1;
 			}
 			__mxt_patch_ddebug(data, "STAGE:%d, TEST:%d\n", cur_stage, i);
@@ -1290,7 +1340,7 @@ static int mxt_patch_test_trigger(struct mxt_data *data,
 	u8  tmsg[MXT_PATCH_MAX_MSG_SIZE];
 
 	if(!ppatch || !ptrigger_addr){
-		input_err(true, &data->client->dev, "%s ptrigger_addr is null\n",
+		dev_err(&data->client->dev, "%s ptrigger_addr is null\n",
 			__func__);
 		return 1;
 	}
@@ -1313,7 +1363,7 @@ static int mxt_patch_test_event(struct mxt_data *data,
 	u16* pevent_addr = data->patch.event_addr;
 
 	if(!ppatch || !pevent_addr){
-		input_err(true, &data->client->dev, "%s pevent_addr is null\n",
+		dev_err(&data->client->dev, "%s pevent_addr is null\n",
 			__func__);
 		return 1;
 	}
@@ -1416,6 +1466,9 @@ static void mxt_patch_T57_object(struct mxt_data *data,
 			(data->fingers[i].state != MXT_STATE_RELEASE))
 			finger_cnt++;
 	}
+#if TSP_INFORM_CHARGER
+	tsrc.charger = data->charging_mode;
+#endif
 	tsrc.finger_cnt = finger_cnt;
 
 	tsrc.sum_size = msg[0] | (msg[1] << 8);
@@ -1587,6 +1640,9 @@ static void mxt_patch_message(struct mxt_data *data,
 	}
 	if(data->patch.trigger_cnt && type){
 		u8 option=0;
+#if TSP_INFORM_CHARGER
+		option = data->charging_mode;
+#endif
 		mxt_patch_test_trigger(data, message, option);
 	}
 }
@@ -1600,17 +1656,17 @@ static int mxt_patch_init(struct mxt_data *data, u8* ppatch)
 	u16 event_addr[32];
 	u32 patch_size=0;
 
-	input_info(true, &data->client->dev, "%s called!\n", __func__);
+	tsp_debug_info(true, &data->client->dev, "%s called!\n", __func__);
 
 	if(!ppatch){
-		input_info(true, &data->client->dev, "%s patch file error\n", __func__);
+		tsp_debug_info(true, &data->client->dev, "%s patch file error\n", __func__);
 		return 1;
 	}
 
 	patch_size = mxt_patch_parse_header(data,
 					ppatch, stage_addr, trigger_addr, event_addr);
 	if(!patch_size){
-		input_info(true, &data->client->dev, "%s patch_size error\n", __func__);
+		tsp_debug_info(true, &data->client->dev, "%s patch_size error\n", __func__);
 		return 1;
 	}
 	ppheader = (struct patch_header*)ppatch;
@@ -1634,7 +1690,7 @@ static int mxt_patch_init(struct mxt_data *data, u8* ppatch)
 		patch_info->stage_addr =
 			kzalloc(patch_info->stage_cnt*sizeof(u16), GFP_KERNEL);
 		if (!patch_info->stage_addr) {
-			input_err(true, &data->client->dev, "stage_addr alloc error\n");
+			dev_err(&data->client->dev, "stage_addr alloc error\n");
 			return 1;
 		}
 		memcpy(patch_info->stage_addr, stage_addr,
@@ -1647,7 +1703,7 @@ static int mxt_patch_init(struct mxt_data *data, u8* ppatch)
 		patch_info->trigger_addr =
 			kzalloc(patch_info->trigger_cnt*sizeof(u16), GFP_KERNEL);
 		if (!patch_info->trigger_addr) {
-			input_err(true, &data->client->dev, "trigger_addr alloc error\n");
+			dev_err(&data->client->dev, "trigger_addr alloc error\n");
 			return 1;
 		}
 		memcpy(patch_info->trigger_addr, trigger_addr,
@@ -1660,7 +1716,7 @@ static int mxt_patch_init(struct mxt_data *data, u8* ppatch)
 		patch_info->event_addr =
 			kzalloc(patch_info->event_cnt*sizeof(u16), GFP_KERNEL);
 		if (!patch_info->event_addr) {
-			input_err(true, &data->client->dev, "event_addr alloc error\n");
+			dev_err(&data->client->dev, "event_addr alloc error\n");
 			return 1;
 		}
 		memcpy(patch_info->event_addr, event_addr,

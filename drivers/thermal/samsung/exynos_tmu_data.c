@@ -733,6 +733,7 @@ static const struct exynos_tmu_registers exynos8890_tmu_registers = {
 	.therm_trip_mode_shift = EXYNOS_TMU_TRIP_MODE_SHIFT,
 	.therm_trip_mode_mask = EXYNOS_TMU_TRIP_MODE_MASK,
 	.therm_trip_en_shift = EXYNOS_TMU_THERM_TRIP_EN_SHIFT,
+	.lpi0_mode_en_shift = EXYNOS_TEM1456X_TMU_LPI0_MODE_EN_SHIFT,
 	.tmu_status = EXYNOS_TMU_REG_STATUS,
 	.valid_p0_shift = EXYNOS_TEM1456X_VALID_P0_SHIFT,
 	.valid_mask = EXYNOS_TEM1456X_VALID_MASK,
@@ -755,14 +756,6 @@ static const struct exynos_tmu_registers exynos8890_tmu_registers = {
 	.inten_rise5_shift = EXYNOS_TEM1456X_TMU_INTEN_RISE5_SHIFT,
 	.inten_rise6_shift = EXYNOS_TEM1456X_TMU_INTEN_RISE6_SHIFT,
 	.inten_rise7_shift = EXYNOS_TEM1456X_TMU_INTEN_RISE7_SHIFT,
-	.inten_fall0_shift = EXYNOS_TEM1456X_TMU_INTEN_FALL0_SHIFT,
-	.inten_fall1_shift = EXYNOS_TEM1456X_TMU_INTEN_FALL1_SHIFT,
-	.inten_fall2_shift = EXYNOS_TEM1456X_TMU_INTEN_FALL2_SHIFT,
-	.inten_fall3_shift = EXYNOS_TEM1456X_TMU_INTEN_FALL3_SHIFT,
-	.inten_fall4_shift = EXYNOS_TEM1456X_TMU_INTEN_FALL4_SHIFT,
-	.inten_fall5_shift = EXYNOS_TEM1456X_TMU_INTEN_FALL5_SHIFT,
-	.inten_fall6_shift = EXYNOS_TEM1456X_TMU_INTEN_FALL6_SHIFT,
-	.inten_fall7_shift = EXYNOS_TEM1456X_TMU_INTEN_FALL7_SHIFT,
 	.tmu_intstat = EXYNOS_TEM1456X_TMU_REG_INTCLEAR,
 	.tmu_intclear = EXYNOS_TEM1456X_TMU_REG_INTCLEAR,
 	.emul_con = EXYNOS_TEM1456X_EMUL_CON,
@@ -770,12 +763,8 @@ static const struct exynos_tmu_registers exynos8890_tmu_registers = {
 	.emul_time_shift = EXYNOS_EMUL_TIME_SHIFT,
 };
 
-#define EXYNOS8890_TMU_DATA_MNGS_QUAD \
-	.tmu_name = "MNGS_QUAD",	\
-	.sensor_type = NORMAL_SENSOR,	\
-	.ect_hotplug_flag = 1,	\
-	.ect_hotplug_interval = 5,	\
-	.threshold_falling = 5, \
+#define EXYNOS8890_TMU_DATA_MNGS \
+	.tmu_name = "MNGS",	\
 	.temp_mask = TYPE_9BIT_MASK,	\
 	.gain = 5, \
 	.reference_voltage = 16, \
@@ -789,13 +778,10 @@ static const struct exynos_tmu_registers exynos8890_tmu_registers = {
 	.d_type = CLUSTER1, \
 	.registers = &exynos8890_tmu_registers, \
 	.features = (TMU_SUPPORT_EMULATION | TMU_SUPPORT_TRIM_RELOAD | \
-			TMU_SUPPORT_READY_STATUS | TMU_SUPPORT_EMUL_TIME | \
-			TMU_SUPPORT_FALLING_TRIP),
+			TMU_SUPPORT_READY_STATUS | TMU_SUPPORT_EMUL_TIME),
 
 #define EXYNOS8890_TMU_DATA_APOLLO \
 	.tmu_name = "APOLLO",	\
-	.sensor_type = NORMAL_SENSOR,	\
-	.threshold_falling = 5, \
 	.temp_mask = TYPE_9BIT_MASK,	\
 	.gain = 5, \
 	.reference_voltage = 16, \
@@ -809,13 +795,10 @@ static const struct exynos_tmu_registers exynos8890_tmu_registers = {
 	.d_type = CLUSTER0, \
 	.registers = &exynos8890_tmu_registers, \
 	.features = (TMU_SUPPORT_EMULATION | TMU_SUPPORT_TRIM_RELOAD | \
-			TMU_SUPPORT_READY_STATUS | TMU_SUPPORT_EMUL_TIME | \
-			TMU_SUPPORT_FALLING_TRIP),
+			TMU_SUPPORT_READY_STATUS | TMU_SUPPORT_EMUL_TIME),
 
 #define EXYNOS8890_TMU_DATA_GPU \
 	.tmu_name = "GPU",	\
-	.sensor_type = NORMAL_SENSOR,	\
-	.threshold_falling = 5, \
 	.temp_mask = TYPE_9BIT_MASK,	\
 	.gain = 5, \
 	.reference_voltage = 16, \
@@ -829,13 +812,10 @@ static const struct exynos_tmu_registers exynos8890_tmu_registers = {
 	.d_type = GPU, \
 	.registers = &exynos8890_tmu_registers, \
 	.features = (TMU_SUPPORT_EMULATION | TMU_SUPPORT_TRIM_RELOAD | \
-			TMU_SUPPORT_READY_STATUS | TMU_SUPPORT_EMUL_TIME | \
-			TMU_SUPPORT_FALLING_TRIP),
+			TMU_SUPPORT_READY_STATUS | TMU_SUPPORT_EMUL_TIME),
 
 #define EXYNOS8890_TMU_DATA_ISP \
 	.tmu_name = "ISP",	\
-	.sensor_type = NORMAL_SENSOR,	\
-	.threshold_falling = 5, \
 	.temp_mask = TYPE_9BIT_MASK,	\
 	.gain = 5, \
 	.reference_voltage = 16, \
@@ -849,43 +829,125 @@ static const struct exynos_tmu_registers exynos8890_tmu_registers = {
 	.d_type = ISP, \
 	.registers = &exynos8890_tmu_registers, \
 	.features = (TMU_SUPPORT_EMULATION | TMU_SUPPORT_TRIM_RELOAD | \
-			TMU_SUPPORT_READY_STATUS | TMU_SUPPORT_EMUL_TIME | \
-			TMU_SUPPORT_FALLING_TRIP),
+			TMU_SUPPORT_READY_STATUS | TMU_SUPPORT_EMUL_TIME),
 
-#define EXYNOS8890_TMU_DATA_MNGS_DUAL \
-	.tmu_name = "MNGS_DUAL",	\
-	.sensor_type = VIRTUAL_SENSOR,	\
-	.ect_hotplug_flag = 1,	\
-	.ect_hotplug_interval = 5,	\
-	.threshold_falling = 5, \
+struct exynos_tmu_init_data exynos8890_default_tmu_data = {
+	.tmu_data = {
+		{ EXYNOS8890_TMU_DATA_MNGS } ,
+		{ EXYNOS8890_TMU_DATA_APOLLO } ,
+		{ EXYNOS8890_TMU_DATA_GPU } ,
+		{ EXYNOS8890_TMU_DATA_ISP } ,
+	},
+	.tmu_count = 4,
+};
+#endif
+
+#if defined(CONFIG_SOC_EXYNOS7870)
+static const struct exynos_tmu_registers exynos7870_tmu_registers = {
+	.triminfo_data = EXYNOS_TMU_REG_TRIMINFO,
+	.triminfo_85_shift = EXYNOS_TEM1455X_TRIMINFO_85_SHIFT,
+	.calib_sel_shift = EXYNOS_TEM1455X_CALIB_SEL_SHIFT,
+	.calib_sel_mask = EXYNOS_TEM1455X_CALIB_SEL_MASK,
+	.tmu_ctrl = EXYNOS_TMU_REG_CONTROL,
+	.tmu_ctrl1 = EXYNOS_TMU_REG_CONTROL1,
+	/* This buf_vref_sel_reg, buf_slope_sel_reg member update EXYNOS7870 */
+	.buf_vref_otp_reg = EXYNOS_TMU_REG_TRIMINFO,
+	.buf_vref_otp_shift = EXYNOS_TMU_REF_VOLTAGE_OTP_SHIFT,
+	.buf_vref_otp_mask = EXYNOS_TMU_REF_VOLTAGE_OTP_MASK_3BIT,
+	.buf_slope_otp_reg = EXYNOS_TMU_REG_TRIMINFO1,
+	.buf_slope_otp_shift = EXYNOS_TMU_BUF_SLOPE_SEL_OTP_SHIFT,
+	.buf_slope_otp_mask = EXYNOS_TMU_BUF_SLOPE_SEL_OTP_MASK,
+	.therm_trip_mode_shift = EXYNOS_TMU_TRIP_MODE_SHIFT,
+	.therm_trip_mode_mask = EXYNOS_TMU_TRIP_MODE_MASK,
+	.therm_trip_en_shift = EXYNOS_TMU_THERM_TRIP_EN_SHIFT,
+	.lpi0_mode_en_shift = EXYNOS_TEM1455X_TMU_LPI0_MODE_EN_SHIFT,
+	.tmu_status = EXYNOS_TMU_REG_STATUS,
+	.valid_p0_shift = EXYNOS_TEM1455X_VALID_P0_SHIFT,
+	.valid_mask = EXYNOS_TEM1455X_VALID_MASK,
+	.tmu_cur_temp = EXYNOS_TMU_REG_CURRENT_TEMP,
+	.threshold_th0 = EXYNOS_TEM1455X_TMU_RISE0_1,
+	.threshold_th1 = EXYNOS_TEM1455X_TMU_FALL0_1,
+	.threshold_th2 = EXYNOS_TEM1455X_TMU_RISE2_3,
+	.threshold_th3 = EXYNOS_TEM1455X_TMU_FALL2_3,
+	.threshold_th4 = EXYNOS_TEM1455X_TMU_RISE4_5,
+	.threshold_th5 = EXYNOS_TEM1455X_TMU_FALL4_5,
+	.threshold_th6 = EXYNOS_TEM1455X_TMU_RISE6_7,
+	.threshold_th7 = EXYNOS_TEM1455X_TMU_FALL6_7,
+	.tmu_inten = EXYNOS_TEM1455X_TMU_REG_INTEN,
+	.inten_rise0_shift = EXYNOS_TEM1455X_TMU_INTEN_RISE0_SHIFT,
+	.inten_rise1_shift = EXYNOS_TEM1455X_TMU_INTEN_RISE1_SHIFT,
+	.inten_rise2_shift = EXYNOS_TEM1455X_TMU_INTEN_RISE2_SHIFT,
+	.inten_rise3_shift = EXYNOS_TEM1455X_TMU_INTEN_RISE3_SHIFT,
+	.inten_rise4_shift = EXYNOS_TEM1455X_TMU_INTEN_RISE4_SHIFT,
+	.inten_rise5_shift = EXYNOS_TEM1455X_TMU_INTEN_RISE5_SHIFT,
+	.inten_rise6_shift = EXYNOS_TEM1455X_TMU_INTEN_RISE6_SHIFT,
+	.inten_rise7_shift = EXYNOS_TEM1455X_TMU_INTEN_RISE7_SHIFT,
+	.tmu_intstat = EXYNOS_TEM1455X_TMU_REG_INTPEND,
+	.tmu_intclear = EXYNOS_TEM1455X_TMU_REG_INTCLEAR,
+	.emul_con = EXYNOS_TEM1455X_EMUL_CON,
+	.emul_temp_shift = EXYNOS_TEM1455X_EMUL_DATA_SHIFT,
+	.emul_time_shift = EXYNOS_EMUL_TIME_SHIFT,
+};
+
+#define EXYNOS7870_TMU_DATA_CPUCL0 \
+	.tmu_name = "CPUCL0",	\
 	.temp_mask = TYPE_9BIT_MASK,	\
 	.gain = 5, \
 	.reference_voltage = 16, \
 	.noise_cancel_mode = 4, \
-	.cal_type = TYPE_TWO_POINT_TRIMMING, \
+	.cal_type = TYPE_ONE_POINT_TRIMMING, \
 	.efuse_value = 50, \
 	.first_point_trim = 25, \
 	.second_point_trim = 85, \
 	.default_temp_offset = 25, \
-	.type = SOC_ARCH_EXYNOS8890, \
-	.d_type = CLUSTER1, \
-	.registers = &exynos8890_tmu_registers, \
-	.features = (TMU_SUPPORT_EMULATION | TMU_SUPPORT_TRIM_RELOAD | \
-			TMU_SUPPORT_EMUL_TIME | TMU_SUPPORT_FALLING_TRIP),
+	.type = SOC_ARCH_EXYNOS7870, \
+	.d_type = CLUSTER0, \
+	.registers = &exynos7870_tmu_registers, \
+	.features = (TMU_SUPPORT_EMULATION | TMU_SUPPORT_READY_STATUS | TMU_SUPPORT_EMUL_TIME), \
+	.sensor_type = EXYNOS_TEM1455X,
 
-struct exynos_tmu_init_data exynos8890_default_tmu_data = {
+#define EXYNOS7870_TMU_DATA_CPUCL1 \
+	.tmu_name = "CPUCL1",	\
+	.ect_hotplug_flag = 1,  \
+	.ect_hotplug_interval = 5,	\
+	.temp_mask = TYPE_9BIT_MASK,	\
+	.gain = 5, \
+	.reference_voltage = 16, \
+	.noise_cancel_mode = 4, \
+	.cal_type = TYPE_ONE_POINT_TRIMMING, \
+	.efuse_value = 50, \
+	.first_point_trim = 25, \
+	.second_point_trim = 85, \
+	.default_temp_offset = 25, \
+	.type = SOC_ARCH_EXYNOS7870, \
+	.d_type = CLUSTER1, \
+	.registers = &exynos7870_tmu_registers, \
+	.features = (TMU_SUPPORT_EMULATION | TMU_SUPPORT_READY_STATUS | TMU_SUPPORT_EMUL_TIME), \
+	.sensor_type = EXYNOS_TEM1455X,
+
+#define EXYNOS7870_TMU_DATA_G3D \
+	.tmu_name = "G3D",	\
+	.temp_mask = TYPE_9BIT_MASK,	\
+	.gain = 5, \
+	.reference_voltage = 16, \
+	.noise_cancel_mode = 4, \
+	.cal_type = TYPE_ONE_POINT_TRIMMING, \
+	.efuse_value = 50, \
+	.first_point_trim = 25, \
+	.second_point_trim = 85, \
+	.default_temp_offset = 25, \
+	.type = SOC_ARCH_EXYNOS7870, \
+	.d_type = GPU, \
+	.registers = &exynos7870_tmu_registers, \
+	.features = (TMU_SUPPORT_EMULATION | TMU_SUPPORT_READY_STATUS | TMU_SUPPORT_EMUL_TIME), \
+	.sensor_type = EXYNOS_TEM1455X,
+
+struct exynos_tmu_init_data exynos7870_default_tmu_data = {
 	.tmu_data = {
-		{ EXYNOS8890_TMU_DATA_MNGS_QUAD } ,
-		{ EXYNOS8890_TMU_DATA_APOLLO } ,
-		{ EXYNOS8890_TMU_DATA_GPU } ,
-		{ EXYNOS8890_TMU_DATA_ISP } ,
-#if defined(CONFIG_EXYNOS_BIG_FREQ_BOOST)
-		{ EXYNOS8890_TMU_DATA_MNGS_DUAL } ,
+		{ EXYNOS7870_TMU_DATA_CPUCL0 } ,
+		{ EXYNOS7870_TMU_DATA_CPUCL1 } ,
+		{ EXYNOS7870_TMU_DATA_G3D } ,
 	},
-	.tmu_count = 5,
-#else
-	},
-	.tmu_count = 4,
-#endif
+	.tmu_count = 3,
 };
 #endif

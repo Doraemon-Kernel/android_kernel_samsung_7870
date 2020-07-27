@@ -100,6 +100,12 @@ config BLK_DEV_THROTTLING
 
 	See Documentation/cgroups/blkio-controller.txt for more information.
 
+config JOURNAL_DATA_TAG
+       bool "Enable FS journal tagging for UFS & eMMC"
+       default n
+       ---help---
+       Enable FS journal tagging for UFS & eMMC. If unsure, say N.
+
 config BLK_CMDLINE_PARSER
 	bool "Block device command line partition parser"
 	default n
@@ -110,20 +116,6 @@ config BLK_CMDLINE_PARSER
 	partitions on a block device.
 
 	See Documentation/block/cmdline-partition.txt for more information.
-
-config JOURNAL_DATA_TAG
-	bool "Enable FS journal tagging for UFS & eMMC"
-	default n
-	---help---
-	Enable FS journal tagging for UFS & eMMC. If unsure, say N.
-
-config JOURNAL_DATA_TAG_DEBUG
-	bool "Enable FS journal tagging debug"
-	default n
-	depends on JOURNAL_DATA_TAG
-	---help---
-	Enable FS journal tagging debug. If unsure, say N.
-
 
 menu "Partition Types"
 
@@ -139,8 +131,8 @@ config BLOCK_COMPAT
 	default y
 
 config BLOCK_SUPPORT_STLOG
- 	bool "Enable storage log"
- 	depends on BLOCK && PROC_STLOG
- 	default y
-	
+	bool "Enable storage log"
+	depends on BLOCK && PROC_STLOG
+	default y
+
 source block/Kconfig.iosched

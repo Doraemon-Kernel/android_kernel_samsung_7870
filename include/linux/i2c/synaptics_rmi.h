@@ -65,9 +65,13 @@ struct synaptics_rmi4_platform_data {
 #ifdef NO_0D_WHILE_2D
 	int (*led_power_on) (bool);
 #endif
+	u32 ub_i2c_addr;
+	u32 reset_delay_ms;
+
 	unsigned char (*get_ddi_type)(void);	/* to indentify ddi type */
 	void (*enable_sync)(bool on);
 	const char *firmware_name;
+	const char *firmware_name_bl;
 	const char *project_name;
 	const char *model_name;
 	u32	device_num;
@@ -79,8 +83,18 @@ struct synaptics_rmi4_platform_data {
 
 	const char *regulator_dvdd;
 	const char *regulator_avdd;
+	int item_version;
 };
 
 extern unsigned int lcdtype;
+
+#undef input_dbg
+#define input_dbg(mode, dev, fmt, ...)	dev_dbg(dev, fmt, ## __VA_ARGS__);
+
+#undef input_info
+#define input_info(mode, dev, fmt, ...)	dev_info(dev, fmt, ## __VA_ARGS__);
+
+#undef input_err
+#define input_err(mode, dev, fmt, ...)	dev_err(dev, fmt, ## __VA_ARGS__);
 
 #endif

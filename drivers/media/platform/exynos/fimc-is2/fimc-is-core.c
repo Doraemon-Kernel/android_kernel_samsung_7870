@@ -33,7 +33,8 @@
 #include <linux/bug.h>
 #include <linux/v4l2-mediabus.h>
 #include <linux/gpio.h>
-
+#include <linux/memblock.h>
+#
 #ifdef CONFIG_OF
 #include <linux/of.h>
 #include <linux/of_gpio.h>
@@ -78,6 +79,62 @@ struct fimc_is_sysfs_debug sysfs_debug;
 /* sysfs global variable for set position to actuator */
 struct fimc_is_sysfs_actuator sysfs_actuator;
 #endif
+
+static struct vm_struct fimc_is_lib_vm;
+static int __init fimc_is_lib_mem_alloc(char *str)
+{
+	ulong addr = 0;
+
+	if (kstrtoul(str, 0, (ulong *)&addr) || !addr) {
+		probe_warn("invalid fimc-is library memory address, use default");
+		addr = LIB_START;
+	}
+
+	if (addr != LIB_START)
+		probe_warn("use different address [reserve-fimc=0x%lx default:0x%lx]",
+				addr, LIB_START);
+
+	fimc_is_lib_vm.phys_addr = memblock_alloc(LIB_SIZE, SZ_4K);
+	fimc_is_lib_vm.addr = (void *)addr;
+	fimc_is_lib_vm.size = LIB_SIZE + PAGE_SIZE;
+
+	vm_area_add_early(&fimc_is_lib_vm);
+
+	probe_info("fimc-is library memory: 0x%lx\n", addr);
+
+	return 0;
+}
+__setup("reserve-fimc=", fimc_is_lib_mem_alloc);
+
+static int __init fimc_is_lib_mem_map(void)
+{
+	int page_size, i;
+	struct page *page;
+	struct page **pages;
+
+	if (!fimc_is_lib_vm.phys_addr) {
+		probe_err("There is no reserve-fimc= at bootargs.");
+		return -ENOMEM;
+	}
+
+	page_size = fimc_is_lib_vm.size / PAGE_SIZE;
+	pages = kzalloc(sizeof(struct page*) * page_size, GFP_KERNEL);
+	page = phys_to_page(fimc_is_lib_vm.phys_addr);
+
+	for (i = 0; i < page_size; i++)
+		pages[i] = page++;
+
+	if (map_vm_area(&fimc_is_lib_vm, PAGE_KERNEL, pages)) {
+		probe_err("failed to mapping between virt and phys for binary");
+		vunmap(fimc_is_lib_vm.addr);
+		kfree(pages);
+		return -ENOMEM;
+	}
+
+	kfree(pages);
+
+	return 0;
+}
 
 #ifdef CONFIG_CPU_THERMAL_IPA
 static int fimc_is_mif_throttling_notifier(struct notifier_block *nb,
@@ -147,8 +204,8 @@ static void __fimc_is_fault_handler(struct device *dev)
 		fimc_is_hw_fault(&core->interface);
 		/* dump FW page table 1nd(~16KB), 2nd(16KB~32KB) */
 		fimc_is_hw_memdump(&core->interface,
-			resourcemgr->minfo.kvaddr + FIMC_IS_TTB_OFFSET, /* TTB_BASE ~ 32KB */
-			resourcemgr->minfo.kvaddr + FIMC_IS_TTB_OFFSET + FIMC_IS_TTB_SIZE);
+			resourcemgr->minfo.kvaddr + TTB_OFFSET, /* TTB_BASE ~ 32KB */
+			resourcemgr->minfo.kvaddr + TTB_OFFSET + TTB_SIZE);
 		fimc_is_hw_logdump(&core->interface);
 
 		/* SENSOR */
@@ -559,6 +616,20 @@ static ssize_t store_en_clk_gate(struct device *dev,
 		break;
 	}
 #endif
+
+#ifdef ENABLE_DIRECT_CLOCK_GATE
+	switch (buf[0]) {
+	case '0':
+		sysfs_debug.en_clk_gate = false;
+		break;
+	case '1':
+		sysfs_debug.en_clk_gate = true;
+		break;
+	default:
+		pr_debug("%s: %c\n", __func__, buf[0]);
+		break;
+	}
+#endif
 	return count;
 }
 
@@ -643,9 +714,9 @@ static ssize_t store_actuator_init_positions(struct device *dev,
 {
 	int i;
 	int ret_count;
-	unsigned int init_positions[INIT_MAX_SETTING];
+	int init_positions[INIT_MAX_SETTING];
 
-	ret_count = sscanf(buf, "%u %u %u %u %u", &init_positions[0], &init_positions[1],
+	ret_count = sscanf(buf, "%d %d %d %d %d", &init_positions[0], &init_positions[1],
 						&init_positions[2], &init_positions[3], &init_positions[4]);
 	if (ret_count > INIT_MAX_SETTING)
 		return -EINVAL;
@@ -666,9 +737,9 @@ static ssize_t store_actuator_init_delays(struct device *dev,
 {
 	int ret_count;
 	int i;
-	unsigned int init_delays[INIT_MAX_SETTING];
+	int init_delays[INIT_MAX_SETTING];
 
-	ret_count = sscanf(buf, "%u %u %u %u %u", &init_delays[0], &init_delays[1],
+	ret_count = sscanf(buf, "%d %d %d %d %d", &init_delays[0], &init_delays[1],
 							&init_delays[2], &init_delays[3], &init_delays[4]);
 	if (ret_count > INIT_MAX_SETTING)
 		return -EINVAL;
@@ -743,7 +814,6 @@ static int fimc_is_probe(struct platform_device *pdev)
 	int i;
 #endif
 	u32 stream;
-	struct pinctrl_state *s;
 
 	probe_info("%s:start(%ld, %ld)\n", __func__,
 		sizeof(struct fimc_is_core), sizeof(struct fimc_is_video_ctx));
@@ -814,13 +884,22 @@ static int fimc_is_probe(struct platform_device *pdev)
 		goto p_err3;
 	}
 #endif
-	ret = pdata->clk_get(&pdev->dev);
+
+	if (pdata) {
+		ret = pdata->clk_get(&pdev->dev);
+		if (ret) {
+			probe_err("clk_get is fail(%d)", ret);
+			goto p_err3;
+		}
+	}
+
+	ret = fimc_is_lib_mem_map();
 	if (ret) {
-		probe_err("clk_get is fail(%d)", ret);
+		probe_err("fimc_is_lib_mem_map is fail(%d)", ret);
 		goto p_err3;
 	}
 
-	ret = fimc_is_mem_probe(&core->resourcemgr.mem, core->pdev);
+	ret = fimc_is_mem_init(&core->resourcemgr.mem, core->pdev);
 	if (ret) {
 		probe_err("fimc_is_mem_probe is fail(%d)", ret);
 		goto p_err3;
@@ -1030,14 +1109,11 @@ static int fimc_is_probe(struct platform_device *pdev)
 	sysfs_debug.clk_gate_mode = CLOCK_GATE_MODE_HOST;
 #endif
 #endif
+
+#ifdef ENABLE_DIRECT_CLOCK_GATE
+	sysfs_debug.en_clk_gate = 1;
+#endif
 	ret = sysfs_create_group(&core->pdev->dev.kobj, &fimc_is_debug_attr_group);
-
-	s = pinctrl_lookup_state(pdata->pinctrl, "release");
-
-	if (pinctrl_select_state(pdata->pinctrl, s) < 0) {
-		probe_err("pinctrl_select_state is fail\n");
-		goto p_err3;
-	}
 
 	probe_info("%s:end\n", __func__);
 	return 0;

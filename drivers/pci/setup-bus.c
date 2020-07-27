@@ -1587,6 +1587,7 @@ void pci_assign_unassigned_root_bus_resources(struct pci_bus *bus)
 	unsigned long type_mask = IORESOURCE_IO | IORESOURCE_MEM |
 				  IORESOURCE_PREFETCH | IORESOURCE_MEM_64;
 	int pci_try_num = 1;
+	enum enable_type enable_local;
 
 again:
 	/*
@@ -1610,6 +1611,11 @@ again:
 		goto dump;
 
 	if (tried_times >= pci_try_num) {
+		if (enable_local == undefined)
+			dev_info(&bus->dev, "Some PCI device resources are unassigned, try booting with pci=realloc\n");
+		else if (enable_local == auto_enabled)
+			dev_info(&bus->dev, "Automatically enabled pci realloc, if you have problem, try booting with pci=realloc=off\n");
+
 		free_list(&fail_head);
 		goto dump;
 	}

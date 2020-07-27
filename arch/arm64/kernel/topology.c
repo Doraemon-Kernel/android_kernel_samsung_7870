@@ -202,7 +202,7 @@ struct cpu_efficiency {
  * use the default SCHED_POWER_SCALE value for cpu_scale.
  */
 static const struct cpu_efficiency table_efficiency[] = {
-	{ "arm,mongoose", 5035 },
+	{ "arm,mongoose", 4000 },	/* FIXME: temporary value */
 	{ "arm,cortex-a57", 3891 },
 	{ "arm,cortex-a53", 2048 },
 	{ NULL, },
@@ -210,8 +210,6 @@ static const struct cpu_efficiency table_efficiency[] = {
 
 static unsigned long *__cpu_capacity;
 #define cpu_capacity(cpu)	__cpu_capacity[cpu]
-
-unsigned int *pcpu_efficiency;
 
 static unsigned long middle_capacity = 1;
 
@@ -274,9 +272,6 @@ static void __init parse_dt_cpu_power(void)
 	__cpu_capacity = kcalloc(nr_cpu_ids, sizeof(*__cpu_capacity),
 				 GFP_NOWAIT);
 
-	pcpu_efficiency = kcalloc(nr_cpu_ids, sizeof(*pcpu_efficiency),
-				 GFP_NOWAIT);
-
 	for_each_possible_cpu(cpu) {
 		const u32 *rate;
 		int len;
@@ -296,8 +291,6 @@ static void __init parse_dt_cpu_power(void)
 			pr_warn("%s: Unknown CPU type\n", cn->full_name);
 			continue;
 		}
-
-		pcpu_efficiency[cpu] = cpu_eff->efficiency;
 
 		rate = of_get_property(cn, "clock-frequency", &len);
 		if (!rate || len != 4) {
@@ -508,14 +501,6 @@ void __init arch_get_hmp_domains(struct list_head *hmp_domains_list)
 }
 #endif /* CONFIG_SCHED_HMP */
 
-#ifdef CONFIG_DISABLE_CPU_SCHED_DOMAIN_BALANCE
-
-int cpu_cpu_flags(void)
-{
-	return SD_NO_LOAD_BALANCE;
-}
-#endif /* CONFIG_DISABLE_CPU_SCHED_DOMAIN_BALANCE */
-
 /*
  * cluster_to_logical_mask - return cpu logical mask of CPUs in a cluster
  * @socket_id:		cluster HW identifier
@@ -542,19 +527,6 @@ int cluster_to_logical_mask(unsigned int socket_id, cpumask_t *cluster_mask)
 	}
 
 	return -EINVAL;
-}
-
-int get_current_cpunum(void)
-{
-       unsigned int mpidr;
-       int core_id;
-       int cluster_id;
-       int cpuid;
-       mpidr = read_cpuid_mpidr();
-       core_id = MPIDR_AFFINITY_LEVEL(mpidr, 0);
-       cluster_id = MPIDR_AFFINITY_LEVEL(mpidr, 1);
-       cpuid = cluster_id ? core_id : core_id + 4;
-       return cpuid;
 }
 
 void store_cpu_topology(unsigned int cpuid)

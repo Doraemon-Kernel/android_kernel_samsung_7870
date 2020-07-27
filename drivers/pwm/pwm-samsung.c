@@ -299,6 +299,7 @@ static int pwm_samsung_request(struct pwm_chip *chip, struct pwm_device *pwm)
 static void pwm_samsung_free(struct pwm_chip *chip, struct pwm_device *pwm)
 {
 	devm_kfree(chip->dev, pwm_get_chip_data(pwm));
+	pwm_set_chip_data(pwm, NULL);
 }
 
 static int pwm_samsung_enable(struct pwm_chip *chip, struct pwm_device *pwm)
@@ -714,7 +715,9 @@ static int pwm_samsung_probe(struct platform_device *pdev)
 		goto chip_add_err;
 	}
 
+#ifndef CONFIG_EXYNOS_LCD_PWM_BACKLIGHT
 	pwm_samsung_clk_disable(chip);
+#endif
 #ifdef CONFIG_CPU_IDLE
 	exynos_pm_register_notifier(&pwm_samsung_notifier_block);
 #endif
@@ -779,8 +782,7 @@ static void pwm_samsung_save(struct samsung_pwm_chip *chip)
 		chan->duty_ns = -1;
 	}
 	/* Save pwm registers*/
-	if (chip->enable_cnt)
-		chip->reg_tcfg0 = __raw_readl(chip->base + REG_TCFG0);
+	chip->reg_tcfg0 = __raw_readl(chip->base + REG_TCFG0);
 
 	pwm_samsung_clk_disable(chip);
 }
@@ -793,15 +795,11 @@ static void pwm_samsung_restore(struct samsung_pwm_chip *chip)
 
 	chip->need_hw_init = 0;
 	/* Restore pwm registers*/
-	if (chip->enable_cnt)
-		__raw_writel(chip->reg_tcfg0, chip->base + REG_TCFG0);
+	__raw_writel(chip->reg_tcfg0, chip->base + REG_TCFG0);
 
 	for (chan = 0; chan < SAMSUNG_PWM_NUM; ++chan) {
 		if (chip->variant.output_mask & BIT(chan)) {
 			struct pwm_device *pwm = &chip->chip.pwms[chan];
-
-			if (pwm == NULL)
-				continue;
 			pwm_samsung_init(chip, pwm);
 		}
 	}

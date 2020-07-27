@@ -20,12 +20,18 @@
 #include <linux/slab.h>
 #include <linux/cpufreq.h>
 #include <linux/of.h>
+#include <linux/regulator/consumer.h>
 
 #include <soc/samsung/cpufreq.h>
 #include <soc/samsung/exynos-pmu.h>
 
 #include "../../drivers/soc/samsung/pwrcal/pwrcal.h"
+
+#if defined(CONFIG_SOC_EXYNOS8890)
 #include "../../drivers/soc/samsung/pwrcal/S5E8890/S5E8890-vclk.h"
+#elif defined(CONFIG_SOC_EXYNOS7870)
+#include "../../drivers/soc/samsung/pwrcal/S5E7870/S5E7870-vclk.h"
+#endif
 
 #ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
 #include <linux/sec_debug.h>
@@ -37,7 +43,7 @@ static unsigned int exynos_mp_cpufreq_cl0_get_freq(void)
 {
 	unsigned int freq;
 
-	freq = (unsigned int)cal_dfs_get_rate(dvfs_little);
+	freq = (unsigned int)cal_dfs_get_rate(dvfs_cpucl0);
 	if (freq <= 0)
 		pr_err("CL_ZERO: falied cal_dfs_get_rate(%dKHz)\n", freq);
 
@@ -49,7 +55,7 @@ static unsigned int exynos_mp_cpufreq_cl1_get_freq(void)
 {
 	unsigned int freq;
 
-	freq = (unsigned int)cal_dfs_get_rate(dvfs_big);
+	freq = (unsigned int)cal_dfs_get_rate(dvfs_cpucl1);
 	if (freq <= 0)
 		pr_err("CL_ONE: falied cal_dfs_get_rate(%dKHz)\n", freq);
 
@@ -59,28 +65,28 @@ static unsigned int exynos_mp_cpufreq_cl1_get_freq(void)
 static void exynos_mp_cpufreq_cl0_set_freq(unsigned int old_index,
 						unsigned int new_index)
 {
-	if (cal_dfs_set_rate(dvfs_little,
+	if (cal_dfs_set_rate(dvfs_cpucl0,
 		(unsigned long)exynos_info[CL_ZERO]->freq_table[new_index].frequency) < 0)
 		pr_err("CL0 : failed to set_freq(%d -> %d)\n",old_index, new_index);
 }
 
 static void exynos_mp_cpufreq_cl0_set_ema(unsigned int volt)
 {
-	if (cal_dfs_set_ema(dvfs_little, volt) < 0)
+	if (cal_dfs_set_ema(dvfs_cpucl0, volt) < 0)
 		pr_err("failed to cl0_set_ema(volt %d)\n", volt);
 }
 
 static void exynos_mp_cpufreq_cl1_set_freq(unsigned int old_index,
 		unsigned int new_index)
 {
-	if (cal_dfs_set_rate(dvfs_big,
+	if (cal_dfs_set_rate(dvfs_cpucl1,
 		(unsigned long)exynos_info[CL_ONE]->freq_table[new_index].frequency) < 0)
 		pr_err("CL1 : failed to set_freq(%d -> %d)\n",old_index, new_index);
 }
 
 static void exynos_mp_cpufreq_cl1_set_ema(unsigned int volt)
 {
-	if (cal_dfs_set_ema(dvfs_big, volt) < 0)
+	if (cal_dfs_set_ema(dvfs_cpucl1, volt) < 0)
 		pr_err("failed to cl1_set_ema(volt %d)\n", volt);
 }
 
@@ -88,7 +94,7 @@ static int exynos_mp_cpufreq_init_smpl(void)
 {
 	int ret;
 
-	ret = cal_dfs_ext_ctrl(dvfs_big, cal_dfs_initsmpl, 0);
+	ret = cal_dfs_ext_ctrl(dvfs_cpucl1, cal_dfs_initsmpl, 0);
 	if (ret < 0) {
 		pr_err("CL1 : SMPL_WARN init failed.\n");
 		return -EINVAL;
@@ -97,49 +103,19 @@ static int exynos_mp_cpufreq_init_smpl(void)
 	return 0;
 }
 
-static int exynos_mp_cpufreq_deinit_smpl(void)
-{
-	int ret;
-
-	ret = cal_dfs_ext_ctrl(dvfs_big, cal_dfs_deinitsmpl, 0);
-	if (ret < 0) {
-		pr_err("CL1 : SMPL_WARN deinit failed.\n");
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-#ifdef CONFIG_SEC_PM
-static unsigned int smpl_warn_number = 0;
-unsigned int get_smpl_warn_number(void)
-{
-	return smpl_warn_number;
-}
-EXPORT_SYMBOL(get_smpl_warn_number);
-
-void clear_smpl_warn_number(void)
-{
-	smpl_warn_number = 0;
-}
-EXPORT_SYMBOL(clear_smpl_warn_number);
-#endif
 static int exynos_mp_cpufreq_check_smpl(void)
 {
 	int ret = 0;
 
-	ret = cal_dfs_ext_ctrl(dvfs_big, cal_dfs_get_smplstatus, 0);
+	ret = cal_dfs_ext_ctrl(dvfs_cpucl1, cal_dfs_get_smplstatus, 0);
 
 	if (ret == 0) {
 		return ret;
 	} else if (ret > 0) {
-#ifdef CONFIG_SEC_PM
-		smpl_warn_number++;
-#ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
-		sec_debug_set_extra_info_smpl(smpl_warn_number);
-#endif
-#endif
 		pr_info("CL1 : SMPL_WARN HAPPENED!\n");
+#ifdef CONFIG_SEC_DEBUG_EXTRA_INFO		
+		sec_debug_set_extra_info_smpl(1);
+#endif
 		return ret;
 	} else {
 		pr_err("CL1 : SMPL_WARN check failed.\n");
@@ -150,34 +126,23 @@ static int exynos_mp_cpufreq_check_smpl(void)
 
 static void exynos_mp_cpufreq_clear_smpl(void)
 {
-	if (cal_dfs_ext_ctrl(dvfs_big, cal_dfs_setsmpl, 0) < 0)
+	if (cal_dfs_ext_ctrl(dvfs_cpucl1, cal_dfs_setsmpl, 0) < 0)
 		pr_err("CL1 : SMPL_WARN clear failed.\n");
 }
 
 static void exynos_mp_cpufreq_set_cal_ops(cluster_type cluster)
 {
-	/* set cal ops for little core */
+	/* set cal ops for cpucl0 core */
 	if (!cluster) {
 		exynos_info[cluster]->set_freq = exynos_mp_cpufreq_cl0_set_freq;
 		exynos_info[cluster]->get_freq = exynos_mp_cpufreq_cl0_get_freq;
-
-		if (exynos_info[cluster]->en_ema)
-			exynos_info[cluster]->set_ema = exynos_mp_cpufreq_cl0_set_ema;
-		else
-			exynos_info[cluster]->set_ema = NULL;
-	/* set cal ops for big core */
+	/* set cal ops for cpucl1 core */
 	} else {
 		exynos_info[cluster]->set_freq = exynos_mp_cpufreq_cl1_set_freq;
 		exynos_info[cluster]->get_freq = exynos_mp_cpufreq_cl1_get_freq;
 
-		if (exynos_info[cluster]->en_ema)
-			exynos_info[cluster]->set_ema = exynos_mp_cpufreq_cl1_set_ema;
-		else
-			exynos_info[cluster]->set_ema = NULL;
-
 		if (exynos_info[cluster]->en_smpl) {
 			exynos_info[cluster]->init_smpl = exynos_mp_cpufreq_init_smpl;
-			exynos_info[cluster]->deinit_smpl = exynos_mp_cpufreq_deinit_smpl;
 			exynos_info[cluster]->clear_smpl = exynos_mp_cpufreq_clear_smpl;
 			exynos_info[cluster]->check_smpl = exynos_mp_cpufreq_check_smpl;
 		} else {
@@ -194,7 +159,7 @@ static int exynos_mp_cpufreq_init_cal_table(cluster_type cluster)
 	struct dvfs_rate_volt *ptr_temp_table;
 	struct exynos_dvfs_info *ptr = exynos_info[cluster];
 	unsigned int cal_max_freq;
-	unsigned int cal_max_support_idx = ptr->max_support_idx;
+	unsigned int cal_max_support_idx = 0;
 
 	if (!ptr->freq_table || !ptr->volt_table) {
 		pr_err("%s: freq of volt table is NULL\n", __func__);
@@ -202,9 +167,9 @@ static int exynos_mp_cpufreq_init_cal_table(cluster_type cluster)
 	}
 
 	if (!cluster)
-		cl_id = dvfs_little;
+		cl_id = dvfs_cpucl0;
 	else
-		cl_id = dvfs_big;
+		cl_id = dvfs_cpucl1;
 
 	/* allocate to temporary memory for getting table from cal */
 	ptr_temp_table = kzalloc(sizeof(struct dvfs_rate_volt)
@@ -271,8 +236,8 @@ static void exynos_mp_cpufreq_print_info(cluster_type cluster)
 
 	pr_info("CPUFREQ of %s max_boot_qos %d, min_boot_qos %d\n",
 			cluster? "CL1" : "CL0",
-			exynos_info[cluster]->boot_cpu_max_qos,
-			exynos_info[cluster]->boot_cpu_min_qos);
+			exynos_info[cluster]->boot_max_qos,
+			exynos_info[cluster]->boot_min_qos);
 
 	for (i = 0; i < exynos_info[cluster]->max_idx_num; i ++) {
 		pr_info("CPUFREQ of %s : %2dL  %8d KHz  %7d uV (mif%8d KHz)\n",
@@ -335,6 +300,54 @@ int exynos_cpufreq_cluster0_init(struct exynos_dvfs_info * info)
 		pr_err("%s: CL_ZERO: exynos_init failed\n", __func__);
 		return -EINVAL;
 	}
+
+	return 0;
+}
+
+static int exynos_cpufreq_regulator_event_cl0(struct notifier_block *nb,
+					      unsigned long event, void *data)
+{
+	static struct pre_voltage_change_data change_data;
+
+	if (event & REGULATOR_EVENT_PRE_VOLTAGE_CHANGE) {
+		change_data = *((struct pre_voltage_change_data *)data);
+		if (change_data.min_uV > change_data.old_uV)
+			exynos_mp_cpufreq_cl0_set_ema(change_data.min_uV);
+	} else if (event & REGULATOR_EVENT_VOLTAGE_CHANGE) {
+		if (change_data.min_uV < change_data.old_uV)
+			exynos_mp_cpufreq_cl0_set_ema(change_data.min_uV);
+	}
+
+	return 0;
+}
+
+static int exynos_cpufreq_regulator_event_cl1(struct notifier_block *nb,
+					      unsigned long event, void *data)
+{
+	static struct pre_voltage_change_data change_data;
+
+	if (event & REGULATOR_EVENT_PRE_VOLTAGE_CHANGE) {
+		change_data = *((struct pre_voltage_change_data *)data);
+		if (change_data.min_uV > change_data.old_uV)
+			exynos_mp_cpufreq_cl1_set_ema(change_data.min_uV);
+	} else if (event & REGULATOR_EVENT_VOLTAGE_CHANGE) {
+		if (change_data.min_uV < change_data.old_uV)
+			exynos_mp_cpufreq_cl1_set_ema(change_data.min_uV);
+	}
+
+	return 0;
+}
+
+static struct notifier_block exynos_cpufreq_regulator_set_nb[CL_END] = {
+	{ .notifier_call = exynos_cpufreq_regulator_event_cl0 },
+	{ .notifier_call = exynos_cpufreq_regulator_event_cl1 }
+};
+
+int exynos_cpufreq_regulator_register_notifier(cluster_type cluster)
+{
+	if (exynos_info[cluster]->en_ema)
+		regulator_register_notifier(exynos_info[cluster]->regulator,
+					    &exynos_cpufreq_regulator_set_nb[cluster]);
 
 	return 0;
 }

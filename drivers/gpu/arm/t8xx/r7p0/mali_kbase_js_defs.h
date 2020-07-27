@@ -442,6 +442,8 @@ struct kbasep_js_kctx_info {
 		 * list per job slot
 		 */
 		struct list_head ctx_list_entry[BASE_JM_MAX_NR_SLOTS];
+
+		atomic_t fault_count;		/**< The no. of times the context is retained due to the fault job. */
 	} ctx;
 
 	/* The initalized-flag is placed at the end, to avoid cache-pollution (we should

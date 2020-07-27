@@ -35,10 +35,12 @@
 #define VG_IRQ_DEADLOCK_STATUS_MASK		(1 << 2)
 #define VG_IRQ_READ_SLAVE_ERROR_MASK		(1 << 4)
 #define VG_IRQ_HW_RESET_DONE_MASK		(1 << 5)
+#define VG_IRQ_SFR_UPDATE_DONE_MASK		(1 << 6)
 #define VG_IRQ_FRAMEDONE			(1 << 16)
 #define VG_IRQ_DEADLOCK_STATUS			(1 << 17)
 #define VG_IRQ_READ_SLAVE_ERROR			(1 << 19)
 #define VG_IRQ_HW_RESET_DONE			(1 << 20)
+#define VG_IRQ_SFR_UPDATE_DONE			(1 << 21)
 
 /* IDMA_VG(R)x_IN_CON */
 #define VG_IN_CON				(0x08)
@@ -73,8 +75,6 @@
 #define VG_IN_CON_IMG_FORMAT_YUV420_2P		(24 << 11)
 #define VG_IN_CON_IMG_FORMAT_YVU420_2P		(25 << 11)
 #define VG_IN_CON_IMG_FORMAT_YUV420_3P		(26 << 11)
-#define VG_IN_CON_IN_IC_MAX_DEFAULT		(0x10 << 19)
-#define VG_IN_CON_IN_IC_MAX			(0x1F << 19)
 #define VG_IN_CON_BURST_LENGTH_MASK		(0xF << 24)
 #define VG_IN_CON_BURST_LENGTH_0		(0 << 24)
 #define VG_IN_CON_BURST_LENGTH_1		(1 << 24)
@@ -182,10 +182,6 @@
 #define VG_BASE_ADDR_CB(n)			(0x94 + (n) * 0x4)
 #define VG_BASE_ADDR_CB_EVEN(n)			(0xA4 + (n) * 0x4)
 
-/* shadow SFR of base address */
-#define VG_SHA_BASE_ADDR_Y			0xB74
-#define VG_SHA_BASE_ADDR_CB			0xB94
-
 /* IDMA_VG(R)x scaling filter */
 #define VG_H_COEF(n, s, x)	(0x290 + (n) * 0x4 + (s) * 0x24 + (x) * 0x200)
 #define VG_V_COEF(n, s, x)	(0x200 + (n) * 0x4 + (s) * 0x24 + (x) * 0x200)
@@ -234,10 +230,4 @@
 
 /* IDMA_VG(R)x Dynamic clock gating */
 #define VG_DYNAMIC_GATING_ENABLE		(0xA54)
-
-/* VPP_DEBUG_SFR */
-#define VPP_DBG_ENABLE_SFR				(0xC04)
-#define VPP_DBG_WRITE_SFR				(0xC00)
-#define VPP_DBG_READ_SFR				(0xC10)
-
 #endif

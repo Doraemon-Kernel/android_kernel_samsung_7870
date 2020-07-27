@@ -74,10 +74,13 @@ static inline void __pmd_free_tlb(struct mmu_gather *tlb, pmd_t *pmdp,
 static inline void __pmd_free_tlb(struct mmu_gather *tlb, pmd_t *pmdp,
 				  unsigned long addr)
 {
-	if (is_rkp_ro_page((unsigned long)pmdp)) {
-		__flush_tlb_pgtable(tlb->mm, addr);
+	int rkp_do = 0;
+#ifdef CONFIG_KNOX_KAP
+	if (boot_mode_security)
+#endif	//CONFIG_KNOX_KAP
+		rkp_do = 1;
+	if (rkp_do && (unsigned long)pmdp >= (unsigned long)RKP_RBUF_VA && (unsigned long)pmdp < ((unsigned long)RKP_RBUF_VA + TIMA_ROBUF_SIZE))
 		rkp_ro_free((void*)pmdp);
-	}
 	else {
 		__flush_tlb_pgtable(tlb->mm, addr);
 		tlb_remove_entry(tlb, virt_to_page(pmdp));
@@ -87,27 +90,12 @@ static inline void __pmd_free_tlb(struct mmu_gather *tlb, pmd_t *pmdp,
 #endif
 
 #if CONFIG_PGTABLE_LEVELS > 3
-#ifndef CONFIG_TIMA_RKP
 static inline void __pud_free_tlb(struct mmu_gather *tlb, pud_t *pudp,
 				  unsigned long addr)
 {
 	__flush_tlb_pgtable(tlb->mm, addr);
 	tlb_remove_entry(tlb, virt_to_page(pudp));
 }
-#else
-static inline void __pud_free_tlb(struct mmu_gather *tlb, pud_t *pudp,
-				  unsigned long addr)
-{
-	if (is_rkp_ro_page((unsigned long)pudp)) {
-		__flush_tlb_pgtable(tlb->mm, addr);
-		rkp_ro_free((void*)pudp);
-	}
-	else {
-		__flush_tlb_pgtable(tlb->mm, addr);
-		tlb_remove_entry(tlb, virt_to_page(pudp));
-	}
-}
-#endif
 #endif
 
 #endif

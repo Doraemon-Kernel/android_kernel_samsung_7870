@@ -138,7 +138,6 @@ p_err:
 	return ret;
 }
 
-void __iomem *hwfc_rst;
 int fimc_is_m3p_video_probe(void *data)
 {
 	int ret = 0;
@@ -167,8 +166,6 @@ int fimc_is_m3p_video_probe(void *data)
 		&fimc_is_mxp_video_ioctl_ops);
 	if (ret)
 		dev_err(&core->pdev->dev, "%s is fail(%d)\n", __func__, ret);
-
-	hwfc_rst = ioremap(0x14120850, SZ_4);
 
 p_err:
 	return ret;
@@ -349,7 +346,18 @@ const struct v4l2_file_operations fimc_is_mxp_video_fops = {
 static int fimc_is_mxp_video_querycap(struct file *file, void *fh,
 	struct v4l2_capability *cap)
 {
-	/* Todo : add to query capability code */
+	struct fimc_is_video *video = video_drvdata(file);
+
+	FIMC_BUG(!cap);
+	FIMC_BUG(!video);
+
+	snprintf(cap->driver, sizeof(cap->driver), "%s", video->vd.name);
+	snprintf(cap->card, sizeof(cap->card), "%s", video->vd.name);
+	cap->capabilities |= V4L2_CAP_STREAMING
+			| V4L2_CAP_VIDEO_CAPTURE
+			| V4L2_CAP_VIDEO_CAPTURE_MPLANE;
+	cap->device_caps |= cap->capabilities;
+
 	return 0;
 }
 
@@ -496,9 +504,6 @@ static int fimc_is_mxp_video_dqbuf(struct file *file, void *priv,
 	ret = CALL_VOPS(vctx, dqbuf, buf, blocking);
 	if (ret)
 		merr("dqbuf is fail(%d)", vctx, ret);
-
-	if (vctx->video->id == FIMC_IS_VIDEO_M3P_NUM)
-		writel(0x1, hwfc_rst);
 
 	return ret;
 }
@@ -801,6 +806,7 @@ static void fimc_is_mxp_buffer_finish(struct vb2_buffer *vb)
 
 const struct vb2_ops fimc_is_mxp_qops = {
 	.queue_setup		= fimc_is_mxp_queue_setup,
+	.buf_init			= fimc_is_buffer_init,
 	.buf_prepare		= fimc_is_mxp_buffer_prepare,
 	.buf_queue		= fimc_is_mxp_buffer_queue,
 	.buf_finish		= fimc_is_mxp_buffer_finish,

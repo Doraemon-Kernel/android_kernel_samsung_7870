@@ -123,7 +123,6 @@ static enum vmpressure_levels vmpressure_calc_level(unsigned long scanned,
 	 */
 	pressure = scale - (reclaimed * scale / scanned);
 	pressure = pressure * 100 / scale;
-
 	vmpr->pressure = pressure;
 
 	pr_debug("%s: %3lu  (s: %lu  r: %lu)\n", __func__, pressure,
@@ -145,7 +144,7 @@ static bool vmpressure_event(struct vmpressure *vmpr,
 	enum vmpressure_levels level;
 	bool signalled = false;
 
-	level = vmpressure_calc_level(scanned, reclaimed,vmpr);
+	level = vmpressure_calc_level(scanned, reclaimed, vmpr);
 
 	mutex_lock(&vmpr->events_lock);
 

@@ -90,6 +90,7 @@ struct eth_dev {
 
 	bool			zlp;
 	u8			host_mac[ETH_ALEN];
+	int 			no_of_zlp;
 };
 
 /*-------------------------------------------------------------------------*/
@@ -231,12 +232,11 @@ rx_submit(struct eth_dev *dev, struct usb_request *req, gfp_t gfp_flags)
 		out = dev->port_usb->out_ep;
 	else
 		out = NULL;
+	spin_unlock_irqrestore(&dev->lock, flags);
 
 	if (!out)
-	{
-		spin_unlock_irqrestore(&dev->lock, flags);
 		return -ENOTCONN;
-	}
+
 
 	/* Padding up to RX_EXTRA handles minor disagreements with host.
 	 * Normally we use the USB "terminate on short read" convention;
@@ -262,7 +262,6 @@ rx_submit(struct eth_dev *dev, struct usb_request *req, gfp_t gfp_flags)
 
 	if (dev->port_usb->is_fixed)
 		size = max_t(size_t, size, dev->port_usb->fixed_out_len);
-	spin_unlock_irqrestore(&dev->lock, flags);
 
 	pr_debug("%s: size: %lu", __func__, size);
 	skb = alloc_skb(size + NET_IP_ALIGN, gfp_flags);
@@ -318,7 +317,6 @@ static void rx_complete(struct usb_ep *ep, struct usb_request *req)
 
 		if (dev->unwrap) {
 			unsigned long	flags;
-
 			spin_lock_irqsave(&dev->lock, flags);
 			if (dev->port_usb) {
 				status = dev->unwrap(dev->port_usb,
@@ -358,13 +356,12 @@ static void rx_complete(struct usb_ep *ep, struct usb_request *req)
 					if (status < 0
 						|| ETH_HLEN > skb2->len
 						|| skb2->len > (dev->net->mtu + ETH_HLEN)) {
-						printk(KERN_DEBUG "usb: %s  drop incase of NCM rx length %d\n",__func__,skb2->len);
+						printk(KERN_ERR "usb: %s  dropped incase of NCM rx length %d\n",__func__,skb2->len);
 					} else {
-						printk(KERN_DEBUG "usb: %s  Dont drop incase of NCM rx length %d\n",__func__,skb2->len);
 						goto process_frame;
 					}
 				}
-				printk(KERN_DEBUG "usb: %s Drop rx length %d\n",__func__,skb2->len);
+				printk(KERN_ERR "usb: %s Drop rx length %d\n",__func__,skb2->len);
 #endif
 				dev->net->stats.rx_errors++;
 				dev->net->stats.rx_length_errors++;
@@ -486,7 +483,12 @@ static int alloc_requests(struct eth_dev *dev, struct gether *link, unsigned n)
 	status = prealloc(&dev->tx_reqs, link->in_ep, n);
 	if (status < 0)
 		goto fail;
-	status = prealloc(&dev->rx_reqs, link->out_ep, n);
+
+	if (link->is_fixed)
+		status = prealloc(&dev->rx_reqs, link->out_ep, n/2);
+	else
+		status = prealloc(&dev->rx_reqs, link->out_ep, n);
+
 	if (status < 0)
 		goto fail;
 	goto done;
@@ -556,7 +558,6 @@ static void process_uether_rx(struct eth_dev *dev)
 					|| skb->len > (dev->net->mtu + ETH_HLEN)) {
 					printk(KERN_ERR "usb: %s  drop incase of NCM rx length %d\n",__func__,skb->len);
 				} else {
-					printk(KERN_ERR "usb: %s  Dont drop incase of NCM rx length %d\n",__func__,skb->len);
 					goto process_frame;
 				}
 			}
@@ -649,7 +650,7 @@ static void tx_complete(struct usb_ep *ep, struct usb_request *req)
 		break;
 	case 0:
 #ifdef CONFIG_USB_RNDIS_MULTIPACKET
-		if (!req->zero)
+		if (req->zero && !dev->zlp)
 			dev->net->stats.tx_bytes += req->length-1;
 		else
 			dev->net->stats.tx_bytes += req->length;
@@ -690,14 +691,20 @@ static void tx_complete(struct usb_ep *ep, struct usb_request *req)
 #endif
 				length = new_req->length;
 
-				/* NCM requires no zlp if transfer is
-				 * dwNtbInMaxSize */
-				if (dev->port_usb->is_fixed &&
-					length == dev->port_usb->fixed_in_len &&
-					(length % in->maxpacket) == 0)
-					new_req->zero = 0;
-				else
+				new_req->zero =0;
+				if((length % in->maxpacket) == 0) {
 					new_req->zero = 1;
+					dev->no_of_zlp++;
+				}
+				/* NCM requires no zlp if transfer is dwNtbInMaxSize */
+				if (dev->port_usb) {
+					if (dev->port_usb->is_fixed) { 
+						if(length == dev->port_usb->fixed_in_len) {
+							new_req->zero = 0;
+							dev->no_of_zlp--;
+						}
+					}
+				}
 
 				/* use zlp framing on tx for strict CDC-Ether
 				 * conformance, though any robust network rx
@@ -705,16 +712,17 @@ static void tx_complete(struct usb_ep *ep, struct usb_request *req)
 				 * doesn't like to write zlps.
 				 */
 				if (new_req->zero && !dev->zlp &&
-						(length % in->maxpacket) == 0) {
-					new_req->zero = 0;
+					(length % in->maxpacket) == 0) {
 					length++;
 				}
 
 				new_req->length = length;
 				new_req->complete = tx_complete;
+				
 				retval = usb_ep_queue(in, new_req, GFP_ATOMIC);
 				switch (retval) {
 				default:
+					printk(KERN_ERR"usb: dropped tx_complete_newreq(%p)\n",new_req);
 					DBG(dev, "tx queue err %d\n", retval);
 					new_req->length = 0;
 #ifdef CONFIG_USB_NCM_ACCUMULATE_MULTPKT
@@ -815,7 +823,7 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 					struct net_device *net)
 {
 	struct eth_dev		*dev = netdev_priv(net);
-	int			length = skb->len;
+	int			length;
 	int			retval;
 	struct usb_request	*req = NULL;
 	unsigned long		flags;
@@ -824,6 +832,13 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 #ifdef CONFIG_USB_RNDIS_MULTIPACKET
 	bool			multi_pkt_xfer = false;
 #endif
+
+	if (!skb) {
+		pr_err("%s: Dropped skb is NULL !!!\n", __func__);
+		return NETDEV_TX_OK;
+	}
+
+	length = skb->len;
 
 	spin_lock_irqsave(&dev->lock, flags);
 	if (dev->port_usb) {
@@ -889,8 +904,13 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 	list_del(&req->list);
 
 	/* temporarily stop TX queue when the freelist empties */
+#ifdef CONFIG_USB_RNDIS_MULTIPACKET
+	if (list_empty(&dev->tx_reqs) && (dev->tx_skb_hold_count >= (dev->dl_max_pkts_per_xfer -1)))
+		netif_stop_queue(net);
+#else
 	if (list_empty(&dev->tx_reqs))
 		netif_stop_queue(net);
+#endif
 	spin_unlock_irqrestore(&dev->req_lock, flags);
 
 	/* no buffer copies needed, unless the network stack did it
@@ -988,47 +1008,36 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 	req->context = skb;
 #endif
 	req->complete = tx_complete;
-
-	/* NCM requires no zlp if transfer is dwNtbInMaxSize */
-	if (dev->port_usb->is_fixed &&
-	    length == dev->port_usb->fixed_in_len &&
-	    (length % in->maxpacket) == 0)
-		req->zero = 0;
-	else
+	
+	req->zero =0;
+	if((length % in->maxpacket) == 0) {
 		req->zero = 1;
+		dev->no_of_zlp++;		
+	}	
+	/* NCM requires no zlp if transfer is dwNtbInMaxSize */
+	if (dev->port_usb) {
+		if (dev->port_usb->is_fixed) { 
+		    if(length == dev->port_usb->fixed_in_len) { 
+				req->zero = 0;
+				dev->no_of_zlp--;
+			}
+		}
+	}
 
 	/* use zlp framing on tx for strict CDC-Ether conformance,
 	 * though any robust network rx path ignores extra padding.
 	 * and some hardware doesn't like to write zlps.
 	 */
-#ifdef CONFIG_USB_RNDIS_MULTIPACKET
-	if (req->zero && !dev->zlp && (length % in->maxpacket) == 0) {
-		req->zero = 0;
-		length++;
-	}
-#else
+
 	if (req->zero && !dev->zlp && (length % in->maxpacket) == 0)
 		length++;
-#endif
-	req->length = length;
 
-	/* throttle highspeed IRQ rate back slightly */
-	if (gadget_is_dualspeed(dev->gadget) &&
-			 (dev->gadget->speed == USB_SPEED_HIGH)) {
-		dev->tx_qlen++;
-		if (dev->tx_qlen == (qmult/2)) {
-			req->no_interrupt = 0;
-			dev->tx_qlen = 0;
-		} else {
-			req->no_interrupt = 1;
-		}
-	} else {
-		req->no_interrupt = 0;
-	}
+	req->length = length;
 
 	retval = usb_ep_queue(in, req, GFP_ATOMIC);
 	switch (retval) {
 	default:
+		printk(KERN_ERR"usb: dropped eo queue error (%d)\n",retval);
 		DBG(dev, "tx queue err %d\n", retval);
 		break;
 	case 0:
@@ -1059,7 +1068,7 @@ drop:
 		dev->net->stats.tx_dropped++;
 		printk(KERN_ERR"usb: packet dropped(%ld)\n",dev->net->stats.tx_dropped);
 		spin_lock_irqsave(&dev->req_lock, flags);
-		if (list_empty(&dev->tx_reqs))
+		if (dev->port_usb && list_empty(&dev->tx_reqs))
 			netif_start_queue(net);
 #ifdef CONFIG_USB_RNDIS_MULTIPACKET
 		list_add_tail(&req->list, &dev->tx_reqs);
@@ -1377,6 +1386,7 @@ struct net_device *gether_connect(struct gether *link)
 		dev->tx_skb_hold_count = 0;
 		dev->no_tx_req_used = 0;
 		dev->tx_req_bufsize = 0;
+		dev->no_of_zlp=0;
 		dev->port_usb = link;
 		link->ioport = dev;
 #else
@@ -1442,7 +1452,7 @@ void gether_disconnect(struct gether *link)
 
 	netif_stop_queue(dev->net);
 	netif_carrier_off(dev->net);
-
+	printk(KERN_ERR"usb: %s No of ZLPS (%d)\n",__func__,dev->no_of_zlp);
 	/* disable endpoints, forcing (synchronous) completion
 	 * of all pending i/o.  then free the request objects
 	 * and forget about the endpoints.

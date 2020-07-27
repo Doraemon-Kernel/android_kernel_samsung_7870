@@ -440,6 +440,8 @@ void set_sensor_uctl_valid(struct fimc_is_sensor_interface *itf,
 	sensor_ctl->is_valid_sensor_udctrl = true;
 }
 
+int get_num_of_frame_per_one_3aa(struct fimc_is_sensor_interface *itf,
+				u32 *num_of_frame);
 int set_exposure(struct fimc_is_sensor_interface *itf,
 		enum itf_cis_interface mode,
 		u32 long_exp,
@@ -448,22 +450,27 @@ int set_exposure(struct fimc_is_sensor_interface *itf,
 	int ret = 0;
 	u32 frame_count = 0;
 	camera2_sensor_uctl_t *sensor_uctl;
+	u32 i = 0;
+	u32 num_of_frame = 1;
 
 	BUG_ON(!itf);
 	BUG_ON(itf->magic != SENSOR_INTERFACE_MAGIC);
 
 	frame_count = get_frame_count(itf);
-	sensor_uctl = get_sensor_uctl_from_module(itf, frame_count);
+	ret = get_num_of_frame_per_one_3aa(itf, &num_of_frame);
 
-	BUG_ON(!sensor_uctl);
+	for (i = 0; i < num_of_frame; i++) {
+		sensor_uctl = get_sensor_uctl_from_module(itf, frame_count + i);
+		BUG_ON(!sensor_uctl);
 
-	/* set exposure */
-	sensor_uctl->exposureTime = fimc_is_sensor_convert_us_to_ns(long_exp);
-	if (mode == ITF_CIS_SMIA_WDR) {
-		sensor_uctl->longExposureTime = fimc_is_sensor_convert_us_to_ns(long_exp);
-		sensor_uctl->shortExposureTime = fimc_is_sensor_convert_us_to_ns(short_exp);
+		/* set exposure */
+		sensor_uctl->exposureTime = fimc_is_sensor_convert_us_to_ns(long_exp);
+		if (mode == ITF_CIS_SMIA_WDR) {
+			sensor_uctl->longExposureTime = fimc_is_sensor_convert_us_to_ns(long_exp);
+			sensor_uctl->shortExposureTime = fimc_is_sensor_convert_us_to_ns(short_exp);
+		}
+		set_sensor_uctl_valid(itf, frame_count);
 	}
-	set_sensor_uctl_valid(itf, frame_count);
 
 	return ret;
 }
@@ -477,38 +484,44 @@ int set_gain_permile(struct fimc_is_sensor_interface *itf,
 	int ret = 0;
 	u32 frame_count = 0;
 	camera2_sensor_uctl_t *sensor_uctl;
+	u32 i = 0;
+	u32 num_of_frame = 1;
 
 	BUG_ON(!itf);
 	BUG_ON(itf->magic != SENSOR_INTERFACE_MAGIC);
 
 	frame_count = get_frame_count(itf);
-	sensor_uctl = get_sensor_uctl_from_module(itf, frame_count);
 
-	BUG_ON(!sensor_uctl);
+	ret = get_num_of_frame_per_one_3aa(itf, &num_of_frame);
 
-	/* set exposure */
-	if (mode == ITF_CIS_SMIA) {
-		sensor_uctl->sensitivity = long_total_gain;
+	for (i = 0; i < num_of_frame; i++) {
+		sensor_uctl = get_sensor_uctl_from_module(itf, frame_count + i);
+		BUG_ON(!sensor_uctl);
 
-		sensor_uctl->analogGain = long_analog_gain;
-		sensor_uctl->digitalGain = long_digital_gain;
+		/* set exposure */
+		if (mode == ITF_CIS_SMIA) {
+			sensor_uctl->sensitivity = DIV_ROUND_UP(long_total_gain, 10);
 
-		set_sensor_uctl_valid(itf, frame_count);
-	} else if (mode == ITF_CIS_SMIA_WDR) {
-		sensor_uctl->sensitivity = long_total_gain;
+			sensor_uctl->analogGain = long_analog_gain;
+			sensor_uctl->digitalGain = long_digital_gain;
 
-		/* Caution: short values are setted at analog/digital gain */
-		sensor_uctl->analogGain = short_analog_gain;
-		sensor_uctl->digitalGain = short_digital_gain;
-		sensor_uctl->longAnalogGain = long_analog_gain;
-		sensor_uctl->shortAnalogGain = short_analog_gain;
-		sensor_uctl->longDigitalGain = long_digital_gain;
-		sensor_uctl->shortDigitalGain = short_digital_gain;
+			set_sensor_uctl_valid(itf, frame_count);
+		} else if (mode == ITF_CIS_SMIA_WDR) {
+			sensor_uctl->sensitivity = DIV_ROUND_UP(long_total_gain, 10);
 
-		set_sensor_uctl_valid(itf, frame_count);
-	} else {
-		pr_err("invalid cis interface mode (%d)\n", mode);
-		ret = -EINVAL;
+			/* Caution: short values are setted at analog/digital gain */
+			sensor_uctl->analogGain = short_analog_gain;
+			sensor_uctl->digitalGain = short_digital_gain;
+			sensor_uctl->longAnalogGain = long_analog_gain;
+			sensor_uctl->shortAnalogGain = short_analog_gain;
+			sensor_uctl->longDigitalGain = long_digital_gain;
+			sensor_uctl->shortDigitalGain = short_digital_gain;
+
+			set_sensor_uctl_valid(itf, frame_count);
+		} else {
+			pr_err("invalid cis interface mode (%d)\n", mode);
+			ret = -EINVAL;
+		}
 	}
 
 	return ret;
@@ -766,6 +779,10 @@ int request_exposure(struct fimc_is_sensor_interface *itf,
 	u32 i = 0;
 	u32 end_index = 0;
 
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+	struct fimc_is_device_sensor_peri *sensor_peri = NULL;
+#endif
+
 	BUG_ON(!itf);
 	BUG_ON(itf->magic != SENSOR_INTERFACE_MAGIC);
 
@@ -791,6 +808,20 @@ int request_exposure(struct fimc_is_sensor_interface *itf,
 			goto p_err;
 		}
 	}
+
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+	/* store exposure for use initial AE */
+	sensor_peri = container_of(itf, struct fimc_is_device_sensor_peri, sensor_interface);
+	if (!sensor_peri) {
+		err("[%s] sensor_peri is NULL", __func__);
+		return -EINVAL;
+	}
+
+	if (sensor_peri->cis.use_initial_ae) {
+		sensor_peri->cis.last_ae_setting.long_exposure = long_exposure;
+		sensor_peri->cis.last_ae_setting.exposure = short_exposure;
+	}
+#endif
 
 p_err:
 	return ret;
@@ -913,6 +944,10 @@ int request_gain(struct fimc_is_sensor_interface *itf,
 	u32 i = 0;
 	u32 end_index = 0;
 
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+	struct fimc_is_device_sensor_peri *sensor_peri = NULL;
+#endif
+
 	BUG_ON(!itf);
 	BUG_ON(itf->magic != SENSOR_INTERFACE_MAGIC);
 
@@ -952,6 +987,22 @@ int request_gain(struct fimc_is_sensor_interface *itf,
 			goto p_err;
 		}
 	}
+
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+	/* store gain for use initial AE */
+	sensor_peri = container_of(itf, struct fimc_is_device_sensor_peri, sensor_interface);
+	if (!sensor_peri) {
+		err("[%s] sensor_peri is NULL", __func__);
+		return -EINVAL;
+	}
+
+	if (sensor_peri->cis.use_initial_ae) {
+		sensor_peri->cis.last_ae_setting.long_analog_gain = long_analog_gain;
+		sensor_peri->cis.last_ae_setting.long_digital_gain = long_digital_gain;
+		sensor_peri->cis.last_ae_setting.analog_gain = short_analog_gain;
+		sensor_peri->cis.last_ae_setting.digital_gain = short_digital_gain;
+	}
+#endif
 
 p_err:
 	return ret;
@@ -1243,6 +1294,33 @@ int set_alg_reset_flag(struct fimc_is_sensor_interface *itf,
 	return ret;
 }
 
+/*
+ * TODO: need to implement getting C2, C3 stat data
+ * This sensor interface returns done status of getting sensor stat
+ */
+int get_sensor_hdr_stat(struct fimc_is_sensor_interface *itf,
+		enum itf_cis_hdr_stat_status *status)
+{
+	int ret = 0;
+
+	info("%s", __func__);
+
+	return ret;
+}
+
+/*
+ * TODO: For example, 3AA thumbnail result shuld be applied to sensor in case of IMX230
+ */
+int set_3a_alg_res_to_sens(struct fimc_is_sensor_interface *itf,
+		struct fimc_is_3a_res_to_sensor *sensor_setting)
+{
+	int ret = 0;
+
+	info("%s", __func__);
+
+	return ret;
+}
+
 int get_sensor_fnum(struct fimc_is_sensor_interface *itf,
 			u32 *fnum)
 {
@@ -1316,21 +1394,15 @@ int get_num_of_frame_per_one_3aa(struct fimc_is_sensor_interface *itf,
 	/* TODO: SDK should know how many frames are needed to execute one 3a. */
 	*num_of_frame = 1;
 
-	/* This is FW HACK */
-	if (sensor_peri->cis.id == SENSOR_NAME_S5K2T2
-		|| sensor_peri->cis.id == SENSOR_NAME_IMX240
-		|| sensor_peri->cis.id == SENSOR_NAME_S5K2P2
-		/* || sensor_peri->cis.id == SENSOR_NAME_IMX228 */) {
-		if (sensor_peri->cis.cis_data->video_mode == true) {
-			if (max_fps >= 300) {
-				*num_of_frame = 10;
-			} else if (max_fps >= 240) {
-				*num_of_frame = 24;
-			} else if (max_fps >= 120) {
-				*num_of_frame = 4;
-			} else if (max_fps >= 60) {
-				*num_of_frame = 2;
-			}
+	if (sensor_peri->cis.cis_data->video_mode == true) {
+		if (max_fps >= 300) {
+			*num_of_frame = 10;
+		} else if (max_fps >= 240) {
+			*num_of_frame = 24;
+		} else if (max_fps >= 120) {
+			*num_of_frame = 4;
+		} else if (max_fps >= 60) {
+			*num_of_frame = 2;
 		}
 	}
 
@@ -1355,22 +1427,15 @@ int get_offset_from_cur_result(struct fimc_is_sensor_interface *itf,
 	/* TODO: SensorSdk delivers the result of the 3AA by taking into account this parameter. */
 	*offset = 0;
 
-	/* This is FW HACK */
-	if (sensor_peri->cis.id == SENSOR_NAME_S5K2T2
-		|| sensor_peri->cis.id == SENSOR_NAME_IMX240
-		|| sensor_peri->cis.id == SENSOR_NAME_IMX260
-		|| sensor_peri->cis.id == SENSOR_NAME_S5K2P2
-		/* || sensor_peri->cis.id == SENSOR_NAME_IMX228 */) {
-		if (sensor_peri->cis.cis_data->video_mode == true) {
-			if (max_fps >= 300) {
-				*offset = 1;
-			} else if (max_fps >= 240) {
-				*offset = 1;
-			} else if (max_fps >= 120) {
-				*offset = 1;
-			} else if (max_fps >= 60) {
-				*offset = 0;
-			}
+	if (sensor_peri->cis.cis_data->video_mode == true) {
+		if (max_fps >= 300) {
+			*offset = 1;
+		} else if (max_fps >= 240) {
+			*offset = 1;
+		} else if (max_fps >= 120) {
+			*offset = 1;
+		} else if (max_fps >= 60) {
+			*offset = 0;
 		}
 	}
 
@@ -1488,6 +1553,8 @@ int request_reset_expo_gain(struct fimc_is_sensor_interface *itf,
 			pr_err("[%s] set_interface_param EXPOSURE fail(%d)\n", __func__, ret);
 	}
 
+	itf->vsync_flag = true;
+
 	sensor_peri = container_of(itf, struct fimc_is_device_sensor_peri, sensor_interface);
 	BUG_ON(!sensor_peri);
 
@@ -1499,6 +1566,26 @@ int request_reset_expo_gain(struct fimc_is_sensor_interface *itf,
 			long_dgain, short_dgain);
 
 	memset(sensor_peri->cis.cis_data->auto_exposure, 0, sizeof(sensor_peri->cis.cis_data->auto_exposure));
+
+	sensor_peri->cis.cis_data->auto_exposure[CURRENT_FRAME].exposure = long_expo;
+	sensor_peri->cis.cis_data->auto_exposure[CURRENT_FRAME].analog_gain = long_again;
+	sensor_peri->cis.cis_data->auto_exposure[CURRENT_FRAME].digital_gain = long_dgain;
+	sensor_peri->cis.cis_data->auto_exposure[CURRENT_FRAME].long_exposure = long_expo;
+	sensor_peri->cis.cis_data->auto_exposure[CURRENT_FRAME].long_analog_gain = long_again;
+	sensor_peri->cis.cis_data->auto_exposure[CURRENT_FRAME].long_digital_gain = long_dgain;
+	sensor_peri->cis.cis_data->auto_exposure[CURRENT_FRAME].short_exposure = short_expo;
+	sensor_peri->cis.cis_data->auto_exposure[CURRENT_FRAME].short_analog_gain = short_again;
+	sensor_peri->cis.cis_data->auto_exposure[CURRENT_FRAME].short_digital_gain = short_dgain;
+
+	sensor_peri->cis.cis_data->auto_exposure[NEXT_FRAME].exposure = long_expo;
+	sensor_peri->cis.cis_data->auto_exposure[NEXT_FRAME].analog_gain = long_again;
+	sensor_peri->cis.cis_data->auto_exposure[NEXT_FRAME].digital_gain = long_dgain;
+	sensor_peri->cis.cis_data->auto_exposure[NEXT_FRAME].long_exposure = long_expo;
+	sensor_peri->cis.cis_data->auto_exposure[NEXT_FRAME].long_analog_gain = long_again;
+	sensor_peri->cis.cis_data->auto_exposure[NEXT_FRAME].long_digital_gain = long_dgain;
+	sensor_peri->cis.cis_data->auto_exposure[NEXT_FRAME].short_exposure = short_expo;
+	sensor_peri->cis.cis_data->auto_exposure[NEXT_FRAME].short_analog_gain = short_again;
+	sensor_peri->cis.cis_data->auto_exposure[NEXT_FRAME].short_digital_gain = short_dgain;
 
 	return ret;
 }
@@ -1548,7 +1635,7 @@ int update_sensor_dynamic_meta(struct fimc_is_sensor_interface *itf,
 	sensor_peri = container_of(itf, struct fimc_is_device_sensor_peri, sensor_interface);
 
 	dm->sensor.exposureTime = sensor_peri->cis.expecting_sensor_dm[index].exposureTime;
-	dm->sensor.frameDuration = sensor_peri->cis.cis_data->cur_frame_us_time;
+	dm->sensor.frameDuration = sensor_peri->cis.cis_data->cur_frame_us_time * 1000;
 	dm->sensor.sensitivity = sensor_peri->cis.expecting_sensor_dm[index].sensitivity;
 	dm->sensor.rollingShutterSkew = sensor_peri->cis.cis_data->rolling_shutter_skew;
 
@@ -1577,15 +1664,35 @@ int copy_sensor_ctl(struct fimc_is_sensor_interface *itf,
 	sensor_peri = container_of(itf, struct fimc_is_device_sensor_peri, sensor_interface);
 	sensor_ctl = &sensor_peri->cis.sensor_ctls[index];
 
-	if (shot == NULL) {
-		sensor_ctl->ctl_frame_number = 0;
-		sensor_ctl->valid_sensor_ctrl = false;
-		sensor_ctl->is_sensor_request = false;
-	} else {
+	sensor_ctl->ctl_frame_number = 0;
+	sensor_ctl->valid_sensor_ctrl = false;
+	sensor_ctl->is_sensor_request = false;
+
+	if (shot != NULL) {
 		sensor_ctl->ctl_frame_number = shot->dm.request.frameCount;
 		sensor_ctl->cur_cam20_sensor_ctrl = shot->ctl.sensor;
-		sensor_ctl->valid_sensor_ctrl = true;
-		sensor_ctl->is_sensor_request = true;
+
+		/* set frame rate : Limit of max frame duration
+		 * Frame duration is set by
+		 * 1. Manual sensor control
+		 *	 - For HAL3.2
+		 *	 - AE_MODE is OFF and ctl.sensor.frameDuration is not 0.
+		 * 2. Target FPS Range
+		 *	 - For backward compatibility
+		 *	 - In case of AE_MODE is not OFF and aeTargetFpsRange[0] is not 0,
+		 *	   frame durtaion is 1000000us / aeTargetFpsRage[0]
+		 */
+		if (shot->ctl.aa.aeMode == AA_AEMODE_OFF) {
+			sensor_ctl->valid_sensor_ctrl = true;
+			sensor_ctl->is_sensor_request = true;
+		} else if (shot->ctl.aa.aeTargetFpsRange[1] != 0) {
+			u32 duration_us = 1000000 / shot->ctl.aa.aeTargetFpsRange[1];
+			sensor_ctl->cur_cam20_sensor_udctrl.frameDuration = fimc_is_sensor_convert_us_to_ns(duration_us);
+
+			/* qbuf min, max fps value */
+			sensor_peri->cis.min_fps = shot->ctl.aa.aeTargetFpsRange[0];
+			sensor_peri->cis.max_fps = shot->ctl.aa.aeTargetFpsRange[1];
+		}
 	}
 
 	return ret;
@@ -1663,17 +1770,100 @@ int set_sensor_3a_mode(struct fimc_is_sensor_interface *itf,
 
 	/* 0: OTF, 1: M2M */
 	itf->otf_flag_3aa = mode == 0 ? true : false;
-	itf->diff_bet_sen_isp = itf->otf_flag_3aa? DIFF_OTF_DELAY : DIFF_M2M_DELAY;
 
 	if (itf->otf_flag_3aa == false) {
-		ret = fimc_is_sensor_init_m2m_thread(sensor_peri);
+		ret = fimc_is_sensor_init_sensor_thread(sensor_peri);
 		if (ret) {
-			err("fimc_is_sensor_init_m2m_thread is fail(%d)", ret);
+			err("fimc_is_sensor_init_sensor_thread is fail(%d)", ret);
 			return ret;
 		}
 	}
 
 	return 0;
+}
+
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+int get_initial_exposure_gain_of_sensor(struct fimc_is_sensor_interface *itf,
+	u32 *long_expo,
+	u32 *long_again,
+	u32 *long_dgain,
+	u32 *short_expo,
+	u32 *short_again,
+	u32 *short_dgain)
+{
+	struct fimc_is_device_sensor_peri *sensor_peri = NULL;
+	struct fimc_is_device_sensor *device = NULL;
+	struct fimc_is_module_enum *module = NULL;
+	struct v4l2_subdev *subdev_module;
+
+	if (!itf) {
+		err("[%s] fimc_is_sensor_interface is NULL", __func__);
+		return -EINVAL;
+	}
+
+	BUG_ON(itf->magic != SENSOR_INTERFACE_MAGIC);
+
+	sensor_peri = container_of(itf, struct fimc_is_device_sensor_peri, sensor_interface);
+	if (!sensor_peri) {
+		err("[%s] sensor_peri is NULL", __func__);
+		return -EINVAL;
+	}
+
+	module = sensor_peri->module;
+	if (unlikely(!module)) {
+		err("%s, module in is NULL", __func__);
+		module = NULL;
+		return -ENODEV;
+	}
+
+	subdev_module = module->subdev;
+	if (!subdev_module) {
+		err("module is not probed");
+		subdev_module = NULL;
+		return -ENODEV;
+	}
+
+	device = v4l2_get_subdev_hostdata(subdev_module);
+	if (!device) {
+		err("%s, failed to get sensor device", __func__);
+		return -ENODEV;
+	}
+
+	if (sensor_peri->cis.use_initial_ae && device->cfg->framerate < 60) {
+		*long_expo = sensor_peri->cis.init_ae_setting.long_exposure;
+		*long_again = sensor_peri->cis.init_ae_setting.long_analog_gain;
+		*long_dgain = sensor_peri->cis.init_ae_setting.long_digital_gain;
+		*short_expo = sensor_peri->cis.init_ae_setting.exposure;
+		*short_again = sensor_peri->cis.init_ae_setting.analog_gain;
+		*short_dgain = sensor_peri->cis.init_ae_setting.digital_gain;
+	} else {
+		*long_expo = 0;
+		*long_again = 0;
+		*long_dgain = 0;
+		*short_expo = 0;
+		*short_again = 0;
+		*short_dgain = 0;
+		dbg_sensor(1, "%s: called at not enabled last_ae, use default low exposure setting", __func__);
+	}
+
+	dbg_sensor(1, "%s: sensorid(%d),long(%d-%d-%d), shot(%d-%d-%d)\n", __func__,
+		sensor_peri->module->sensor_id,
+		*long_expo, *long_again, *long_dgain, *short_expo, *short_again, *short_dgain);
+
+	return 0;
+}
+#endif
+
+/* In order to change a current CIS mode when an user select the WDR (long and short exposure) mode or the normal AE mo */
+int change_cis_mode(struct fimc_is_sensor_interface *itf,
+		enum itf_cis_interface cis_mode)
+{
+	int ret = 0;
+
+	info("cis mode : %d -> %d", itf->cis_mode, cis_mode);
+	itf->cis_mode = cis_mode;
+
+	return ret;
 }
 
 int start_of_frame(struct fimc_is_sensor_interface *itf)
@@ -2061,6 +2251,8 @@ int init_sensor_interface(struct fimc_is_sensor_interface *itf)
 	itf->cis_itf_ops.get_sensor_use_dgain = get_sensor_use_dgain;
 	itf->cis_itf_ops.get_sensor_fnum = get_sensor_fnum;
 	itf->cis_itf_ops.set_alg_reset_flag = set_alg_reset_flag;
+	itf->cis_ext_itf_ops.get_sensor_hdr_stat = get_sensor_hdr_stat;
+	itf->cis_ext_itf_ops.set_3a_alg_res_to_sens = set_3a_alg_res_to_sens;
 
 	itf->cis_itf_ops.set_initial_exposure_of_setfile = set_initial_exposure_of_setfile;
 	itf->cis_itf_ops.set_video_mode_of_setfile = set_video_mode_of_setfile;
@@ -2082,6 +2274,10 @@ int init_sensor_interface(struct fimc_is_sensor_interface *itf)
 	itf->cis_itf_ops.get_module_id = get_module_id;
 	itf->cis_itf_ops.get_module_position = get_module_position;
 	itf->cis_itf_ops.set_sensor_3a_mode = set_sensor_3a_mode;
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+	itf->cis_itf_ops.get_initial_exposure_gain_of_sensor = get_initial_exposure_gain_of_sensor;
+#endif
+	itf->cis_ext_itf_ops.change_cis_mode = change_cis_mode;
 
 	/* struct fimc_is_cis_event_ops */
 	itf->cis_evt_ops.start_of_frame = start_of_frame;

@@ -92,7 +92,7 @@ static int is_cpufreq_valid(int cpu)
 {
 	struct cpufreq_policy policy;
 
-	return (!cpufreq_get_policy(&policy, cpu) && (cpu == policy.cpu) && policy.user_policy.governor);
+	return (!cpufreq_get_policy(&policy, cpu) && policy.user_policy.governor);
 }
 
 enum cpufreq_cooling_property {
@@ -314,9 +314,10 @@ static int cpufreq_thermal_notifier(struct notifier_block *nb,
 
 		if (policy->max != max_freq) {
 			if (policy->cpu)
-				cooling_device_name = "cluster1";
+			        cooling_device_name = "cluster1";
 			else
-				cooling_device_name = "cluster0";
+			        cooling_device_name = "cluster0";
+
 			cpufreq_verify_within_limits(policy, 0, max_freq);
 			exynos_ss_thermal(NULL, 0, cooling_device_name, max_freq);
 		}

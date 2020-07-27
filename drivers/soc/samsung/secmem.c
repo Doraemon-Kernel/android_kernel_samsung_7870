@@ -30,17 +30,6 @@
 
 #include <soc/samsung/secmem.h>
 
-#if defined(CONFIG_SECURE_OS_BOOSTER_API)
-#if defined(CONFIG_SOC_EXYNOS8890)
-#include <soc/samsung/secos_booster.h>
-#else
-#include <mach/secos_booster.h>
-#endif
-#endif
-#include <linux/delay.h>
-
-
-
 #define SECMEM_DEV_NAME	"s5p-smem"
 
 
@@ -70,6 +59,23 @@ static char *secmem_regions_name[] = {
 	NULL
 };
 #elif defined(CONFIG_SOC_EXYNOS7420)
+static uint32_t secmem_regions[] = {
+	ION_EXYNOS_ID_G2D_WFD,
+	ION_EXYNOS_ID_VIDEO,
+	ION_EXYNOS_ID_VIDEO_EXT,
+	ION_EXYNOS_ID_MFC_FW,
+	ION_EXYNOS_ID_MFC_NFW,
+};
+
+static char *secmem_regions_name[] = {
+	"g2d_wfd",	/* 0 */
+	"video",	/* 1 */
+	"video_ext",	/* 2 */
+	"mfc_fw",	/* 3 */
+	"mfc_nfw",	/* 4 */
+	NULL
+};
+#elif defined(CONFIG_SOC_EXYNOS8890) && !defined(CONFIG_SOC_EXYNOS8890_EVT1)
 static uint32_t secmem_regions[] = {
 	ION_EXYNOS_ID_G2D_WFD,
 	ION_EXYNOS_ID_VIDEO,
@@ -166,8 +172,50 @@ static int secmem_release(struct inode *inode, struct file *file)
 static long secmem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct secmem_info *info = filp->private_data;
+#if defined(CONFIG_SOC_EXYNOS8890) && !defined(CONFIG_SOC_EXYNOS8890_EVT1)
+	static int nbufs = 0;
+#endif
 
 	switch (cmd) {
+#if defined(CONFIG_SOC_EXYNOS8890) && !defined(CONFIG_SOC_EXYNOS8890_EVT1)
+	case (uint32_t)SECMEM_IOC_GET_CHUNK_NUM:
+	{
+		nbufs = sizeof(secmem_regions) / sizeof(uint32_t);
+
+		if (nbufs == 0)
+			return -ENOMEM;
+
+		if (copy_to_user((void __user *)arg, &nbufs, sizeof(int)))
+			return -EFAULT;
+		break;
+	}
+	case (uint32_t)SECMEM_IOC_CHUNKINFO:
+	{
+		struct secchunk_info minfo;
+
+		if (copy_from_user(&minfo, (void __user *)arg, sizeof(minfo)))
+			return -EFAULT;
+
+		memset(&minfo.name, 0, MAX_NAME_LEN);
+
+		if (minfo.index < 0)
+			return -EINVAL;
+
+		if (minfo.index >= nbufs) {
+			minfo.index = -1; /* No more memory region */
+		} else {
+			if (ion_exynos_contig_heap_info(secmem_regions[minfo.index],
+					&minfo.base, &minfo.size))
+				return -EINVAL;
+
+			memcpy(minfo.name, secmem_regions_name[minfo.index], MAX_NAME_LEN);
+		}
+
+		if (copy_to_user((void __user *)arg, &minfo, sizeof(minfo)))
+			return -EFAULT;
+		break;
+	}
+#endif
 #if defined(CONFIG_ION) || defined(CONFIG_ION_EXYNOS)
 	case (uint32_t)SECMEM_IOC_GET_FD_PHYS_ADDR:
 	{
@@ -200,8 +248,8 @@ static long secmem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 
 		if (ion_phys(client, ion_handle, &fd_info.phys, &len)) {
-			pr_err("%s: Failed to get phys. addr of DRM\n",
-				__func__);
+			pr_err("%s: Failed to get phys. addr of DRM. fd(%d)\n",
+				__func__, fd_info.fd);
 			ion_free(client, ion_handle);
 			ion_client_destroy(client);
 			return -ENOMEM;
@@ -223,45 +271,6 @@ static long secmem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (copy_to_user((void __user *)arg, &drm_onoff, sizeof(int)))
 			return -EFAULT;
 		break;
-
-	case (uint32_t)IRIS_IOCTL_CPU_SPEEDUP:
-	{
-		int onoff = 0;
-		int ret_val = 0;
-		if (copy_from_user(&onoff, (void *)arg,
-			sizeof(unsigned int)) != 0) {
-			pr_err("%s Failed copy from user.(CPU_SPEEDUP)\n", __func__);
-			//mutex_unlock(&vfsspi_device->buffer_mutex);
-			return -EFAULT;
-		}
-		if (onoff) {
-			u8 retry_cnt = 0;
-			pr_debug("%s IRIS_IOCTL_CPU_SPEEDUP ON:%d, retry: %d\n",
-				__func__, onoff, retry_cnt);
-#if defined(CONFIG_SECURE_OS_BOOSTER_API)
-			do {
-				ret_val = secos_booster_start(onoff - 1);
-				retry_cnt++;
-				if (ret_val) {
-					pr_err("%s: booster start failed. (%d) retry: %d\n"
-						, __func__, ret_val, retry_cnt);
-					if (retry_cnt < 7)
-							usleep_range(500, 510);
-					}
-				} while (ret_val && retry_cnt < 7);
-#endif
-			} else {
-				pr_debug("%s IRIS_IOCTL_CPU_SPEEDUP OFF\n", __func__);
-#if defined(CONFIG_SECURE_OS_BOOSTER_API)
-				ret_val = secos_booster_stop();
-				if (ret_val)
-					pr_err("%s: booster stop failed. (%d)\n"
-						, __func__, ret_val);
-#endif
-			}
-			break;
-	}
-		
 	case (uint32_t)SECMEM_IOC_SET_DRM_ONOFF:
 	{
 		int ret, val = 0;
@@ -317,7 +326,11 @@ static long secmem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	{
 		int val;
 
+#if defined(CONFIG_SOC_EXYNOS8890) && !defined(CONFIG_SOC_EXYNOS8890_EVT1)
+		val = DRM_PROT_VER_CHUNK_BASED_PROT;
+#else
 		val = DRM_PROT_VER_BUFFER_BASED_PROT;
+#endif
 		if (copy_to_user((void __user *)arg, &val, sizeof(int)))
 			return -EFAULT;
 

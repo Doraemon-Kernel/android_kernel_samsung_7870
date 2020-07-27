@@ -36,22 +36,18 @@ typedef enum {
 /*
  * VPS attribute field.
 
-   b'xxxxxxxx_xxxxxxx_xxxx_bdfs_cccc_vvvv
+   b'xxxxxxxx_xxxxxxx_xxxx_xxfs_cccc_vvvv
      x: undefined
-     b: No battery charing if not supported (1: no charging, 0: charging)
-     d: charger detection
      f: factory device
      s: supported
      c: com port
      v: vbus
 */
-#define VPS_NOCHG_BITN 11
 #define VPS_CHGDET_BITN 10
 #define VPS_FAC_BITN 9
 #define VPS_SUP_BITN 8
 #define VPS_COM_BITN 4
 #define VPS_VBUS_BITN 0
-#define VPS_NOCHG_MASK 0x1
 #define VPS_CHGDET_MASK 0x1
 #define VPS_FAC_MASK 0x1
 #define VPS_SUP_MASK 0x1
@@ -67,8 +63,6 @@ typedef enum {
 #define MATTR_TO_FACT(a) ((a >> VPS_FAC_BITN) & VPS_FAC_MASK)
 #define MATTR_TO_SUPP(a) ((a >> VPS_SUP_BITN) & VPS_SUP_MASK)
 #define MATTR_TO_CDET(a) ((a >> VPS_CHGDET_BITN) & VPS_CHGDET_MASK)
-#define MATTR_TO_NOCHG(a) ((a >> VPS_NOCHG_BITN) & VPS_NOCHG_MASK)
-#define MATTR_NOCHG (1 << VPS_NOCHG_BITN)
 #define MATTR_CDET (1 << VPS_CHGDET_BITN)
 #define MATTR_SUPP (1 << VPS_SUP_BITN)
 #define MATTR_FACT (1 << VPS_FAC_BITN)
@@ -105,13 +99,8 @@ extern bool vps_name_to_mdev(const char *name, int *sdev);
 extern void vps_update_supported_attr(muic_attached_dev_t mdev, bool supported);
 extern bool vps_is_supported_dev(muic_attached_dev_t mdev);
 extern int vps_find_attached_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, int *pintr);
-#if defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-static inline void vps_show_table(void){}
-#else
 extern void vps_show_table(void);
-#endif
 extern void vps_show_supported_list(void);
 extern int vps_resolve_dev(muic_data_t *pmuic, muic_attached_dev_t *pbuf, int *pintr);
-extern bool vps_is_hv_ta(vps_data_t *pvps);
-
+extern bool mdev_undefined_range(int adc);
 #endif

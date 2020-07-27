@@ -1920,7 +1920,7 @@ static void handle_singlestep(struct uprobe_task *utask, struct pt_regs *regs)
 
 	if (unlikely(err)) {
 		uprobe_warn(current, "execute the probed insn, sending SIGILL.");
-		force_sig(SIGILL, current);
+		force_sig_info(SIGILL, SEND_SIG_FORCED, current);
 	}
 }
 

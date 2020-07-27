@@ -38,7 +38,15 @@ static int flash_lm3560_init(struct v4l2_subdev *subdev, u32 val)
 	BUG_ON(!flash);
 
 	/* TODO: init flash driver */
-	memset(&flash->flash_data, 0, sizeof(struct fimc_is_flash_data));
+	flash->flash_data.mode = CAM2_FLASH_MODE_OFF;
+	flash->flash_data.intensity = 100; /* TODO: Need to figure out min/max range */
+	flash->flash_data.firing_time_us = 1 * 1000 * 1000; /* Max firing time is 1sec */
+	flash->flash_data.flash_fired = false;
+
+	gpio_request_one(flash->flash_gpio, GPIOF_OUT_INIT_LOW, "CAM_FLASH_GPIO_OUTPUT");
+	gpio_free(flash->flash_gpio);
+	gpio_request_one(flash->torch_gpio, GPIOF_OUT_INIT_LOW, "CAM_TORCH_GPIO_OUTPUT");
+	gpio_free(flash->torch_gpio);
 
 	return ret;
 }
@@ -158,7 +166,7 @@ int flash_lm3560_probe(struct device *dev, struct i2c_client *client)
 
 	core = (struct fimc_is_core *)dev_get_drvdata(fimc_is_dev);
 	if (!core) {
-		probe_err("core device is not yet probed");
+		probe_info("core device is not yet probed");
 		ret = -EPROBE_DEFER;
 		goto p_err;
 	}
@@ -172,7 +180,7 @@ int flash_lm3560_probe(struct device *dev, struct i2c_client *client)
 
 	sensor_peri = find_peri_by_flash_id(device, FLADRV_NAME_LM3560);
 	if (!sensor_peri) {
-		probe_err("sensor peri is net yet probed");
+		probe_info("sensor peri is net yet probed");
 		return -EPROBE_DEFER;
 	}
 
@@ -294,6 +302,7 @@ MODULE_DEVICE_TABLE(of, exynos_fimc_is_sensor_flash_lm3560_match);
 /* register I2C driver */
 static const struct i2c_device_id flash_lm3560_i2c_idt[] = {
 	{ "LM3560", 0 },
+	{},
 };
 
 static struct i2c_driver sensor_flash_lm3560_i2c_driver = {

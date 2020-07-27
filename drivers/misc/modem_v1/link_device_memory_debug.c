@@ -50,9 +50,9 @@ void print_pm_status(struct mem_link_device *mld)
 	/*
 	** PM {ap_wakeup:cp_wakeup:cp_status:ap_status:magic} <CALLER>
 	*/
-	mif_err("%s: PM {%d:%d:%d:%d:%X} %d <%pf>\n",
-		ld->name, ap_wakeup, cp_wakeup, cp_status, ap_status,
-		magic, atomic_read(&mld->ref_cnt), CALLER);
+	evt_log(0, "%s: PM {%d:%d:%d:%d:%X} %d <%pf>\n", ld->name,
+		ap_wakeup, cp_wakeup, cp_status, ap_status, magic,
+		atomic_read(&mld->ref_cnt), CALLER);
 #endif
 }
 
@@ -69,7 +69,8 @@ void print_req_ack(struct mem_link_device *mld, struct mem_snapshot *mst,
 	unsigned int usage = circ_get_usage(qsize, in, out);
 	unsigned int space = circ_get_space(qsize, in, out);
 
-	mif_err("REQ_ACK: %s%s%s: %s_%s.%d {in:%u out:%u usage:%u space:%u}\n",
+	evt_log(0, "REQ_ACK: %s%s%s: %s_%s.%d "
+		"{in:%u out:%u usage:%u space:%u}\n",
 		ld->name, arrow(dir), mc->name, dev->name, q_dir(dir),
 		dev->req_ack_cnt[dir], in, out, usage, space);
 #endif
@@ -89,7 +90,8 @@ void print_res_ack(struct mem_link_device *mld, struct mem_snapshot *mst,
 	unsigned int usage = circ_get_usage(qsize, in, out);
 	unsigned int space = circ_get_space(qsize, in, out);
 
-	mif_err("RES_ACK: %s%s%s: %s_%s.%d {in:%u out:%u usage:%u space:%u}\n",
+	evt_log(0, "RES_ACK: %s%s%s: %s_%s.%d "
+		"{in:%u out:%u usage:%u space:%u}\n",
 		ld->name, arrow(dir), mc->name, dev->name, q_dir(opp_dir),
 		dev->req_ack_cnt[opp_dir], in, out, usage, space);
 #endif
@@ -100,7 +102,7 @@ void print_mem_snapshot(struct mem_link_device *mld, struct mem_snapshot *mst)
 #ifdef DEBUG_MODEM_IF
 	struct link_device *ld = &mld->link_dev;
 
-	mif_err("%s: [%s] ACC{%X %d} FMT{TI:%u TO:%u RI:%u RO:%u} "
+	evt_log(0, "%s: [%s] ACC{%X %d} FMT{TI:%u TO:%u RI:%u RO:%u} "
 		"RAW{TI:%u TO:%u RI:%u RO:%u} INTR{RX:0x%X TX:0x%X}\n",
 		ld->name, ipc_dir(mst->dir), mst->magic, mst->access,
 		mst->head[IPC_FMT][TX], mst->tail[IPC_FMT][TX],
@@ -121,7 +123,7 @@ void print_dev_snapshot(struct mem_link_device *mld, struct mem_snapshot *mst,
 	if (id > IPC_RAW)
 		return;
 
-	mif_err("%s: [%s] %s | TXQ{in:%u out:%u} RXQ{in:%u out:%u} | "
+	evt_log(0, "%s: [%s] %s | TXQ{in:%u out:%u} RXQ{in:%u out:%u} | "
 		"INTR{0x%02X}\n",
 		ld->name, ipc_dir(mst->dir), dev->name,
 		mst->head[id][TX], mst->tail[id][TX],

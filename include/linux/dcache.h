@@ -229,6 +229,8 @@ struct dentry_operations {
 #define DCACHE_ENCRYPTED_WITH_KEY	0x04000000 /* dir is encrypted with a valid key */
 #define DCACHE_WILL_INVALIDATE		0x80000000 /* will be invalidated */
 
+#define DCACHE_ENCRYPTED_WITH_KEY	0x04000000 /* dir is encrypted with a valid key */
+
 extern seqlock_t rename_lock;
 
 /*
@@ -475,7 +477,6 @@ static inline unsigned long vfs_pressure_ratio(unsigned long val)
 {
 	return mult_frac(val, sysctl_vfs_cache_pressure, 100);
 }
-
 
 /**
  * d_inode - Get the actual inode of this dentry

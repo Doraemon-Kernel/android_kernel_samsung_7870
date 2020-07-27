@@ -181,6 +181,13 @@ struct modem_sec_req {
 	u32 dummy;
 } __packed;
 
+struct modem_mem_info {
+	u32 magic;
+	u32 m_offset;
+	u32 cp_mem_size;
+	u32 shmem_msm_size;
+} __packed;
+
 enum cp_boot_mode {
 	CP_BOOT_MODE_NORMAL,
 	CP_BOOT_MODE_DUMP,
@@ -193,6 +200,11 @@ struct sec_info {
 	u32 size;
 };
 
+enum mem_info {
+	MAGIC_CODE=16,
+	CP_MEM,
+	SHM_MEM
+};
 #define SIPC_MULTI_FRAME_MORE_BIT	(0b10000000)	/* 0x80 */
 #define SIPC_MULTI_FRAME_ID_MASK	(0b01111111)	/* 0x7F */
 #define SIPC_MULTI_FRAME_ID_BITS	7
@@ -221,7 +233,7 @@ static inline bool sipc_ps_ch(u8 ch)
 #define sipc5_is_not_reserved_channel(ch) \
 	((ch) != 0 && (ch) != 5 && (ch) != 6 && (ch) != 27 && (ch) != 255)
 
-#if defined(CONFIG_MODEM_IF_LEGACY_QOS) || defined(CONFIG_MODEM_IF_QOS)
+#ifdef CONFIG_MODEM_IF_QOS
 #define MAX_NDEV_TX_Q 2
 #else
 #define MAX_NDEV_TX_Q 1
@@ -555,7 +567,6 @@ struct modem_ctl {
 
 	struct modem_shared *msd;
 	void __iomem *sysram_alive;
-	struct regmap *pmureg;
 
 	enum modem_state phone_state;
 	struct sim_state sim_state;
@@ -625,7 +636,6 @@ struct modem_ctl {
 	unsigned int mbx_cp_wakeup;
 	unsigned int mbx_cp_status;
 	unsigned int mbx_perf_req;
-	unsigned int mbx_et_dac_cal;
 
 	/* for checking aliveness of CP */
 	struct modem_irq irq_cp_wdt;		/* watchdog timer */
@@ -635,8 +645,6 @@ struct modem_ctl {
 #ifdef CONFIG_EXYNOS_BUSMONITOR
 	struct notifier_block busmon_nfb;
 #endif
-
-	struct work_struct pm_qos_work;
 
 	/* Switch with 2 links in a modem */
 	unsigned int gpio_link_switch;

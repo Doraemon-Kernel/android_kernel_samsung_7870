@@ -22,6 +22,10 @@
 #define IORESOURCE_VRA_CH1	3
 #define IORESOURCE_ISP_SET_B	4
 
+#define FIMC_IS_RESERVE_LIB_SIZE	(SZ_2M + SZ_1M)
+#define FIMC_IS_TAAISP_SIZE		(SZ_512K)
+#define FIMC_IS_VRA_SIZE		(SZ_8M)
+
 enum taaisp_chain_id {
 	ID_3AA_0 = 0,
 	ID_3AA_1 = 1,
@@ -41,6 +45,15 @@ enum hwip_interrupt_map {
 /* Specific interrupt map belonged to each IP */
 
 /* MC-Scaler */
+#define MCSC_INTR_MASK		(0x00000078)
+#define USE_DMA_BUFFER_INDEX	(0) /* 0 ~ 7 */
+#define MCSC_PRECISION		(20)
+#define MCSC_POLY_RATIO_UP	(8)
+#define MCSC_POLY_RATIO_DOWN	(4)
+#define MCSC_POST_RATIO_DOWN	(4)
+#define MCSC_POST_WA
+#define MCSC_POST_WA_SHIFT	(8)	/* 256 = 2^8 */
+
 enum mc_scaler_interrupt_map {
 	INTR_MC_SCALER_FRAME_END		= 0,
 	INTR_MC_SCALER_FRAME_START		= 1,

@@ -21,7 +21,7 @@
 #include <linux/fs.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <linux/sec_debug.h>
+#include <linux/sec_ext.h>
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -62,7 +62,7 @@ static int sec_initcall_debug_seq_show(struct seq_file *f, void *v)
 	}
 
 	seq_puts(f, "function name\t\t\t\t\t\ttime\n");
-	seq_puts(f, "-------------------------------------------------\n");
+	seq_puts(f, "-------------------------------------------------------------\n");
 
 	list_for_each_entry(data, &initcall_sorted_list, list) {
 		if (data->duration < time_ms)

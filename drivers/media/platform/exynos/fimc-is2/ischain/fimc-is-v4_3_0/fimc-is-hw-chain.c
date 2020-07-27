@@ -118,12 +118,6 @@ int fimc_is_hw_group_cfg(void *group_data)
 		group->subdev[ENTRY_M3P] = &device->m3p;
 		group->subdev[ENTRY_M4P] = &device->m4p;
 		group->subdev[ENTRY_VRA] = &device->group_vra.leader;
-
-		device->m0p.param_dma_ot = PARAM_MCS_OUTPUT0;
-		device->m1p.param_dma_ot = PARAM_MCS_OUTPUT1;
-		device->m2p.param_dma_ot = PARAM_MCS_OUTPUT2;
-		device->m3p.param_dma_ot = PARAM_MCS_OUTPUT3;
-		device->m4p.param_dma_ot = PARAM_MCS_OUTPUT4;
 		break;
 	case GROUP_SLOT_VRA:
 		group->subdev[ENTRY_3AA] = NULL;
@@ -227,7 +221,7 @@ int fimc_is_hw_camif_cfg(void *sensor_data)
 	/* always clear csis dummy */
 	clear_bit(CSIS_DUMMY, &csi->state);
 
-	switch (csi->instance) {
+	switch (sensor->instance) {
 	case 0:
 		clear_bit(FLITE_DUMMY, &flite->state);
 
@@ -236,7 +230,7 @@ int fimc_is_hw_camif_cfg(void *sensor_data)
 		csi->dma_subdev[ENTRY_SSVC2] = NULL;
 		csi->dma_subdev[ENTRY_SSVC3] = NULL;
 		break;
-	case 2:
+	case 1:
 		if (is_otf)
 			clear_bit(FLITE_DUMMY, &flite->state);
 		else
@@ -247,18 +241,18 @@ int fimc_is_hw_camif_cfg(void *sensor_data)
 		csi->dma_subdev[ENTRY_SSVC2] = NULL;
 		csi->dma_subdev[ENTRY_SSVC3] = NULL;
 		break;
-	case 1:
+	case 2:
 	case 3:
 		set_bit(FLITE_DUMMY, &flite->state);
 		break;
 	default:
-		merr("sensor id is invalid(%d)", sensor, csi->instance);
+		merr("sensor id is invalid(%d)", sensor, sensor->instance);
 		break;
 	}
 
 #ifdef CONFIG_CSIS_V4_0
 	/* HACK: For dual scanario in EVT0, we should use CSI DMA out */
-	if (csi->instance == 2 && !is_otf) {
+	if (sensor->instance == 1 && !is_otf) {
 		struct fimc_is_device_flite backup_flite;
 		struct fimc_is_device_csi backup_csi;
 
@@ -306,13 +300,13 @@ int fimc_is_hw_camif_open(void *sensor_data)
 	flite = (struct fimc_is_device_flite *)v4l2_get_subdevdata(sensor->subdev_flite);
 	csi = (struct fimc_is_device_csi *)v4l2_get_subdevdata(sensor->subdev_csi);
 
-	switch (csi->instance) {
+	switch (sensor->instance) {
 #ifdef CONFIG_CSIS_V4_0
 	case 0:
 		clear_bit(CSIS_DMA_ENABLE, &csi->state);
 		set_bit(FLITE_DMA_ENABLE, &flite->state);
 		break;
-	case 2:
+	case 1:
 		clear_bit(CSIS_DMA_ENABLE, &csi->state);
 		set_bit(FLITE_DMA_ENABLE, &flite->state);
 		break;
@@ -321,18 +315,18 @@ int fimc_is_hw_camif_open(void *sensor_data)
 		set_bit(CSIS_DMA_ENABLE, &csi->state);
 		clear_bit(FLITE_DMA_ENABLE, &flite->state);
 		break;
-	case 2:
+	case 1:
 		set_bit(CSIS_DMA_ENABLE, &csi->state);
 		clear_bit(FLITE_DMA_ENABLE, &flite->state);
 		break;
 #endif
-	case 1:
+	case 2:
 	case 3:
 		set_bit(CSIS_DMA_ENABLE, &csi->state);
 		clear_bit(FLITE_DMA_ENABLE, &flite->state);
 		break;
 	default:
-		merr("sensor id is invalid(%d)", sensor, csi->instance);
+		merr("sensor id is invalid(%d)", sensor, sensor->instance);
 		break;
 	}
 
@@ -344,8 +338,6 @@ int fimc_is_hw_ischain_cfg(void *ischain_data)
 	int ret = 0;
 	struct fimc_is_core *core;
 	struct fimc_is_device_ischain *device;
-	struct fimc_is_device_sensor *sensor;
-	struct fimc_is_device_csi *csi;
 	int i, sensor_cnt = 0;
 	void __iomem *regs;
 	u32 val;
@@ -357,8 +349,6 @@ int fimc_is_hw_ischain_cfg(void *ischain_data)
 		return ret;
 
 	core = (struct fimc_is_core *)platform_get_drvdata(device->pdev);
-	sensor = device->sensor;
-	csi = (struct fimc_is_device_csi *)v4l2_get_subdevdata(sensor->subdev_csi);
 
 	/* checked single/dual camera */
 	for (i = 0; i < FIMC_IS_STREAM_COUNT; i++)
@@ -427,7 +417,7 @@ int fimc_is_hw_ischain_cfg(void *ischain_data)
 		 * 4) 3AA0 Input Select
 		 *    CSIS0 : 0 (BNS) <= Always
 		 */
-		if (csi->instance == 0) {
+		if (device->sensor->instance == 0) {
 			val = fimc_is_hw_set_field_value(val,
 				&mcuctl_fields[MCUCTRLR2_IN_PATH_SEL_BNS], 0);
 			val = fimc_is_hw_set_field_value(val,

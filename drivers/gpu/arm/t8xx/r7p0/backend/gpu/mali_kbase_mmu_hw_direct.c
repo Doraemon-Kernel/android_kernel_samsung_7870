@@ -20,9 +20,6 @@
 #include <mali_kbase.h>
 #include <mali_kbase_mem.h>
 #include <mali_kbase_mmu_hw.h>
-#if defined(CONFIG_MALI_MIPE_ENABLED)
-#include <mali_kbase_tlstream.h>
-#endif
 #include <backend/gpu/mali_kbase_mmu_hw_direct.h>
 #include <backend/gpu/mali_kbase_device_internal.h>
 
@@ -66,21 +63,18 @@ static int wait_ready(struct kbase_device *kbdev,
 		unsigned int as_nr, struct kbase_context *kctx)
 {
 	unsigned int max_loops = KBASE_AS_INACTIVE_MAX_LOOPS;
-	u32 val = kbase_reg_read(kbdev, MMU_AS_REG(as_nr, AS_STATUS), kctx);
 
-	/* Wait for the MMU status to indicate there is no active command, in
-	 * case one is pending. Do not log remaining register accesses. */
-	while (--max_loops && (val & AS_STATUS_AS_ACTIVE))
-		val = kbase_reg_read(kbdev, MMU_AS_REG(as_nr, AS_STATUS), NULL);
+	/* Wait for the MMU status to indicate there is no active command. */
+	while (--max_loops && kbase_reg_read(kbdev,
+			MMU_AS_REG(as_nr, AS_STATUS),
+			kctx) & AS_STATUS_AS_ACTIVE) {
+		;
+	}
 
 	if (max_loops == 0) {
 		dev_err(kbdev->dev, "AS_ACTIVE bit stuck\n");
 		return -1;
 	}
-
-	/* If waiting in loop was performed, log last read value. */
-	if (KBASE_AS_INACTIVE_MAX_LOOPS - 1 > max_loops)
-		kbase_reg_read(kbdev, MMU_AS_REG(as_nr, AS_STATUS), kctx);
 
 	return 0;
 }
@@ -203,12 +197,6 @@ void kbase_mmu_hw_configure(struct kbase_device *kbdev, struct kbase_as *as,
 		struct kbase_context *kctx)
 {
 	struct kbase_mmu_setup *current_setup = &as->current_setup;
-#if defined(CONFIG_MALI_MIPE_ENABLED) || \
-	(defined(MALI_INCLUDE_TMIX) &&      \
-	 defined(CONFIG_MALI_COH_PAGES) &&   \
-	 defined(CONFIG_MALI_GPU_MMU_AARCH64))
-	u32 transcfg = 0;
-#endif
 
 
 	kbase_reg_write(kbdev, MMU_AS_REG(as->number, AS_TRANSTAB_LO),
@@ -220,13 +208,6 @@ void kbase_mmu_hw_configure(struct kbase_device *kbdev, struct kbase_as *as,
 			current_setup->memattr & 0xFFFFFFFFUL, kctx);
 	kbase_reg_write(kbdev, MMU_AS_REG(as->number, AS_MEMATTR_HI),
 			(current_setup->memattr >> 32) & 0xFFFFFFFFUL, kctx);
-
-#if defined(CONFIG_MALI_MIPE_ENABLED)
-	kbase_tlstream_tl_attrib_as_config(as,
-			current_setup->transtab,
-			current_setup->memattr,
-			transcfg);
-#endif
 
 	write_cmd(kbdev, as->number, AS_COMMAND_UPDATE, kctx);
 }

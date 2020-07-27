@@ -14,6 +14,9 @@
 #define MEDIA_EXYNOS_MODULE_H
 
 #include <linux/platform_device.h>
+#ifdef CONFIG_CAMERA_USE_SOC_SENSOR
+#include <linux/i2c.h>
+#endif
 
 #define GPIO_SCENARIO_ON		0
 #define GPIO_SCENARIO_OFF		1
@@ -21,8 +24,7 @@
 #define GPIO_SCENARIO_STANDBY_OFF	3
 #define GPIO_SCENARIO_STANDBY_OFF_SENSOR	4
 #define GPIO_SCENARIO_STANDBY_OFF_PREPROCESSOR	5
-#define GPIO_SCENARIO_SENSOR_RETENTION_ON	6
-#define GPIO_SCENARIO_MAX		7
+#define GPIO_SCENARIO_MAX		6
 #define GPIO_CTRL_MAX			32
 
 #define SENSOR_SCENARIO_NORMAL		0
@@ -31,8 +33,8 @@
 #define SENSOR_SCENARIO_OIS_FACTORY	3
 #define SENSOR_SCENARIO_READ_ROM	4
 #define SENSOR_SCENARIO_STANDBY		5
-#define SENSOR_SCENARIO_SECURE      6
-#define SENSOR_SCENARIO_VIRTUAL		9
+#define SENSOR_SCENARIO_SECURE		6
+#define SENSOR_SCENARIO_VIRTUAL 	9
 #define SENSOR_SCENARIO_MAX		10
 
 enum pin_act {
@@ -76,6 +78,10 @@ struct exynos_sensor_pin {
 struct exynos_platform_fimc_is_module {
 	int (*gpio_cfg)(struct device *dev, u32 scenario, u32 enable);
 	int (*gpio_dbg)(struct device *dev, u32 scenario, u32 enable);
+#ifdef CONFIG_CAMERA_USE_SOC_SENSOR
+	int (*gpio_soc_cfg)(struct i2c_client *client, u32 scenario, u32 enable);
+	int (*gpio_soc_dbg)(struct i2c_client *client, u32 scenario, u32 enable);
+#endif
 	struct exynos_sensor_pin pin_ctrls[SENSOR_SCENARIO_MAX][GPIO_SCENARIO_MAX][GPIO_CTRL_MAX];
 	u32 pinctrl_index[SENSOR_SCENARIO_MAX][GPIO_SCENARIO_MAX];
 	struct pinctrl *pinctrl;

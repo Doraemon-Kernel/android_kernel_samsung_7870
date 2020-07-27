@@ -32,10 +32,6 @@
 
 #include <soc/samsung/exynos-pm.h>
 
-#ifdef CONFIG_SEC_FACTORY
-#undef CONFIG_ESE_SECURE
-#endif
-
 #include "../core.h"
 #include "pinctrl-samsung.h"
 #ifdef CONFIG_SEC_GPIO_DVS
@@ -43,10 +39,8 @@
 #endif
 
 #ifdef ENABLE_SENSORS_FPRINT_SECURE
-#ifdef CONFIG_FB
 #include <linux/smc.h>
-extern int vfsspi_goto_suspend;
-#endif
+extern int fpsensor_goto_suspend;
 #endif
 
 #define GROUP_SUFFIX		"-grp"
@@ -307,7 +301,6 @@ static int samsung_dt_node_to_map(struct pinctrl_dev *pctldev,
 						&reserved_maps, num_maps);
 		if (ret < 0) {
 			samsung_dt_free_map(pctldev, *map, *num_maps);
-			of_node_put(np);
 			return ret;
 		}
 	}
@@ -363,12 +356,6 @@ static void samsung_pin_dbg_show(struct pinctrl_dev *pctldev,
 	drvdata = pinctrl_dev_get_drvdata(pctldev);
 	pin_to_reg_bank(drvdata, pin - drvdata->ctrl->base, &reg_base,
 					&pin_offset, &bank);
-
-	/* GPH ports are AUD interface (I2S, UART, PCM, SB) that should not
-	 * access when AUD power is disabled
-	 */
-	if (!strncmp(bank->name, "gph", 3))
-		return ;
 
 	spin_lock_irqsave(&bank->slock, flags);
 
@@ -468,14 +455,12 @@ static void samsung_pinmux_setup(struct pinctrl_dev *pctldev, unsigned selector,
 	if (!strncmp(bank->name, CONFIG_SENSORS_FP_SPI_GPIO, 4))
 		return;
 #endif
-
 #ifdef CONFIG_ESE_SECURE
 	if (!strncmp(bank->name, CONFIG_ESE_SECURE_GPIO, 4))
 		return;
 #endif
-
 #ifdef CONFIG_MST_SECURE_GPIO
-	if (!strncmp(bank->name, "gpf0", 4))
+	if (!strncmp(bank->name, "gpc3", 4))
 		return;
 #endif
 
@@ -537,14 +522,12 @@ static int samsung_pinconf_rw(struct pinctrl_dev *pctldev, unsigned int pin,
 	if (!strncmp(bank->name, CONFIG_SENSORS_FP_SPI_GPIO, 4))
 		return 0;
 #endif
-
 #ifdef CONFIG_ESE_SECURE
 	if (!strncmp(bank->name, CONFIG_ESE_SECURE_GPIO, 4))
 		return 0;
 #endif
-
 #ifdef CONFIG_MST_SECURE_GPIO
-	if (!strncmp(bank->name, "gpf0", 4))
+	if (!strncmp(bank->name, "gpc3", 4))
 		return 0;
 #endif
 
@@ -646,12 +629,6 @@ static void samsung_pinconf_dbg_show(struct pinctrl_dev *pctldev,
 	pin_to_reg_bank(drvdata, pin - drvdata->ctrl->base, &reg_base,
 					&pin_offset, &bank);
 
-	/* GPH ports are AUD interface (I2S, UART, PCM, SB) that should not
-	 * access when AUD power is disabled
-	 */
-	if (!strncmp(bank->name, "gph", 3))
-		return ;
-
 	spin_lock_irqsave(&bank->slock, flags);
 
 	for (cfg_type = PINCFG_TYPE_PUD; cfg_type <= PINCFG_TYPE_PUD_PDN
@@ -702,14 +679,12 @@ static void samsung_gpio_set(struct gpio_chip *gc, unsigned offset, int value)
 	if (!strncmp(bank->name, CONFIG_SENSORS_FP_SPI_GPIO, 4))
 		return;
 #endif
-
 #ifdef CONFIG_ESE_SECURE
 	if (!strncmp(bank->name, CONFIG_ESE_SECURE_GPIO, 4))
 		return;
 #endif
-
 #ifdef CONFIG_MST_SECURE_GPIO
-	if (!strncmp(bank->name, "gpf0", 4))
+	if (!strncmp(bank->name, "gpc3", 4))
 		return;
 #endif
 
@@ -764,11 +739,6 @@ static int samsung_gpio_set_direction(struct gpio_chip *gc,
 	bank = gc_to_pin_bank(gc);
 	type = bank->type;
 	drvdata = bank->drvdata;
-
-#ifdef ENABLE_SENSORS_FPRINT_SECURE
-	if (!strncmp(bank->name, CONFIG_SENSORS_FP_SPI_GPIO, 4))
-		return 0;
-#endif
 
 	reg = drvdata->virt_base + bank->pctl_offset +
 					type->reg_offset[PINCFG_TYPE_FUNC];
@@ -959,10 +929,8 @@ static struct samsung_pmx_func *samsung_pinctrl_create_functions(
 		if (!of_get_child_count(cfg_np)) {
 			ret = samsung_pinctrl_create_function(dev, drvdata,
 							cfg_np, func);
-			if (ret < 0) {
-				of_node_put(cfg_np);
+			if (ret < 0)
 				return ERR_PTR(ret);
-			}
 			if (ret > 0) {
 				++func;
 				++func_cnt;
@@ -973,11 +941,8 @@ static struct samsung_pmx_func *samsung_pinctrl_create_functions(
 		for_each_child_of_node(cfg_np, func_np) {
 			ret = samsung_pinctrl_create_function(dev, drvdata,
 						func_np, func);
-			if (ret < 0) {
-				of_node_put(func_np);
-				of_node_put(cfg_np);
+			if (ret < 0)
 				return ERR_PTR(ret);
-			}
 			if (ret > 0) {
 				++func;
 				++func_cnt;
@@ -1320,14 +1285,12 @@ static void samsung_pinctrl_save_regs(
 		if (!strncmp(bank->name, CONFIG_SENSORS_FP_SPI_GPIO, 4))
 			continue;
 #endif
-
 #ifdef CONFIG_ESE_SECURE
 		if (!strncmp(bank->name, CONFIG_ESE_SECURE_GPIO, 4))
 			continue;
 #endif
-
 #ifdef CONFIG_MST_SECURE_GPIO
-		if (!strncmp(bank->name, "gpf0", 4))
+		if (!strncmp(bank->name, "gpc3", 4))
 			continue;
 #endif
 
@@ -1371,24 +1334,20 @@ static void samsung_pinctrl_restore_regs(
 			continue;
 
 #ifdef ENABLE_SENSORS_FPRINT_SECURE
-#ifdef CONFIG_FB
-		if (vfsspi_goto_suspend) {
-			vfsspi_goto_suspend = 0;
-			pr_info("%s: vfsspi_resume smc ret=%d, en:%d\n", __func__,
-					exynos_smc(0x83000022, 0, 0, 0), vfsspi_goto_suspend);
+		if (fpsensor_goto_suspend) {
+			pr_info("pinctrl-etspi_pm_resume: resume smc ret = %d\n",
+					exynos_smc(0x83000022, 0, 0, 0));
+			fpsensor_goto_suspend = 0;
 		}
-#endif
 		if (!strncmp(bank->name, CONFIG_SENSORS_FP_SPI_GPIO, 4))
 			continue;
 #endif
-
 #ifdef CONFIG_ESE_SECURE
 		if (!strncmp(bank->name, CONFIG_ESE_SECURE_GPIO, 4))
 			continue;
 #endif
-
 #ifdef CONFIG_MST_SECURE_GPIO
-		if (!strncmp(bank->name, "gpf0", 4))
+		if (!strncmp(bank->name, "gpc3", 4))
 			continue;
 #endif
 
@@ -1439,14 +1398,12 @@ static void samsung_pinctrl_set_pdn_previos_state(
 		if (!strncmp(bank->name, CONFIG_SENSORS_FP_SPI_GPIO, 4))
 			continue;
 #endif
-
 #ifdef CONFIG_ESE_SECURE
 		if (!strncmp(bank->name, CONFIG_ESE_SECURE_GPIO, 4))
 			continue;
 #endif
-
 #ifdef CONFIG_MST_SECURE_GPIO
-		if (!strncmp(bank->name, "gpf0", 4))
+		if (!strncmp(bank->name, "gpc3", 4))
 			continue;
 #endif
 
@@ -1681,6 +1638,117 @@ static u8 gpiodvs_combine_data(u32 *data, unsigned char phonestate)
 	return GET_RESULT_GPIO(temp_io, temp_pdpu, temp_lh);
 }
 
+static void gpiodvs_print_pin_state(enum gdvs_phone_status status,
+		int alive, char *bank_name, int pin_num, u32 *data)
+{
+	char buf[48];
+	int len = 0;
+	int pin_dat = 0;
+
+	if (status == PHONE_INIT || alive == 1) {
+		if (alive == 1)
+			len = sprintf(buf, "gpio sleep-state: %s-%d ", bank_name, pin_num);
+		else
+			len = sprintf(buf, "gpio initial-state: %s-%d ", bank_name, pin_num);
+
+		switch (data[PINCFG_TYPE_FUNC]) {
+		case 0x0:	/* input */
+			len += sprintf(&buf[len], "IN");
+			break;
+		case 0x1:	/* output */
+			len += sprintf(&buf[len], "OUT");
+			break;
+		case 0xf:	/* eint */
+			len += sprintf(&buf[len], "INT");
+			break;
+		default:	/* func */
+			len += sprintf(&buf[len], "FUNC");
+			break;
+		}
+
+		switch (data[PINCFG_TYPE_PUD]) {
+		case 0x0:
+			len += sprintf(&buf[len], "/NP");
+			break;
+		case 0x1:
+			len += sprintf(&buf[len], "/PD");
+			break;
+		case 0x2:
+			len += sprintf(&buf[len], "/PU");
+			break;
+		default:
+			len += sprintf(&buf[len], "/UN");	/* unknown */
+			break;
+		}
+
+		switch (data[PINCFG_TYPE_DAT]) {
+		case 0x0:
+			len += sprintf(&buf[len], "/L");
+			break;
+		case 0x1:
+			len += sprintf(&buf[len], "/H");
+			break;
+		default:
+			len += sprintf(&buf[len], "/U");	/* unknown */
+			break;
+		}
+	} else {
+		// PHONE_SLEEP
+		len = sprintf(buf, "gpio sleep-state: %s-%d ", bank_name, pin_num);
+
+		switch (data[PINCFG_TYPE_CON_PDN]) {
+		case 0x0:	/* output low */
+			len += sprintf(&buf[len], "OUT");
+			pin_dat = 0;
+			break;
+		case 0x1:	/* output high*/
+			len += sprintf(&buf[len], "OUT");
+			pin_dat = 1;
+			break;
+		case 0x2:	/* input */
+			len += sprintf(&buf[len], "IN");
+			pin_dat = data[PINCFG_TYPE_DAT];
+			break;
+		case 0x3:	/* previous state */
+			len += sprintf(&buf[len], "PREV");
+			pin_dat = data[PINCFG_TYPE_DAT];
+			break;
+		default:	/* func */
+			len += sprintf(&buf[len], "ERR");
+			break;
+		}
+
+		switch (data[PINCFG_TYPE_PUD_PDN]) {
+		case 0x0:
+			len += sprintf(&buf[len], "/NP");
+			break;
+		case 0x1:
+			len += sprintf(&buf[len], "/PD");
+			break;
+		case 0x2:
+			len += sprintf(&buf[len], "/PU");
+			break;
+		default:
+			len += sprintf(&buf[len], "/UN");	/* unknown */
+			break;
+		}
+
+		switch (pin_dat) {
+		case 0x0:
+			len += sprintf(&buf[len], "/L");
+			break;
+		case 0x1:
+			len += sprintf(&buf[len], "/H");
+			break;
+		default:
+			len += sprintf(&buf[len], "/U");	/* unknown */
+			break;
+		}
+	}
+
+	pr_info("%s\n", buf);
+}
+
 static void gpiodvs_check_init_gpio(struct samsung_pinctrl_drv_data *drvdata,
 					unsigned pin)
 {
@@ -1691,6 +1759,7 @@ static void gpiodvs_check_init_gpio(struct samsung_pinctrl_drv_data *drvdata,
 	unsigned long flags;
 	enum pincfg_type type;
 	u32 data[PINCFG_TYPE_NUM];
+	static int pin_num = 0;
 
 	pin_to_reg_bank(drvdata, pin - drvdata->ctrl->base,
 					&reg_base, &pin_offset, &bank);
@@ -1701,16 +1770,14 @@ static void gpiodvs_check_init_gpio(struct samsung_pinctrl_drv_data *drvdata,
 		goto out;
 	}
 #endif
-
 #ifdef CONFIG_ESE_SECURE
 	if (!strncmp(bank->name, CONFIG_ESE_SECURE_GPIO, 4)) {
 		init_gpio_idx++;
 		goto out;
 	}
 #endif
-
 #ifdef CONFIG_MST_SECURE_GPIO
-	if (!strncmp(bank->name, "gpf0", 4)) {
+	if (!strncmp(bank->name, "gpc3", 4)){
 		init_gpio_idx++;
 		goto out;
 	}
@@ -1723,6 +1790,18 @@ static void gpiodvs_check_init_gpio(struct samsung_pinctrl_drv_data *drvdata,
 		init_gpio_idx++;
 		goto out;
 	}
+	/* both gpj0/1 are skiped for dvs test in zero project */
+#if defined(CONFIG_MST_SECURE_GPIO) && !defined(CONFIG_MST_NOBLE_TARGET) && !defined(CONFIG_MST_ZEN_TARGET)
+	if (!strncmp(bank->name, "gpj", 3)) {
+		init_gpio_idx++;
+		goto out;
+	}
+#else /* only gpj0 is skiped for dvs test in noble/zen project */
+	if (!strncmp(bank->name, "gpj0", 4)) {
+		init_gpio_idx++;
+		goto out;
+	}
+#endif
 
 #ifdef CONFIG_SOC_EXYNOS5433
 	/* xxxx group is dummy for align insted of GPF0 */
@@ -1738,7 +1817,14 @@ static void gpiodvs_check_init_gpio(struct samsung_pinctrl_drv_data *drvdata,
 
 	gpiomap_result.init[init_gpio_idx++] =
 		gpiodvs_combine_data(data, PHONE_INIT);
+
+	gpiodvs_print_pin_state(PHONE_INIT, 0, bank->name, pin_num, data);
 out:
+	pin_num++;
+	if (pin_num == bank->nr_pins) {
+		pin_num = 0;
+	}
+
 	pr_debug("%s: init[%u]=0x%02x\n", __func__, init_gpio_idx - 1,
 			gpiomap_result.init[init_gpio_idx - 1]);
 }
@@ -1756,6 +1842,7 @@ static void gpiodvs_check_sleep_gpio(struct samsung_pinctrl_drv_data *drvdata,
 	u8 *widths;
 	const unsigned int sleep_type_mask = BIT(PINCFG_TYPE_DAT) |
 		BIT(PINCFG_TYPE_CON_PDN) | BIT(PINCFG_TYPE_PUD_PDN);
+	static int pin_num = 0;
 
 	pin_to_reg_bank(drvdata, pin - drvdata->ctrl->base,
 					&reg_base, &pin_offset, &bank);
@@ -1766,34 +1853,26 @@ static void gpiodvs_check_sleep_gpio(struct samsung_pinctrl_drv_data *drvdata,
 		goto out;
 	}
 #endif
-
 #ifdef CONFIG_ESE_SECURE
 	if (!strncmp(bank->name, CONFIG_ESE_SECURE_GPIO, 4)) {
 		sleep_gpio_idx++;
 		goto out;
 	}
 #endif
-
 #ifdef CONFIG_MST_SECURE_GPIO
-	if (!strncmp(bank->name, "gpf0", 4)) {
+	if (!strncmp(bank->name, "gpc3", 4)) {
 		sleep_gpio_idx++;
 		goto out;
 	}
 #endif
 
-	/* GPH ports are AUD interface (I2S, UART, PCM, SB) that should not
-	 * access when AUD power is disabled
+	/* GPZ ports are AUD interface that should not access
+	 * when AUD power is disabled
 	 */
-	if (!strncmp(bank->name, "gph", 3)) {
+	if (!strncmp(bank->name, "gpz", 3)) {
 		sleep_gpio_idx++;
 		goto out;
 	}
-
-#ifdef CONFIG_SOC_EXYNOS5433
-	/* xxxx group is dummy for align insted of GPF0 */
-	if (!strcmp(bank->name, "xxxx"))
-		return;
-#endif
 
 	widths = bank->type->fld_width;
 	if (widths[PINCFG_TYPE_CON_PDN]) {
@@ -1818,7 +1897,15 @@ static void gpiodvs_check_sleep_gpio(struct samsung_pinctrl_drv_data *drvdata,
 		gpiomap_result.sleep[sleep_gpio_idx++] =
 			gpiodvs_combine_data(data, PHONE_INIT);
 	}
+
+	gpiodvs_print_pin_state(PHONE_SLEEP, (widths[PINCFG_TYPE_CON_PDN] ? 0 : 1),
+			bank->name, pin_num, data);
 out:
+	pin_num++;
+	if (pin_num == bank->nr_pins) {
+		pin_num = 0;
+	}
+
 	pr_debug("%s: sleep[%u]=0x%02x\n", __func__, sleep_gpio_idx - 1,
 			gpiomap_result.sleep[sleep_gpio_idx - 1]);
 }
@@ -1850,10 +1937,10 @@ static void check_gpio_status(unsigned char phonestate)
 }
 
 
-struct gpio_dvs_t exynos8890_secgpio_dvs = {
+struct gpio_dvs_t exynos7870_secgpio_dvs = {
 	.result = &gpiomap_result,
 	.check_gpio_status = check_gpio_status,
-	.get_nr_gpio = exynos8890_secgpio_get_nr_gpio,
+	.get_nr_gpio = exynos7870_secgpio_get_nr_gpio,
 };
 #endif
 
@@ -1873,6 +1960,8 @@ static const struct of_device_id samsung_pinctrl_dt_match[] = {
 		.data = (void *)exynos5420_pin_ctrl },
 	{ .compatible = "samsung,s5pv210-pinctrl",
 		.data = (void *)s5pv210_pin_ctrl },
+	{ .compatible = "samsung,exynos7870-pinctrl",
+		.data = (void *)exynos7870_pin_ctrl },
 	{ .compatible = "samsung,exynos8890-pinctrl",
 		.data = (void *)exynos8890_pin_ctrl },
 #endif

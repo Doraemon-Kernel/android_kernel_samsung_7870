@@ -204,11 +204,12 @@ void print_frame_info_queue(struct fimc_is_framemgr *this,
 		usec[INFO_CONFIG_LOCK]    = do_div(when[INFO_CONFIG_LOCK], NSEC_PER_SEC);
 		usec[INFO_FRAME_END_PROC] = do_div(when[INFO_FRAME_END_PROC], NSEC_PER_SEC);
 
-		pr_cont("%d[%d][%d]([%5lu.%06lu],[%5lu.%06lu],[%5lu.%06lu])->",
+		pr_cont("%d[%d][%d]([%5lu.%06lu],[%5lu.%06lu],[%5lu.%06lu][C:0x%lx])->",
 			frame->index, frame->fcount, frame->type,
 			(unsigned long)when[INFO_FRAME_START],    usec[INFO_FRAME_START] / NSEC_PER_USEC,
 			(unsigned long)when[INFO_CONFIG_LOCK],    usec[INFO_CONFIG_LOCK] / NSEC_PER_USEC,
-			(unsigned long)when[INFO_FRAME_END_PROC], usec[INFO_FRAME_END_PROC] / NSEC_PER_USEC);
+			(unsigned long)when[INFO_FRAME_END_PROC], usec[INFO_FRAME_END_PROC] / NSEC_PER_USEC,
+			frame->core_flag);
 	}
 
 	pr_cont("X\n");

@@ -13,7 +13,7 @@
 #define _MEDIA_EXYNOS_SMFC_H_
 
 #include <linux/ktime.h>
-
+#include <linux/pm_qos.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-mem2mem.h>
@@ -90,6 +90,9 @@ struct smfc_device_data {
 /* Set if HWFC is enabled in device_run, cleared in irq/timeout handler */
 #define SMFC_DEV_OTF_EMUMODE	(1 << 4)
 
+/* smfc_dev.attr flags */
+#define SMFC_ATTR_NEED_CFW_PERMISSION	(1 << 4)
+
 struct smfc_dev {
 	struct v4l2_device v4l2_dev;
 	struct video_device *videodev;
@@ -103,11 +106,15 @@ struct smfc_dev {
 	int device_id;
 	u32 hwver;
 	u32 flags;
+	unsigned int attr;
 
 	void *vb2_alloc_ctx;
 
 	struct clk *clk_gate;
 	struct clk *clk_gate2; /* available if clk_gate is valid */
+	struct pm_qos_request qosreq_int;
+	s32 qosreq_int_level;
+
 };
 
 #define SMFC_CTX_COMPRESS	(1 << 0)

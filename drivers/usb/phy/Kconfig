@@ -88,7 +88,6 @@ config SAMSUNG_USBPHY
 
 config DUAL_ROLE_USB_INTF
 	bool "Generic DUAL ROLE sysfs interface"
-	depends on USB_HOST_NOTIFY
 	depends on !TYPEC
 	help
 	  A generic sysfs interface to track and change the state of

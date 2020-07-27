@@ -14,7 +14,6 @@
 #include <linux/kref.h>
 #include <linux/genalloc.h>
 #include <linux/exynos_ion.h>
-#include <linux/mm.h>
 #ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 #include <linux/smc.h>
 #endif
@@ -27,21 +26,6 @@ struct ion_device *ion_exynos;
 /* starting from index=1 regarding default index=0 for system heap */
 static int nr_heaps = 1;
 
-struct exynos_ion_platform_heap {
-	struct ion_platform_heap heap_data;
-	struct reserved_mem *rmem;
-	unsigned int id;
-	unsigned int compat_ids;
-	bool secure;
-	bool reusable;
-	bool recyclable;
-	bool protected;
-	bool noprot;
-	atomic_t secure_ref;
-	struct device dev;
-	struct ion_heap *heap;
-};
-
 static struct ion_platform_heap ion_noncontig_heap = {
 	.name = "ion_noncontig_heap",
 	.type = ION_HEAP_TYPE_SYSTEM,
@@ -50,6 +34,7 @@ static struct ion_platform_heap ion_noncontig_heap = {
 
 static struct exynos_ion_platform_heap plat_heaps[ION_NUM_HEAPS];
 
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 static int __find_platform_heap_id(unsigned int heap_id)
 {
 	int i;
@@ -65,7 +50,6 @@ static int __find_platform_heap_id(unsigned int heap_id)
 	return i;
 }
 
-#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 static int __ion_secure_protect_buffer(struct exynos_ion_platform_heap *pdata,
 					struct ion_buffer *buffer)
 {
@@ -127,8 +111,9 @@ int ion_secure_protect(struct ion_buffer *buffer)
 	if (pdata->noprot)
 		return 0;
 
-	return (pdata->reusable ? __ion_secure_protect_buffer(pdata, buffer) :
-				__ion_secure_protect_region(pdata, buffer));
+	return (pdata->reusable && !pdata->should_isolate)
+				? __ion_secure_protect_buffer(pdata, buffer)
+				: __ion_secure_protect_region(pdata, buffer);
 }
 
 static int __ion_secure_unprotect_buffer(struct exynos_ion_platform_heap *pdata,
@@ -191,8 +176,9 @@ int ion_secure_unprotect(struct ion_buffer *buffer)
 	if (pdata->noprot)
 		return 0;
 
-	return (pdata->reusable ? __ion_secure_unprotect_buffer(pdata, buffer) :
-				__ion_secure_unprotect_region(pdata, buffer));
+	return (pdata->reusable && !pdata->should_isolate)
+				? __ion_secure_unprotect_buffer(pdata, buffer)
+				: __ion_secure_unprotect_region(pdata, buffer);
 }
 #else
 int ion_secure_protect(struct ion_buffer *buffer)
@@ -274,11 +260,8 @@ static int __init exynos_ion_reserved_mem_setup(struct reserved_mem *rmem)
 	pdata->secure = !!of_get_flat_dt_prop(rmem->fdt_node, "secure", NULL);
 	pdata->reusable = !!of_get_flat_dt_prop(rmem->fdt_node, "reusable", NULL);
 	pdata->noprot = !!of_get_flat_dt_prop(rmem->fdt_node, "noprot", NULL);
-#ifdef CONFIG_ION_RBIN_HEAP
-	pdata->recyclable = !!of_get_flat_dt_prop(rmem->fdt_node, "recyclable", NULL);
-#else
-	pdata->recyclable = false;
-#endif
+	pdata->should_isolate = !!of_get_flat_dt_prop(
+				rmem->fdt_node, "ion,bulk_reclaim", NULL);
 
 	prop = of_get_flat_dt_prop(rmem->fdt_node, "id", &len);
 	if (!prop) {
@@ -311,6 +294,7 @@ static int __init exynos_ion_reserved_mem_setup(struct reserved_mem *rmem)
 
 	rmem->ops = &exynos_ion_rmem_ops;
 	pdata->rmem = rmem;
+	rmem->reusable = pdata->reusable;
 
 	heap_data = &pdata->heap_data;
 	heap_data->id = pdata->id;
@@ -324,13 +308,10 @@ static int __init exynos_ion_reserved_mem_setup(struct reserved_mem *rmem)
 	else
 		heap_data->align = be32_to_cpu(prop[0]);
 
-	if (pdata->reusable || pdata->recyclable) {
+	if (pdata->reusable) {
 		int ret;
 
-		if (pdata->reusable)
-			heap_data->type = ION_HEAP_TYPE_DMA;
-		else
-			heap_data->type = ION_HEAP_TYPE_RBIN;
+		heap_data->type = ION_HEAP_TYPE_DMA;
 		heap_data->priv = &pdata->dev;
 
 		ret = dma_declare_contiguous(&pdata->dev, heap_data->size,
@@ -341,22 +322,8 @@ static int __init exynos_ion_reserved_mem_setup(struct reserved_mem *rmem)
 						__func__, heap_data->name);
 			return ret;
 		}
-#ifdef CONFIG_RBIN
-		if (pdata->recyclable) {
-			dev_set_cma_rbin(pdata->dev.cma_area);
-			totalrbin_pages += (heap_data->size / PAGE_SIZE);
-			/*
-			 * # of cma pages was increased by this RBIN memory in
-			 * cma_init_reserved_mem_with_name(). Need to deduct.
-			 */
-			//totalcma_pages -= (heap_data->size / PAGE_SIZE);
-		}
-#endif
-		if (pdata->reusable)
-			pr_info("CMA memory[%d]: %s:%#lx\n", heap_data->id,
-				heap_data->name, (unsigned long)rmem->size);
-		else
-			pr_info("rbin CMA memory[%d]: %s:%#lx\n", heap_data->id,
+
+		pr_info("CMA memory[%d]: %s:%#lx\n", heap_data->id,
 				heap_data->name, (unsigned long)rmem->size);
 	} else {
 		heap_data->type = ION_HEAP_TYPE_CARVEOUT;
@@ -382,7 +349,6 @@ DECLARE_EXYNOS_ION_RESERVED_REGION("exynos8890-ion,", vframe);
 DECLARE_EXYNOS_ION_RESERVED_REGION("exynos8890-ion,", vscaler);
 DECLARE_EXYNOS_ION_RESERVED_REGION("exynos8890-ion,", gpu_crc);
 DECLARE_EXYNOS_ION_RESERVED_REGION("exynos8890-ion,", gpu_buffer);
-DECLARE_EXYNOS_ION_RESERVED_REGION("exynos8890-ion,", camera);
 DECLARE_EXYNOS_ION_RESERVED_REGION("exynos8890-ion,", secure_camera);
 
 int ion_exynos_contig_heap_info(int region_id, phys_addr_t *phys, size_t *size)
@@ -396,7 +362,7 @@ int ion_exynos_contig_heap_info(int region_id, phys_addr_t *phys, size_t *size)
 
 	for (i = 1; i < nr_heaps; i++) {
 		if (plat_heaps[i].id == region_id) {
-			if (plat_heaps[i].reusable || plat_heaps[i].recyclable) {
+			if (plat_heaps[i].reusable) {
 				pr_err("%s: operation not permitted for the"
 						"cma region %s(%d)\n", __func__,
 						plat_heaps[i].heap_data.name,
@@ -505,7 +471,6 @@ static int exynos_ion_populate_heaps(struct platform_device *pdev,
 	int i, ret;
 
 	plat_heaps[0].reusable = false;
-	plat_heaps[0].recyclable = false;
 	memcpy(&plat_heaps[0].heap_data, &ion_noncontig_heap,
 				sizeof(struct ion_platform_heap));
 
@@ -521,7 +486,7 @@ static int exynos_ion_populate_heaps(struct platform_device *pdev,
 
 		ion_device_add_heap(ion_exynos, plat_heaps[i].heap);
 
-		if (plat_heaps[i].reusable || plat_heaps[i].recyclable)
+		if (plat_heaps[i].reusable)
 			exynos_ion_create_cma_devices(&plat_heaps[i]);
 	}
 
@@ -533,6 +498,28 @@ err:
 
 	return ret;
 }
+
+static int ion_system_heap_size_notifier(struct notifier_block *nb,
+					 unsigned long action, void *data)
+{
+	show_ion_system_heap_size((struct seq_file *)data);
+	return 0;
+}
+
+static struct notifier_block ion_system_heap_nb = {
+	.notifier_call = ion_system_heap_size_notifier,
+};
+
+static int ion_system_heap_pool_size_notifier(struct notifier_block *nb,
+					      unsigned long action, void *data)
+{
+	show_ion_system_heap_pool_size((struct seq_file *)data);
+	return 0;
+}
+
+static struct notifier_block ion_system_heap_pool_nb = {
+	.notifier_call = ion_system_heap_pool_size_notifier,
+};
 
 static int __init exynos_ion_probe(struct platform_device *pdev)
 {
@@ -550,6 +537,9 @@ static int __init exynos_ion_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	show_mem_extra_notifier_register(&ion_system_heap_nb);
+	show_mem_extra_notifier_register(&ion_system_heap_pool_nb);
+	
 	return exynos_ion_populate_heaps(pdev, ion_exynos);
 }
 

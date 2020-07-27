@@ -167,31 +167,10 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	mapping->host = inode;
 	mapping->flags = 0;
 	atomic_set(&mapping->i_mmap_writable, 0);
-#ifdef CONFIG_RBIN
-	if ((sb->s_flags & MS_RDONLY) && !shmem_mapping(mapping))
-		mapping_set_gfp_mask(mapping, GFP_HIGHUSER_MOVABLE |
-					__GFP_RBIN);
-	else
-		mapping_set_gfp_mask(mapping, GFP_HIGHUSER_MOVABLE);
-#else
 	mapping_set_gfp_mask(mapping, GFP_HIGHUSER_MOVABLE);
-#endif
 	mapping->private_data = NULL;
 	mapping->backing_dev_info = &default_backing_dev_info;
 	mapping->writeback_index = 0;
-#if defined(CONFIG_MMC_DW_FMP_ECRYPT_FS) || defined(CONFIG_UFS_FMP_ECRYPT_FS)
-	mapping->iv = NULL;
-	mapping->key = NULL;
-	mapping->key_length = 0;
-	mapping->alg = NULL;
-	mapping->sensitive_data_index = 0;
-	mapping->hash_tfm = NULL;
-#ifdef CONFIG_CRYPTO_FIPS
-	mapping->cc_enable = 0;
-#endif
-	mapping->use_fmp = 0;
-	mapping->plain_text = 0;
-#endif
 #ifdef CONFIG_SDP
 	mapping->userid = 0;
 #endif
@@ -1422,11 +1401,7 @@ static void iput_final(struct inode *inode)
 	else
 		drop = generic_drop_inode(inode);
 
-#if defined(CONFIG_MMC_DW_FMP_ECRYPT_FS) || defined(CONFIG_UFS_FMP_ECRYPT_FS)
-	if (!drop && (sb->s_flags & MS_ACTIVE) && !inode->i_mapping->key) {
-#else
 	if (!drop && (sb->s_flags & MS_ACTIVE)) {
-#endif
 		inode->i_state |= I_REFERENCED;
 		inode_add_lru(inode);
 		spin_unlock(&inode->i_lock);
@@ -1714,6 +1689,7 @@ int file_update_time(struct file *file)
 	struct inode *inode = file_inode(file);
 	struct timespec now;
 	int sync_it = 0;
+	int need_sync = 0;
 	int ret;
 
 	/* First try to exhaust all avenues to not sync */
@@ -1727,7 +1703,19 @@ int file_update_time(struct file *file)
 	if (!timespec_equal(&inode->i_ctime, &now))
 		sync_it |= S_CTIME;
 
-	if (IS_I_VERSION(inode))
+	/* iversion impacts on "write" performance. This code just filter inodes
+	 * by presence in integrity cache (S_IMA flag, security/integrity/iint.c).
+	 * Because only FIVE uses iversion in Samsung Kernel this patch shouldn't
+	 * affect other code.
+	 * NOTICE: iversion code has been optimized in v4.17-rc4. So this patch should be
+	 * removed since v4.17-rc4
+	 */
+	#ifdef CONFIG_FIVE
+	need_sync = IS_I_VERSION(inode) && (inode->i_flags & S_IMA);
+	#else
+	need_sync = IS_I_VERSION(inode);
+	#endif
+	if (need_sync)
 		sync_it |= S_VERSION;
 
 	if (!sync_it)
@@ -1997,27 +1985,3 @@ void inode_nohighmem(struct inode *inode)
 	mapping_set_gfp_mask(inode->i_mapping, GFP_USER);
 }
 EXPORT_SYMBOL(inode_nohighmem);
-
-/*
- * Generic function to check FS_IOC_SETFLAGS values and reject any invalid
- * configurations.
- *
- * Note: the caller should be holding i_mutex, or else be sure that they have
- * exclusive access to the inode structure.
- */
-int vfs_ioc_setflags_prepare(struct inode *inode, unsigned int oldflags,
-			     unsigned int flags)
-{
-	/*
-	 * The IMMUTABLE and APPEND_ONLY flags can only be changed by
-	 * the relevant capability.
-	 *
-	 * This test looks nicer. Thanks to Pauline Middelink
-	 */
-	if ((flags ^ oldflags) & (FS_APPEND_FL | FS_IMMUTABLE_FL) &&
-	    !capable(CAP_LINUX_IMMUTABLE))
-		return -EPERM;
-
-	return 0;
-}
-EXPORT_SYMBOL(vfs_ioc_setflags_prepare);

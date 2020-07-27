@@ -136,29 +136,29 @@ static inline void sec_debug_hook_auto_comm(int type, const char *buf, size_t si
 		p = &auto_summary_info->auto_comm_buf[type];
 		offset = p->offset;
 
-	if (atomic64_read(&p->logging_disable))
-		return;
+		if (atomic64_read(&p->logging_disable))
+			return;
 
-	if (offset + size > SZ_4K)
-		return;
+		if (offset + size > SZ_4K)
+			return;
 
-	if (init_data[type].max_count &&
-	    (atomic64_read(&p->logging_count) > init_data[type].max_count))
-		return;
+		if (init_data[type].max_count &&
+		    (atomic64_read(&p->logging_count) > init_data[type].max_count))
+			return;
 
-	if (!(auto_summary_info->fault_flag & 1 << type)) {
-		auto_summary_info->fault_flag |= 1 << type;
-		if (init_data[type].prio_level == PRIO_LV5) {
-			auto_summary_info->lv5_log_order |= type << auto_summary_info->lv5_log_cnt * 4;
-			auto_summary_info->lv5_log_cnt++;
+		if (!(auto_summary_info->fault_flag & 1 << type)) {
+			auto_summary_info->fault_flag |= 1 << type;
+			if (init_data[type].prio_level == PRIO_LV5) {
+				auto_summary_info->lv5_log_order |= type << auto_summary_info->lv5_log_cnt * 4;
+				auto_summary_info->lv5_log_cnt++;
+			}
+			auto_summary_info->order_map[auto_summary_info->order_map_cnt++] = type;
 		}
-		auto_summary_info->order_map[auto_summary_info->order_map_cnt++] = type;
-	}
 
-	atomic_inc(&p->logging_count);
+		atomic_inc(&p->logging_count);
 
-	memcpy(p->buf + offset, buf, size);
-	p->offset += size;
+		memcpy(p->buf + offset, buf, size);
+		p->offset += size;
 	}
 }
 
@@ -177,6 +177,7 @@ static void sec_auto_summary_init_print_buf(unsigned long base)
 
 	register_set_auto_comm_buf(sec_debug_hook_auto_comm);
 	register_set_auto_comm_lastfreq(sec_debug_hook_auto_comm_lastfreq);
+	
 }
 
 static int __init sec_auto_summary_log_setup(char *str)
@@ -229,6 +230,11 @@ static ssize_t sec_reset_auto_summary_proc_read(struct file *file, char __user *
 	if (pos >= AUTO_SUMMARY_SIZE) {
 		pr_err("%s : pos 0x%llx\n", __func__, pos);
 		return -ENOENT;
+	}
+
+	if (strncmp(auto_summary_buf, "@ Ramdump", 9)) {
+		pr_err("%s : no data in auto_comment\n", __func__);
+		return 0;
 	}
 
 	count = min(len, (size_t)(AUTO_SUMMARY_SIZE - pos));

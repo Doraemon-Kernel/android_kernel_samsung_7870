@@ -91,12 +91,6 @@ static inline struct cma *dev_get_cma_area(struct device *dev)
 	return dma_contiguous_default_area;
 }
 
-#ifdef CONFIG_RBIN
-extern void dev_set_cma_rbin(struct cma *);
-extern unsigned long dev_get_cma_base_pfn(struct cma *);
-extern unsigned long dev_get_cma_count(struct cma *);
-#endif
-
 static inline void dev_set_cma_area(struct device *dev, struct cma *cma)
 {
 	if (dev)

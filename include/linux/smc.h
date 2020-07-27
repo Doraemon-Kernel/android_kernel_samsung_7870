@@ -24,9 +24,21 @@
 /* For setting memory for debug */
 #define SMC_CMD_SET_DEBUG_MEM		(-120)
 #define SMC_CMD_GET_LOCKUP_REASON	(-121)
-#define SMC_CMD_KERNEL_PANIC_NOTICE	(-122)
 
 /* Command ID for smc */
+#if defined(CONFIG_SOC_EXYNOS8890) && !defined(CONFIG_SOC_EXYNOS8890_EVT1)
+#define SMC_PROTECTION_SET		(0x81000000)
+#define SMC_DRM_FW_LOADING		(0x81000001)
+#define SMC_DCPP_SUPPORT		(0x81000002)
+#define SMC_DRM_SECMEM_REGION_INFO	(0x8100000A)
+#define SMC_DRM_SECMEM_REGION_PROT	(0x8100000B)
+#define SMC_DRM_SECBUF_PROT		(0x8100000C)	/* dummy */
+#define SMC_DRM_SECBUF_UNPROT		(0x8100000C)	/* dummy */
+#define SMC_DRM_SECBUF_CFW_PROT		(0x8100000C)	/* dummy */
+#define SMC_DRM_SECBUF_CFW_UNPROT	(0x8100000C)	/* dummy */
+#define MC_FC_SET_CFW_PROT		(0xC20018A0)
+#define MC_FC_DRM_SET_CFW_PROT		(0x10000000)
+#else
 #define SMC_PROTECTION_SET		(0x82002010)
 #define SMC_DRM_FW_LOADING		(0x82002011)
 #define SMC_DCPP_SUPPORT		(0x82002012)
@@ -36,7 +48,7 @@
 #define SMC_DRM_SECBUF_CFW_UNPROT	(0x82002031)
 #define MC_FC_SET_CFW_PROT		(0x82002040)
 #define MC_FC_DRM_SET_CFW_PROT		(0x10000000)
-#define SMC_SRPMB_WSM			(0x82003811)
+#endif
 
 /* Deprecated */
 #define SMC_DRM_MAKE_PGTABLE		(0x81000003)
@@ -50,13 +62,9 @@
 #define SMC_PROTECTION_DISABLE		(0)
 
 /* For FMP Ctrl */
-#if defined(CONFIG_SOC_EXYNOS7420) || defined(CONFIG_SOC_EXYNOS8890)
 #define SMC_CMD_FMP			(0xC2001810)
 #define SMC_CMD_SMU			(0xC2001820)
 #define SMC_CMD_RESUME			(0xC2001830)
-#else
-#define SMC_CMD_FMP			(0x81000020)
-#endif
 
 /* For DTRNG Access */
 #ifdef CONFIG_EXYRNG_USE_CRYPTOMANAGER
@@ -84,7 +92,6 @@
 
 /*
  * For SMC_CMD_FMP
- * Defined from Exynos7420
  */
 #define FMP_KEY_STORE			(0x0)
 #define FMP_KEY_SET			(0x1)
@@ -99,9 +106,6 @@
 #define FMP_DESC_OFF			(0x0)
 #define FMP_DESC_ON			(0x1)
 
-#define FMP_SMU_OFF			(0x0)
-#define FMP_SMU_ON			(0x1)
-
 #define FMP_SMU_INIT			(0x0)
 #define FMP_SMU_SET			(0x1)
 #define FMP_SMU_RESUME			(0x2)
@@ -113,8 +117,15 @@
 #elif defined(CONFIG_SOC_EXYNOS8890)
 #define UFS_FMP				(0x155A2000)
 #define EMMC0_FMP			(0x15561000)
-#define EMMC2_FMP			(0x15741000)
+#elif defined(CONFIG_SOC_EXYNOS7870)
+#define EMMC0_FMP			(0x13541000)
+#define EMMC2_FMP			(0x13561000)
 #endif
+
+/*
+ * For SMC CMD for SRPMB
+ */
+#define SMC_SRPMB_WSM			(0x82003811)
 
 /* For DTRNG Access */
 #define HWRNG_INIT			(0x0)
@@ -128,6 +139,7 @@
 #define CFW_VPP1			(6)
 
 #define SMC_TZPC_OK			(2)
+#define SMC_CFW_OK			(2)
 
 #define PROT_MFC			(0)
 #define PROT_MSCL0			(1)

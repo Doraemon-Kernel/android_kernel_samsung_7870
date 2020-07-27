@@ -13,7 +13,6 @@
 #include <linux/regmap.h>
 #include <linux/mfd/syscon.h>
 #include <linux/platform_device.h>
-#include <linux/cpumask.h>
 
 #include <asm/smp_plat.h>
 
@@ -76,6 +75,30 @@ EXPORT_SYMBOL(exynos_pmu_update);
 	 | MPIDR_AFFINITY_LEVEL(mpidr, 0))	\
 	 * PMU_CPU_ADDR_OFFSET)
 
+static int exynos_l2_state(unsigned int cluster)
+{
+	unsigned int l2_stat = 0;
+	unsigned int offset;
+
+	offset = cluster * PMU_CLUSTER_ADDR_OFFSET;
+
+	regmap_read(pmureg, PMU_L2_STATUS_BASE + offset, &l2_stat);
+
+	return ((l2_stat & L2_LOCAL_PWR_CFG) == L2_LOCAL_PWR_CFG);
+}
+
+static int exynos_noncpu_state(unsigned int cluster)
+{
+	unsigned int noncpu_stat = 0;
+	unsigned int offset;
+
+	offset = cluster * PMU_CLUSTER_ADDR_OFFSET;
+
+	regmap_read(pmureg, PMU_NONCPU_STATUS_BASE + offset, &noncpu_stat);
+
+	return ((noncpu_stat & NONCPU_LOCAL_PWR_CFG) == NONCPU_LOCAL_PWR_CFG);
+}
+
 static void exynos_cpu_up(unsigned int cpu)
 {
 	unsigned int mpidr = cpu_logical_map(cpu);
@@ -99,7 +122,7 @@ static void exynos_cpu_down(unsigned int cpu)
 static int exynos_cpu_state(unsigned int cpu)
 {
 	unsigned int mpidr = cpu_logical_map(cpu);
-	unsigned int offset, val;
+	unsigned int offset, val = 0;
 
 	offset = pmu_cpu_offset(mpidr);
 	regmap_read(pmureg, PMU_CPU_STATUS_BASE + offset, &val);
@@ -109,16 +132,12 @@ static int exynos_cpu_state(unsigned int cpu)
 
 static int exynos_cluster_state(unsigned int cluster)
 {
-	unsigned int noncpu_stat, l2_stat;
-	unsigned int offset;
+	unsigned int noncpu_stat, l2_stat = 0;
 
-	offset = cluster * PMU_CLUSTER_ADDR_OFFSET;
+	noncpu_stat = exynos_noncpu_state(cluster);
+	l2_stat = exynos_l2_state(cluster);
 
-	regmap_read(pmureg, PMU_NONCPU_STATUS_BASE + offset, &noncpu_stat);
-	regmap_read(pmureg, PMU_L2_STATUS_BASE + offset, &l2_stat);
-
-	return ((l2_stat & L2_LOCAL_PWR_CFG) == L2_LOCAL_PWR_CFG) &&
-		((noncpu_stat & NONCPU_LOCAL_PWR_CFG) == NONCPU_LOCAL_PWR_CFG);
+	return l2_stat && noncpu_stat;
 }
 
 /**
@@ -151,52 +170,19 @@ struct exynos_cpu_power_ops exynos_cpu = {
 	.cluster_up = exynos_cluster_up,
 	.cluster_down = exynos_cluster_down,
 	.cluster_state = exynos_cluster_state,
+	.l2_state = exynos_l2_state,
+	.noncpu_state = exynos_noncpu_state,
 };
 
-#ifdef CONFIG_EXYNOS_BIG_FREQ_BOOST
-#include <linux/delay.h>
-#include <linux/notifier.h>
-#include <linux/cpu.h>
 
-static int pmu_cpus_notifier(struct notifier_block *nb,
-				unsigned long event, void *data)
+int exynos_check_cp_status(void)
 {
-	unsigned long timeout;
-	int cpu, cnt = 0;
-	int ret = NOTIFY_OK;
-	struct cpumask mask;
+	unsigned int val;
 
-	switch (event) {
-	case CPUS_DOWN_COMPLETE:
-		cpumask_andnot(&mask, &hmp_fast_cpu_mask, (struct cpumask *)data);
-		timeout = jiffies + msecs_to_jiffies(1000);
-		while (time_before(jiffies, timeout)) {
-			for_each_cpu(cpu, &mask) {
-				if (cpu_is_offline(cpu) && !exynos_cpu_state(cpu))
-					cnt++;
-			}
-			if (cnt == cpumask_weight(&mask))
-				break;
-			else
-				cnt = 0;
-			udelay(1);
-		}
-		if (!cnt)
-			ret = NOTIFY_BAD;
+	exynos_pmu_read(PMU_CP_STAT, &val);
 
-		break;
-	default:
-		break;
-	}
-
-	return ret;
+	return val;
 }
-
-static struct notifier_block exynos_pmu_cpus_nb = {
-	.notifier_call = pmu_cpus_notifier,
-	.priority = INT_MAX,				/* want to be called first */
-};
-#endif
 
 static int exynos_pmu_probe(struct platform_device *pdev)
 {
@@ -208,10 +194,6 @@ static int exynos_pmu_probe(struct platform_device *pdev)
 		pr_err("Fail to get regmap of PMU\n");
 		return PTR_ERR(pmureg);
 	}
-
-#ifdef CONFIG_EXYNOS_BIG_FREQ_BOOST
-	register_cpus_notifier(&exynos_pmu_cpus_nb);
-#endif
 
 	return 0;
 }

@@ -23,7 +23,6 @@ struct busmon_notifier {
 	unsigned long target_addr;
 };
 extern void busmon_notifier_chain_register(struct notifier_block *n);
-extern bool busmon_get_panic(void);
 #else
 #define busmon_notifier_chain_register(x)		do { } while(0)
 #endif

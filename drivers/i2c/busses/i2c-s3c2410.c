@@ -40,13 +40,11 @@
 #include <linux/platform_data/i2c-s3c2410.h>
 
 #ifdef CONFIG_CPU_IDLE
-#include <mach/exynos-pm.h>
-#endif
-
-#ifdef CONFIG_CPU_IDLE
-#include <mach/exynos-pm.h>
+#include <soc/samsung/exynos-pm.h>
 static LIST_HEAD(drvdata_list);
 #endif
+#include <linux/exynos-ss.h>
+#include <linux/clk-private.h>
 
 /* see s3c2410x user guide, v1.1, section 9 (p447) for more info */
 
@@ -143,6 +141,7 @@ struct s3c24xx_i2c {
 	struct s3c2410_platform_i2c	*pdata;
 	int			gpios[2];
 	struct pinctrl          *pctrl;
+	int			bus_id;
 };
 
 static struct platform_device_id s3c24xx_driver_ids[] = {
@@ -848,10 +847,9 @@ static int s3c24xx_i2c_xfer(struct i2c_adapter *adap,
 	int ret;
 
 	pm_runtime_get_sync(&adap->dev);
-	ret = clk_enable(i2c->clk);
-	if (ret)
-		return ret;
-
+	exynos_ss_i2c_clk(i2c->clk, i2c->bus_id, 0x1);
+	clk_prepare_enable(i2c->clk);
+	exynos_ss_i2c_clk(i2c->clk, i2c->bus_id, 0x3);
 
 	for (retry = 0; retry < adap->retries; retry++) {
 
@@ -861,7 +859,9 @@ static int s3c24xx_i2c_xfer(struct i2c_adapter *adap,
 		ret = s3c24xx_i2c_doxfer(i2c, msgs, num);
 
 		if (ret != -EAGAIN) {
-			clk_disable(i2c->clk);
+			exynos_ss_i2c_clk(i2c->clk, i2c->bus_id, 0x11);
+			clk_disable_unprepare(i2c->clk);
+			exynos_ss_i2c_clk(i2c->clk, i2c->bus_id, 0x13);
 			pm_runtime_put(&adap->dev);
 			return ret;
 		}
@@ -871,7 +871,9 @@ static int s3c24xx_i2c_xfer(struct i2c_adapter *adap,
 		udelay(100);
 	}
 
-	clk_disable(i2c->clk);
+	exynos_ss_i2c_clk(i2c->clk, i2c->bus_id, 0x11);
+	clk_disable_unprepare(i2c->clk);
+	exynos_ss_i2c_clk(i2c->clk, i2c->bus_id, 0x13);
 	pm_runtime_put(&adap->dev);
 	return -EREMOTEIO;
 }
@@ -1079,7 +1081,7 @@ static int s3c24xx_i2c_init(struct s3c24xx_i2c *i2c)
 	/* write slave address */
 	writeb(pdata->slave_addr, i2c->regs + S3C2410_IICADD);
 
-	dev_info(i2c->dev, "slave address 0x%02x\n", pdata->slave_addr);
+	dev_dbg(i2c->dev, "slave address 0x%02x\n", pdata->slave_addr);
 
 	writel(0, i2c->regs + S3C2410_IICCON);
 	writel(0, i2c->regs + S3C2410_IICSTAT);
@@ -1093,7 +1095,7 @@ static int s3c24xx_i2c_init(struct s3c24xx_i2c *i2c)
 
 	/* todo - check that the i2c lines aren't being dragged anywhere */
 
-	dev_info(i2c->dev, "bus frequency set to %d KHz\n", freq);
+	dev_dbg(i2c->dev, "bus frequency set to %d KHz\n", freq);
 	dev_dbg(i2c->dev, "S3C2410_IICCON=0x%02x\n",
 		readl(i2c->regs + S3C2410_IICCON));
 
@@ -1115,6 +1117,9 @@ s3c24xx_i2c_parse_dt(struct device_node *np, struct s3c24xx_i2c *i2c)
 	if (!np)
 		return;
 
+#ifdef CONFIG_FIX_I2C_BUS_NUM
+	if (of_property_read_u32(np, "samsung,i2c-bus-num", &pdata->bus_num))
+#endif
 	pdata->bus_num = -1; /* i2c bus number is dynamically assigned */
 	of_property_read_u32(np, "samsung,i2c-sda-delay", &pdata->sda_delay);
 	of_property_read_u32(np, "samsung,i2c-slave-addr", &pdata->slave_addr);
@@ -1326,7 +1331,6 @@ static int s3c24xx_i2c_resume_noirq(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct s3c24xx_i2c *i2c = platform_get_drvdata(pdev);
-	int ret;
 
 	i2c->suspended = 0;
 	i2c->need_hw_init = S3C2410_NEED_REG_INIT;

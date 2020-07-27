@@ -903,7 +903,6 @@ int nfs_release(struct inode *inode, struct file *filp)
 	nfs_file_clear_open_context(filp);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(nfs_open);
 
 /*
  * This function is called whenever some part of NFS notices that

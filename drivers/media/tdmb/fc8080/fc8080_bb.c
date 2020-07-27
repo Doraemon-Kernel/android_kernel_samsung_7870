@@ -762,7 +762,7 @@ s32 fc8080_scan_status(HANDLE handle)
 				printk(KERN_DEBUG "TDMB :sync_status(0x%x)\n",
 					sync_status);
 				return BBM_OK;
-		}
+			}
 		}
 	} else {
 		dlock_cnt = DLOCK_MAX_TIME / LOCK_TIME_TICK;
@@ -775,8 +775,8 @@ s32 fc8080_scan_status(HANDLE handle)
 				printk(KERN_DEBUG "TDMB :sync_status(0x%x)\n",
 					sync_status);
 				return BBM_OK;
+			}
 		}
-	}
 	}
 
 	printk(KERN_DEBUG "TDMB %s : res(0x%x)\n"

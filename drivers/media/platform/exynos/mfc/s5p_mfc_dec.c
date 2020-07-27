@@ -37,6 +37,7 @@
 #define DEF_DST_FMT	0
 
 #define MAX_FRAME_SIZE		(2*1024*1024)
+#define DEC_MAX_FPS		(240000)
 
 /* Find selected format description */
 static struct s5p_mfc_fmt *find_format(struct v4l2_format *f, unsigned int t)
@@ -701,6 +702,19 @@ static int vidioc_g_fmt_vid_cap_mplane(struct file *file, void *priv,
 		   further processing stages should crop to this
 		   rectangle. */
 		s5p_mfc_dec_calc_dpb_size(ctx);
+
+		/* If total memory requirement is too big for this device,
+		 * then it returns error.
+		 * 5: number of extra DPBs
+		 * 3: number of DPBs for Android framework
+		 * 600MB: being used to return an error,
+		 * when 8K resolution video clip is being tried to be decoded
+		 */
+		if ((ctx->raw_buf.total_plane_size * (ctx->dpb_count + 5 + 3)) > (600 * 1024 * 1024)) {
+			mfc_info_ctx("Total memory size is too big. width(%d), height(%d), dpb(%d)\n",
+					ctx->img_width, ctx->img_height, ctx->dpb_count);
+			return -EIO;
+		}
 
 		pix_mp->width = ctx->img_width;
 		pix_mp->height = ctx->img_height;
@@ -1685,6 +1699,9 @@ static int vidioc_s_ctrl(struct file *file, void *priv,
 	case V4L2_CID_MPEG_MFC_SET_BUF_PROCESS_TYPE:
 		ctx->buf_process_type = ctrl->value;
 		break;
+	case V4L2_CID_MPEG_VIDEO_BLACK_BAR_DETECT:
+		dec->detect_black_bar = ctrl->value;
+		break;
 	default:
 		list_for_each_entry(ctx_ctrl, &ctx->ctrls, list) {
 			if (!(ctx_ctrl->type & MFC_CTRL_TYPE_SET))
@@ -1750,26 +1767,41 @@ static int vidioc_g_crop(struct file *file, void *priv,
 		return -EINVAL;
 	}
 
-	if (ctx->src_fmt->fourcc == V4L2_PIX_FMT_H264 ||
-			ctx->src_fmt->fourcc == V4L2_PIX_FMT_HEVC) {
-		cr->c.left = dec->cr_left;
-		cr->c.top = dec->cr_top;
-		cr->c.width = ctx->img_width - dec->cr_left - dec->cr_right;
-		cr->c.height = ctx->img_height - dec->cr_top - dec->cr_bot;
-		mfc_debug(2, "Cropping info [h264]: l=%d t=%d "	\
-			"w=%d h=%d (r=%d b=%d fw=%d fh=%d)\n",
-			dec->cr_left, dec->cr_top, cr->c.width, cr->c.height,
-			dec->cr_right, dec->cr_bot,
-			ctx->buf_width, ctx->buf_height);
+	if (ctx->state == MFCINST_RUNNING && dec->detect_black_bar
+			&& dec->black_bar_updated) {
+		cr->c.left = dec->black_bar.left;
+		cr->c.top = dec->black_bar.top;
+		cr->c.width = dec->black_bar.width;
+		cr->c.height = dec->black_bar.height;
+		mfc_debug(2, "black bar info: l=%d t=%d w=%d h=%d\n",
+				dec->black_bar.left,
+				dec->black_bar.top,
+				dec->black_bar.width,
+				dec->black_bar.height);
 	} else {
-		cr->c.left = 0;
-		cr->c.top = 0;
-		cr->c.width = ctx->img_width;
-		cr->c.height = ctx->img_height;
-		mfc_debug(2, "Cropping info: w=%d h=%d fw=%d "
-			"fh=%d\n", cr->c.width,	cr->c.height, ctx->buf_width,
-							ctx->buf_height);
+		if (ctx->src_fmt->fourcc == V4L2_PIX_FMT_H264 ||
+				ctx->src_fmt->fourcc == V4L2_PIX_FMT_HEVC) {
+			cr->c.left = dec->cr_left;
+			cr->c.top = dec->cr_top;
+			cr->c.width = ctx->img_width - dec->cr_left - dec->cr_right;
+			cr->c.height = ctx->img_height - dec->cr_top - dec->cr_bot;
+			mfc_debug(2, "Cropping info [h264]: l=%d t=%d "	\
+					"w=%d h=%d (r=%d b=%d fw=%d fh=%d)\n",
+					dec->cr_left, dec->cr_top,
+					cr->c.width, cr->c.height,
+					dec->cr_right, dec->cr_bot,
+					ctx->buf_width, ctx->buf_height);
+		} else {
+			cr->c.left = 0;
+			cr->c.top = 0;
+			cr->c.width = ctx->img_width;
+			cr->c.height = ctx->img_height;
+			mfc_debug(2, "Cropping info: w=%d h=%d fw=%d fh=%d\n",
+					cr->c.width, cr->c.height,
+					ctx->buf_width,	ctx->buf_height);
+		}
 	}
+
 	mfc_debug_leave();
 	return 0;
 }
@@ -2360,7 +2392,7 @@ static void s5p_mfc_stop_streaming(struct vb2_queue *q)
 					spin_lock_irq(&dev->condlock);
 					set_bit(ctx->num, &dev->ctx_work_bits);
 					spin_unlock_irq(&dev->condlock);
-					s5p_mfc_try_run(dev);					
+					s5p_mfc_try_run(dev);
 					if (s5p_mfc_wait_for_done_ctx(ctx, condition)) {
 						mfc_err_ctx("special parsing time out\n");
 						s5p_mfc_cleanup_timeout_and_try_run(ctx);

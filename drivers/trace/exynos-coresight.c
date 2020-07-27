@@ -18,7 +18,6 @@
 
 #include <asm/core_regs.h>
 #include <asm/cputype.h>
-#include <asm/io.h>
 
 #include <soc/samsung/exynos-pmu.h>
 

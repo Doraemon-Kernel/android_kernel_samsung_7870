@@ -754,7 +754,7 @@ struct dwc3 {
 	struct usb_ctrlrequest	*ctrl_req;
 	struct dwc3_trb		*ep0_trb;
 	void			*ep0_bounce;
-	void			*zlp_buf;
+	void            *zlp_buf;
 	void			*scratchbuf;
 	u8			*setup_buf;
 	dma_addr_t		ctrl_req_addr;
@@ -865,9 +865,14 @@ struct dwc3 {
 	unsigned		pullups_connected:1;
 	unsigned		resize_fifos:1;
 	unsigned		setup_packet_pending:1;
+	unsigned		start_config_issued:1;
 	unsigned		three_stage_setup:1;
 	unsigned		adj_sof_accuracy:1;
 	unsigned		is_not_vbus_pad:1;
+	unsigned		sparse_transfer_control:1;
+#ifdef CONFIG_ARGOS
+	u32			irq_affinity_cpu_mask;
+#endif
 };
 
 /* -------------------------------------------------------------------------- */

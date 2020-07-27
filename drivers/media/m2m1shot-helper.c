@@ -37,6 +37,12 @@ int m2m1shot_map_dma_buf(struct device *dev,
 					__func__);
 			return PTR_ERR(plane->sgt);
 		}
+
+		exynos_ion_sync_dmabuf_for_device(dev, plane->dmabuf,
+							plane->bytes_used, dir);
+	} else { /* userptr */
+		exynos_ion_sync_sg_for_device(dev, plane->bytes_used,
+							plane->sgt, dir);
 	}
 
 	return 0;
@@ -47,8 +53,14 @@ void m2m1shot_unmap_dma_buf(struct device *dev,
 			struct m2m1shot_buffer_plane_dma *plane,
 			enum dma_data_direction dir)
 {
-	if (plane->dmabuf)
+	if (plane->dmabuf) {
+		exynos_ion_sync_dmabuf_for_cpu(dev, plane->dmabuf,
+							plane->bytes_used, dir);
 		dma_buf_unmap_attachment(plane->attachment, plane->sgt, dir);
+	} else {
+		exynos_ion_sync_sg_for_cpu(dev, plane->bytes_used,
+							plane->sgt, dir);
+	}
 }
 EXPORT_SYMBOL(m2m1shot_unmap_dma_buf);
 
@@ -63,16 +75,8 @@ int m2m1shot_dma_addr_map(struct device *dev,
 		iova = ion_iovmm_map(plane->attachment, 0,
 					plane->bytes_used, dir, 0);
 	} else {
-		int prot = IOMMU_READ;
-
-		if (dir == DMA_FROM_DEVICE)
-			prot |= IOMMU_WRITE;
-
-		down_read(&current->mm->mmap_sem);
-		iova = exynos_iovmm_map_userptr(dev,
-				buf->buffer->plane[plane_idx].userptr,
-				plane->bytes_used, prot);
-		up_read(&current->mm->mmap_sem);
+		iova = iovmm_map(dev, plane->sgt->sgl, 0,
+					plane->bytes_used, dir, 0);
 	}
 
 	if (IS_ERR_VALUE(iova))
@@ -92,33 +96,7 @@ void m2m1shot_dma_addr_unmap(struct device *dev,
 	if (plane->dmabuf)
 		ion_iovmm_unmap(plane->attachment, dma_addr);
 	else
-		exynos_iovmm_unmap_userptr(dev, dma_addr);
+		iovmm_unmap(dev, dma_addr);
 
 	plane->dma_addr = 0;
 }
-
-void m2m1shot_sync_for_device(struct device *dev,
-			      struct m2m1shot_buffer_plane_dma *plane,
-			      enum dma_data_direction dir)
-{
-	if (plane->dmabuf)
-		exynos_ion_sync_dmabuf_for_device(dev, plane->dmabuf,
-						  plane->bytes_used, dir);
-	else
-		exynos_iommu_sync_for_device(dev, plane->dma_addr,
-					     plane->bytes_used, dir);
-}
-EXPORT_SYMBOL(m2m1shot_sync_for_device);
-
-void m2m1shot_sync_for_cpu(struct device *dev,
-			   struct m2m1shot_buffer_plane_dma *plane,
-			   enum dma_data_direction dir)
-{
-	if (plane->dmabuf)
-		exynos_ion_sync_dmabuf_for_cpu(dev, plane->dmabuf,
-					       plane->bytes_used, dir);
-	else
-		exynos_iommu_sync_for_cpu(dev, plane->dma_addr,
-					  plane->bytes_used, dir);
-}
-EXPORT_SYMBOL(m2m1shot_sync_for_cpu);

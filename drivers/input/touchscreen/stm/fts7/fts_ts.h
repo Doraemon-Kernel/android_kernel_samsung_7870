@@ -58,7 +58,12 @@
 
 #define FTS_SUPPORT_PARTIAL_DOWNLOAD
 
+#ifdef CONFIG_FTS_SUPPROT_MULTIMEDIA
+#define FTS_SUPPROT_MULTIMEDIA
+#else
 #undef FTS_SUPPROT_MULTIMEDIA
+#endif
+
 #undef TSP_RUN_AUTOTUNE_DEFAULT
 
 
@@ -77,6 +82,9 @@
 #define STM_VER4		0x04
 #define STM_VER5		0x05
 #define STM_VER7		0x07
+
+#define STM_FORMAT_VER4		0x04
+#define STM_FORMAT_VER6		0x06
 
 /* stm7  */
 #define FTS_ID0							0x36
@@ -255,7 +263,7 @@
 #define FTS_MODE_DIRECT_INDICATOR			(1 << 3)
 
 #define TSP_BUF_SIZE 3000
-#define CMD_STR_LEN 256
+#define CMD_STR_LEN 32
 #define CMD_RESULT_STR_LEN 3000
 #define CMD_PARAM_NUM 8
 
@@ -288,7 +296,6 @@
 
 #define MODEL_ZERO	0x000000
 #define MODEL_HEROPLUS	0x001000
-#define MODEL_HEROEDGE	0x002000
 #define MODEL_NOBLE	0x001000
 #define MODEL_ZEN	0x002000
 
@@ -372,45 +379,6 @@ enum BRUSH_MODE {
 };
 #endif
 
-/* ----------------------------------------
- * write 0xE4 [ 11 | 10 | 01 | 00 ]
- * MSB <-------------------> LSB
- * read 0xE4
- * mapping sequnce : LSB -> MSB
- * struct sec_ts_test_result {
- * * assy : front + OCTA assay
- * * module : only OCTA
- *	 union {
- *		 struct {
- *			 u8 assy_count:2;		-> 00
- *			 u8 assy_result:2;		-> 01
- *			 u8 module_count:2;	-> 10
- *			 u8 module_result:2;	-> 11
- *		 } __attribute__ ((packed));
- *		 unsigned char data[1];
- *	 };
- *};
- * ---------------------------------------- */
-struct fts_ts_test_result {
-	union {
-		struct {
-			u8 assy_count:2;
-			u8 assy_result:2;
-			u8 module_count:2;
-			u8 module_result:2;
-		} __attribute__ ((packed));
-		unsigned char data[1];
-	};
-};
-
-#define TEST_OCTA_MODULE	1
-#define TEST_OCTA_ASSAY		2
-
-#define TEST_OCTA_NONE		0
-#define TEST_OCTA_FAIL		1
-#define TEST_OCTA_PASS		2
-
-
 struct fts_ts_info {
 	struct device *dev;
 	struct i2c_client *client;
@@ -445,10 +413,10 @@ struct fts_ts_info {
 	int ForceChannelLength;
 	short *pFrame;
 	unsigned char *cx_data;
+	unsigned char *total_cx_data;
 	struct delayed_work cover_cmd_work;
 	int delayed_cmd_param[2];
 #endif
-	struct fts_ts_test_result test_result;
 
 	bool hover_ready;
 	bool hover_enabled;
@@ -505,11 +473,11 @@ struct fts_ts_info {
 	int tspid2_val;
 	int pat;
 	int stm_ver;
+	int	stm_format_ver;
 
 #ifdef USE_OPEN_DWORK
 	struct delayed_work open_work;
 #endif
-	struct delayed_work work_read_nv;
 
 #ifdef FTS_SUPPORT_NOISE_PARAM
 	struct fts_noise_param noise_param;
@@ -577,10 +545,9 @@ int fts_fw_wait_for_event(struct fts_ts_info *info, unsigned char eid);
 int fts_fw_wait_for_specific_event(struct fts_ts_info *info, unsigned char eid0, unsigned char eid1, unsigned char eid2);
 void fts_interrupt_set(struct fts_ts_info *info, int enable);
 int fts_irq_enable(struct fts_ts_info *info, bool enable);
-int fts_fw_wait_for_event_D3(struct fts_ts_info *info, unsigned char eid0, unsigned char eid1);
 #ifdef FTS_SUPPORT_PARTIAL_DOWNLOAD
 bool get_PureAutotune_status(struct fts_ts_info *info);
+bool get_AFE_status(struct fts_ts_info *info);
 #endif
-int fts_get_tsp_test_result(struct fts_ts_info *info);
 
 #endif				//_LINUX_FTS_TS_H_

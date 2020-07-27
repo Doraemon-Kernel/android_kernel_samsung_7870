@@ -231,7 +231,6 @@ static int dwc3_otg_start_host(struct otg_fsm *fsm, int on)
 			goto err2;
 		}
 	} else {
-		msleep(200);
 		platform_device_del(dwc->xhci);
 err2:
 		dwc3_core_exit(dwc);
@@ -713,7 +712,6 @@ void dwc3_otg_exit(struct dwc3 *dwc)
 
 		return;
 	}
-
 
 has_ext_otg:
 	sysfs_remove_group(&dwc->dev->kobj, &dwc3_otg_attr_group);

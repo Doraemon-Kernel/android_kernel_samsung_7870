@@ -60,19 +60,15 @@ struct exynos_dvfs_info {
 	unsigned int	min_support_idx;
 	unsigned int	cluster_num;
 	unsigned int	reboot_limit_freq;
-	unsigned int	min_qos_freq;	/* use only little when enable HMP */
-	unsigned int	boost_freq;	/* use only big when enable HMP */
+	unsigned int	boost_freq;	/* use only KFC when enable HMP */
 	unsigned int	boot_freq;
-	unsigned int	boot_cpu_min_qos;
-	unsigned int	boot_cpu_max_qos;
-	unsigned int	boot_cpu_min_qos_timeout;
-	unsigned int	boot_cpu_max_qos_timeout;
-#ifdef CONFIG_SEC_PM
-	unsigned int	jig_boot_cpu_max_qos;
-#endif
+	unsigned int	boot_min_qos;
+	unsigned int	boot_max_qos;
+	unsigned int	boot_lock_time;
 	unsigned int    resume_freq;
 	int		boot_freq_idx;
 	int		*bus_table;
+        int             regulator_max_support_volt;
 	bool		blocked;
 	unsigned int	en_ema;
 	unsigned int	en_smpl;
@@ -80,7 +76,6 @@ struct exynos_dvfs_info {
 	struct clk	*cpu_clk;
 	unsigned int	*volt_table;
 	unsigned int	*abb_table;
-	unsigned int	*max_support_idx_table;
 	const unsigned int	*max_op_freqs;
 	struct cpufreq_frequency_table	*freq_table;
 	struct regulator *regulator;
@@ -93,7 +88,6 @@ struct exynos_dvfs_info {
 	int (*check_smpl)(void);
 	void (*clear_smpl)(void);
 	int (*init_smpl)(void);
-	int (*deinit_smpl)(void);
 };
 
 struct cpufreq_clkdiv {
@@ -120,7 +114,6 @@ void ipa_set_clamp(int cpu, unsigned int clamp_freq, unsigned int gov_target);
 static inline void exynos_set_max_freq(int max_freq, unsigned int cpu) {}
 static inline void ipa_set_clamp(int cpu, unsigned int clamp_freq, unsigned int gov_target) {}
 #endif
-
 
 /* interface for THERMAL */
 extern void exynos_thermal_throttle(void);
@@ -155,8 +148,9 @@ typedef enum {
 	CL_ONE,
 	CL_END,
 } cluster_type;
+extern int exynos_cpufreq_regulator_register_notifier(cluster_type cluster);
 
-#if defined(CONFIG_SOC_EXYNOS8890)
+#if defined(CONFIG_SOC_EXYNOS7870)
 #define COLD_VOLT_OFFSET	25000
 #else
 #define COLD_VOLT_OFFSET	37500
@@ -165,6 +159,8 @@ typedef enum {
 #define MIN_COLD_VOLTAGE	950000
 #define NR_CLUST0_CPUS		4
 #define NR_CLUST1_CPUS		4
+#define CL0_POLICY_CPU		0
+#define CL1_POLICY_CPU		4
 
 #define ENABLE_MIN_COLD		0
 

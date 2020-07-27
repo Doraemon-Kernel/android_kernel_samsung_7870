@@ -45,9 +45,9 @@ static void fimc_is_ischain_dis_ctrl(struct fimc_is_device_ischain *device,
 		control->cmd = CONTROL_COMMAND_START;
 		control->bypass = CONTROL_BYPASS_DISABLE;
 #ifdef ENABLE_DNR
-		device->is_region->shared[350] = device->imemory.dvaddr_3dnr;
+		device->is_region->shared[350] = device->minfo->dvaddr_tpu;
 		control->buffer_number = SIZE_DNR_INTERNAL_BUF * NUM_DNR_INTERNAL_BUF;
-		control->buffer_address = device->imemory.dvaddr_shared + 350 * 4;
+		control->buffer_address = device->dvaddr_shared + 350 * 4;
 #else
 		control->buffer_number = 0;
 		control->buffer_address = 0;
@@ -118,7 +118,7 @@ static int fimc_is_ischain_dis_cfg(struct fimc_is_subdev *leader,
 	 */
 	fps = fimc_is_sensor_g_framerate(device->sensor);
 	setfile = device->setfile;
-	if (fps > 60 || (fps > 30 && ((width * height) >= SIZE_UHD)) ||
+	if (fps > 60 || (fps > 30 && ((width * height) > SIZE_WHD)) ||
 		((setfile & FIMC_IS_SETFILE_MASK) == ISS_SUB_SCENARIO_DUAL_STILL) ||
 		((setfile & FIMC_IS_SETFILE_MASK) == ISS_SUB_SCENARIO_DUAL_VIDEO))
 		full_bypass = true;

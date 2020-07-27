@@ -322,7 +322,8 @@ static inline bool count_flood(int cnt, int mask)
 	return (cnt > 0 && (cnt & mask) == 0) ? true : false;
 }
 
-void mif_pkt(u8 ch, const char *tag, struct sk_buff *skb);
+void log_ipc_pkt(u8 ch, enum ipc_layer layer, enum direction dir,
+		 struct sk_buff *skb, u8 *hdr);
 
 /* print buffer as hex string */
 int pr_buffer(const char *tag, const char *data, size_t data_len,
@@ -510,6 +511,5 @@ int argos_task_affinity_setup_label(struct task_struct *p, const char *label,
 #endif
 
 void mif_set_snapshot(bool enable);
-void set_wakeup_packet_log(bool enable);
 #endif/*__MODEM_UTILS_H__*/
 

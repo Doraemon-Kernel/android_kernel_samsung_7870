@@ -121,7 +121,7 @@ int ccic_notifier_unregister(struct notifier_block *nb)
 	return ret;
 }
 
-static void ccic_uevent_work(int id, int state)
+void ccic_uevent_work(int id, int state)
 {
 	char *water[2] = { "CCIC=WATER", NULL };
 	char *dry[2] = { "CCIC=DRY", NULL };
@@ -241,7 +241,6 @@ int ccic_notifier_notify(CC_NOTI_TYPEDEF *p_noti, void *pd, int pdic_attach)
 			((CC_NOTI_ATTACH_TYPEDEF *)p_noti)->dest,
 			((CC_NOTI_ATTACH_TYPEDEF *)p_noti)->id,
 			((CC_NOTI_ATTACH_TYPEDEF *)p_noti)->attach);
-		break;
 	default:
 		pr_info("%s: src:%01x dest:%01x id:%02x "
 			"sub1:%d sub2:%02x sub3:%02x\n", __func__,

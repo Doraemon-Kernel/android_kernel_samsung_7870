@@ -1,4 +1,4 @@
-/* linux/drivers/devfreq/exynos/exynos8890_bus_mif.c
+/* linux/drivers/devfreq/exynos8890_bus_mif.c
  *
  * Copyright (c) 2015 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
@@ -20,15 +20,12 @@
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/list.h>
-#include <linux/clk.h>
 #include <linux/workqueue.h>
 
 #include <soc/samsung/exynos-devfreq.h>
 #include <soc/samsung/bts.h>
 #include <linux/apm-exynos.h>
 #include <soc/samsung/asv-exynos.h>
-#include <linux/mcu_ipc.h>
-#include <linux/mfd/samsung/core.h>
 
 #include "../../../drivers/soc/samsung/pwrcal/pwrcal.h"
 #include "../../../drivers/soc/samsung/pwrcal/S5E8890/S5E8890-vclk.h"
@@ -37,46 +34,14 @@
 #include "exynos8890_ppmu.h"
 #endif
 
-#define DEVFREQ_MIF_REBOOT_FREQ	(1014000)
+#define DEVFREQ_MIF_REBOOT_FREQ	(3078000/2)
 #define DEVFREQ_MIF_DIFF_FREQ		(962000)
 #define DEVFREQ_MIF_CMOS_FREQ		(468000)
 #define DEVFREQ_MIF_SWITCH_FREQ_HI	(936000)
-#define DEVFREQ_MIF_SWITCH_FREQ 	(528000)
-#define DEVFREQ_MIF_BUS3_PLL_THRESHOLD	(845000)
-#define DEVFREQ_MIF_BUCK_CTRL		(1539000)
+#define DEVFREQ_MIF_SWITCH_FREQ 	(468000)
 #define SWITCH_CMOS_VOLT_OFFSET		(56250)
 
-/* definition for EVS mode */
-#define MBOX_EVS_MODE			(16)
-#define MBOX_UMTS_MODE			(18)
-#define DEVFREQ_MIF_EVS_FREQ		(1144000)
-#define DEVFREQ_MIF_UMTS_FREQ		(676000)
-
-static unsigned long origin_suspend_freq = 0;
-static struct pm_qos_request int_pm_qos_from_mif;
-
-static u32 int_min_table[] = {
-	400000,		/* MIF L0  1794MHz, INT L11 */
-	336000,		/* MIF L1  1716MHz, INT L12 */
-	336000,		/* MIF L2  1539MHz, INT L12 */
-	255000,		/* MIF L3  1352MHz, INT L13 */
-	255000,		/* MIF L4  1144MHz, INT L13 */
-	200000,		/* MIF L5  1014MHz, INT L14 */
-	200000,		/* MIF L6   845MHz, INT L14 */
-	200000,		/* MIF L7   676MHz, INT L14 */
-	200000,		/* MIF L8   546MHz, INT L14 */
-	200000,		/* MIF L9   421MHz, INT L14 */
-	200000,		/* MIF L10  286MHz, INT L16 */
-	200000		/* MIF L11  208MHz, INT L16 */
-};
-
 u32 sw_volt_table[2];
-
-struct mif_private {
-	struct regulator		*vdd;
-};
-
-struct mif_private mif_private_data;
 
 int is_dll_on(void)
 {
@@ -111,24 +76,6 @@ static int exynos8890_devfreq_mif_reboot(struct device *dev,
 	return 0;
 }
 
-static int exynos8890_devfreq_mif_pm_suspend_prepare(struct device *dev,
-					struct exynos_devfreq_data *data)
-{
-	if (!origin_suspend_freq)
-		origin_suspend_freq = data->devfreq_profile.suspend_freq;
-
-#ifdef CONFIG_MCU_IPC
-	if (mbox_get_value(MBOX_UMTS_MODE))
-		data->devfreq_profile.suspend_freq = DEVFREQ_MIF_UMTS_FREQ;
-	else if (mbox_get_value(MBOX_EVS_MODE))
-		data->devfreq_profile.suspend_freq = DEVFREQ_MIF_EVS_FREQ;
-	else
-		data->devfreq_profile.suspend_freq = origin_suspend_freq;
-#endif
-
-	return 0;
-}
-
 static int exynos8890_devfreq_cl_dvfs_start(struct exynos_devfreq_data *data)
 {
 	int ret = 0;
@@ -152,40 +99,17 @@ static int exynos8890_devfreq_cl_dvfs_stop(u32 target_idx,
 	return ret;
 }
 
-static void exynos8890_devfreq_mif_set_voltage_prepare(struct exynos_devfreq_data *data)
-{
-	/*
-	 * The Clock Gate Control should be disable before voltage change.
-	 */
-	if (cal_dfs_ext_ctrl(dvfs_mif, cal_dfs_ctrl_clk_gate, 0)) {
-		dev_err(data->dev, "failed CG control disable\n");
-		BUG_ON(1);
-	}
-}
-
-static void exynos8890_devfreq_mif_set_voltage_post(struct exynos_devfreq_data *data)
-{
-	/*
-	 * The Clock Gate Control should be enable before voltage change,
-	 * if the HWACG is enabled.
-	 */
-	if (cal_dfs_ext_ctrl(dvfs_mif, cal_dfs_ctrl_clk_gate, 1)) {
-		dev_err(data->dev, "failed CG control enable\n");
-		BUG_ON(1);
-	}
-}
-
 static int exynos8890_devfreq_mif_get_switch_freq(u32 cur_freq, u32 new_freq,
 						u32 *switch_freq)
 {
 	*switch_freq = DEVFREQ_MIF_SWITCH_FREQ;
 
-	if (cur_freq > DEVFREQ_MIF_SWITCH_FREQ_HI ||
-		new_freq > DEVFREQ_MIF_SWITCH_FREQ_HI)
+	if (cur_freq > DEVFREQ_MIF_DIFF_FREQ ||
+		new_freq > DEVFREQ_MIF_DIFF_FREQ)
 		*switch_freq = DEVFREQ_MIF_SWITCH_FREQ_HI;
 
-	if (cur_freq < DEVFREQ_MIF_BUS3_PLL_THRESHOLD ||
-		new_freq < DEVFREQ_MIF_BUS3_PLL_THRESHOLD)
+	if (cur_freq <= DEVFREQ_MIF_CMOS_FREQ ||
+		new_freq <= DEVFREQ_MIF_CMOS_FREQ)
 		*switch_freq = DEVFREQ_MIF_SWITCH_FREQ;
 
 	return 0;
@@ -218,11 +142,12 @@ out:
 static int exynos8890_devfreq_mif_get_freq(struct device *dev, u32 *cur_freq,
 					struct exynos_devfreq_data *data)
 {
-	*cur_freq = (u32)clk_get_rate(data->clk);
+	*cur_freq = (u32)cal_dfs_get_rate(dvfs_mif);
 	if (*cur_freq == 0) {
 		dev_err(dev, "failed get frequency from CAL\n");
 		return -EINVAL;
 	}
+
 
 	return 0;
 }
@@ -230,21 +155,10 @@ static int exynos8890_devfreq_mif_get_freq(struct device *dev, u32 *cur_freq,
 static int exynos8890_devfreq_mif_change_to_switch_freq(struct device *dev,
 					struct exynos_devfreq_data *data)
 {
-	int ret;
-	struct mif_private *private = (struct mif_private *)data->private_data;
-
-	if (clk_set_rate(data->sw_clk, data->switch_freq)) {
+	if (cal_dfs_set_rate_switch(dvfs_mif, data->switch_freq)) {
 		dev_err(dev, "failed to set switching frequency by CAL (%uKhz for %uKhz)\n",
 				data->switch_freq, data->new_freq);
 		return -EINVAL;
-	}
-
-	if (data->old_freq < DEVFREQ_MIF_BUCK_CTRL &&
-		data->new_freq >= DEVFREQ_MIF_BUCK_CTRL) {
-			ret = s2m_set_vth(private->vdd, true);
-			if (ret)
-				dev_err(dev, "failed to set Vth up\n");
-			return ret;
 	}
 
 	return 0;
@@ -253,47 +167,11 @@ static int exynos8890_devfreq_mif_change_to_switch_freq(struct device *dev,
 static int exynos8890_devfreq_mif_restore_from_switch_freq(struct device *dev,
 					struct exynos_devfreq_data *data)
 {
-	int ret;
-	struct mif_private *private = (struct mif_private *)data->private_data;
-
-	if (clk_set_rate(data->clk, data->new_freq)) {
+	if (cal_dfs_set_rate(dvfs_mif, data->new_freq)) {
 		dev_err(dev, "failed to set frequency by CAL (%uKhz)\n",
 				data->new_freq);
 		return -EINVAL;
 	}
-
-	if (data->old_freq >= DEVFREQ_MIF_BUCK_CTRL &&
-		data->new_freq < DEVFREQ_MIF_BUCK_CTRL) {
-			ret = s2m_set_vth(private->vdd, false);
-			if (ret)
-				dev_err(dev, "failed to set Vth down\n");
-			return ret;
-	}
-
-	return 0;
-}
-
-static int exynos8890_devfreq_mif_set_freq_prepare(struct device *dev,
-					struct exynos_devfreq_data *data)
-{
-	if (data->old_freq < data->new_freq)
-		pm_qos_update_request(&int_pm_qos_from_mif,
-					int_min_table[data->new_idx]);
-
-	return 0;
-}
-
-static int exynos8890_devfreq_mif_set_freq_post(struct device *dev,
-					struct exynos_devfreq_data *data)
-{
-	if (data->old_freq > data->new_freq)
-		pm_qos_update_request(&int_pm_qos_from_mif,
-					int_min_table[data->new_idx]);
-
-#ifdef CONFIG_MCU_IPC
-	/* Send information about MIF frequency to mailbox */
-	mbox_set_value(13, data->new_freq);
-#endif
 
 	return 0;
 }
@@ -302,7 +180,6 @@ static int exynos8890_devfreq_mif_init_freq_table(struct device *dev,
 						struct exynos_devfreq_data *data)
 {
 	u32 max_freq, min_freq, cur_freq;
-	unsigned long tmp_max, tmp_min;
 	struct dev_pm_opp *target_opp;
 	u32 flags = 0;
 	int i, ret;
@@ -325,8 +202,7 @@ static int exynos8890_devfreq_mif_init_freq_table(struct device *dev,
 	if (max_freq < data->max_freq) {
 		rcu_read_lock();
 		flags |= DEVFREQ_FLAG_LEAST_UPPER_BOUND;
-		tmp_max = (unsigned long)max_freq;
-		target_opp = devfreq_recommended_opp(dev, &tmp_max, flags);
+		target_opp = devfreq_recommended_opp(dev, (unsigned long *)&max_freq, flags);
 		if (IS_ERR(target_opp)) {
 			rcu_read_unlock();
 			dev_err(dev, "not found valid OPP for max_freq\n");
@@ -349,8 +225,7 @@ static int exynos8890_devfreq_mif_init_freq_table(struct device *dev,
 	if (min_freq > data->min_freq) {
 		rcu_read_lock();
 		flags &= ~DEVFREQ_FLAG_LEAST_UPPER_BOUND;
-		tmp_min = (unsigned long)min_freq;
-		target_opp = devfreq_recommended_opp(dev, &tmp_min, flags);
+		target_opp = devfreq_recommended_opp(dev, (unsigned long *)&min_freq, flags);
 		if (IS_ERR(target_opp)) {
 			rcu_read_unlock();
 			dev_err(dev, "not found valid OPP for min_freq\n");
@@ -364,7 +239,7 @@ static int exynos8890_devfreq_mif_init_freq_table(struct device *dev,
 	dev_info(dev, "min_freq: %uKhz, max_freq: %uKhz\n",
 			data->min_freq, data->max_freq);
 
-	cur_freq = clk_get_rate(data->clk);
+	cur_freq = cal_dfs_get_rate(dvfs_mif);
 	dev_info(dev, "current frequency: %uKhz\n", cur_freq);
 
 	for (i = 0; i < data->max_state; i++) {
@@ -455,44 +330,12 @@ static int exynos8890_mif_ppmu_unregister(struct device *dev,
 static int exynos8890_devfreq_mif_init(struct device *dev,
 					struct exynos_devfreq_data *data)
 {
-	/* For INT minimum lock through MIF frequncy */
-	pm_qos_add_request(&int_pm_qos_from_mif, PM_QOS_DEVICE_THROUGHPUT, 0);
-
-	data->clk = clk_get(dev, "dvfs_mif");
-	if (IS_ERR_OR_NULL(data->clk)) {
-		dev_err(dev, "failed get dvfs vclk\n");
-		return -ENODEV;
-	}
-
-	data->sw_clk = clk_get(dev, "dvfs_mif_sw");
-	if (IS_ERR_OR_NULL(data->sw_clk)) {
-		dev_err(dev, "failed get dvfs sw vclk\n");
-		clk_put(data->clk);
-		return -ENODEV;
-	}
-
-	/* for pwm mode control */
-	mif_private_data.vdd = regulator_get(NULL, "vdd_mem");
-	if (IS_ERR(mif_private_data.vdd)) {
-		dev_err(data->dev, "failed to get regulator(vdd_mem)\n");
-		clk_put(data->clk);
-		clk_put(data->sw_clk);
-		return -ENODEV;
-	}
-
-	data->private_data = (void *)&mif_private_data;
-
 	return 0;
 }
 
 static int exynos8890_devfreq_mif_exit(struct device *dev,
 					struct exynos_devfreq_data *data)
 {
-	pm_qos_remove_request(&int_pm_qos_from_mif);
-
-	clk_put(data->sw_clk);
-	clk_put(data->clk);
-
 	return 0;
 }
 
@@ -508,15 +351,10 @@ static int __init exynos8890_devfreq_mif_init_prepare(struct exynos_devfreq_data
 	data->ops.get_freq = exynos8890_devfreq_mif_get_freq;
 	data->ops.change_to_switch_freq = exynos8890_devfreq_mif_change_to_switch_freq;
 	data->ops.restore_from_switch_freq = exynos8890_devfreq_mif_restore_from_switch_freq;
-	data->ops.set_freq_prepare = exynos8890_devfreq_mif_set_freq_prepare;
-	data->ops.set_freq_post = exynos8890_devfreq_mif_set_freq_post;
 	data->ops.init_freq_table = exynos8890_devfreq_mif_init_freq_table;
 	data->ops.cl_dvfs_start = exynos8890_devfreq_cl_dvfs_start;
 	data->ops.cl_dvfs_stop = exynos8890_devfreq_cl_dvfs_stop;
-	data->ops.set_voltage_prepare = exynos8890_devfreq_mif_set_voltage_prepare;
-	data->ops.set_voltage_post = exynos8890_devfreq_mif_set_voltage_post;
 	data->ops.reboot = exynos8890_devfreq_mif_reboot;
-	data->ops.pm_suspend_prepare = exynos8890_devfreq_mif_pm_suspend_prepare;
 	data->ops.cmu_dump = exynos8890_devfreq_mif_cmu_dump;
 
 	mif_data = data;

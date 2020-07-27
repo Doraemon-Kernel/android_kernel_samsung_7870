@@ -26,7 +26,6 @@
 #include <linux/cpumask.h>
 #include <linux/interrupt.h>
 #include <linux/sec_argos.h>
-#include <linux/proc_fs.h>
 
 #define ARGOS_NAME "argos"
 #define TYPE_SHIFT 4
@@ -45,7 +44,6 @@ enum {
 	INTFREQ,
 	TASK_AFFINITY_EN,
 	IRQ_AFFINITY_EN,
-	HMP_BOOST_EN,
 	ITEM_MAX,
 };
 
@@ -88,12 +86,10 @@ struct argos {
 	bool task_hotplug_disable;
 	struct list_head irq_affinity_list;
 	bool irq_hotplug_disable;
-	bool hmpboost_enable;
 	bool argos_block;
 	struct blocking_notifier_head argos_notifier;
 	/* protect prev_level, qos, task/irq_hotplug_disable, hmpboost_enable */
 	struct mutex level_mutex;
-	unsigned long last_speed;
 };
 
 struct argos_platform_data {
@@ -368,31 +364,6 @@ int argos_irq_affinity_apply(int dev_num, bool enable)
 	return result;
 }
 
-int argos_hmpboost_apply(int dev_num, bool enable)
-{
-	bool *hmpboost_enable;
-
-	hmpboost_enable = &argos_pdata->devices[dev_num].hmpboost_enable;
-
-	if (enable) {
-		/* disable -> enable */
-		if (*hmpboost_enable == false) {
-			set_hmp_boost(true);
-			*hmpboost_enable = true;
-			pr_info("%s: hmp boost enable [%d]\n", __func__, dev_num);
-		}
-	} else {
-		/* enable -> disable */
-		if (*hmpboost_enable == true) {
-			set_hmp_boost(false);
-			*hmpboost_enable = false;
-			pr_info("%s: hmp boost disable [%d]\n", __func__, dev_num);
-		}
-	}
-
-	return 0;
-}
-
 static void argos_freq_unlock(int type)
 {
 	struct argos_pm_qos *qos = argos_pdata->devices[type].qos;
@@ -491,9 +462,7 @@ void argos_block_enable(char *req_name, bool set)
 		argos_freq_unlock(dev_num);
 		argos_task_affinity_apply(dev_num, 0);
 		argos_irq_affinity_apply(dev_num, 0);
-		argos_hmpboost_apply(dev_num, 0);
 		cnode->prev_level = -1;
-		cnode->last_speed = 0;
 		mutex_unlock(&cnode->level_mutex);
 	} else {
 		cnode->argos_block = false;
@@ -540,9 +509,9 @@ static int argos_pm_qos_notify(struct notifier_block *nfb,
 	cnode = &argos_pdata->devices[type];
 
 	prev_level = cnode->prev_level;
-	cnode->last_speed = speed;
 
 	pr_debug("%s name:%s, speed:%ldMbps\n", __func__, cnode->desc, speed);
+
 	argos_blocked = cnode->argos_block;
 
 	/* Find proper level */
@@ -582,7 +551,6 @@ static int argos_pm_qos_notify(struct notifier_block *nfb,
 				argos_freq_unlock(type);
 				argos_task_affinity_apply(type, 0);
 				argos_irq_affinity_apply(type, 0);
-				argos_hmpboost_apply(type, 0);
 			} else {
 				unsigned enable_flag;
 
@@ -593,9 +561,6 @@ static int argos_pm_qos_notify(struct notifier_block *nfb,
 
 				enable_flag = argos_pdata->devices[type].tables[level].items[IRQ_AFFINITY_EN];
 				argos_irq_affinity_apply(type, enable_flag);
-
-				enable_flag = argos_pdata->devices[type].tables[level].items[HMP_BOOST_EN];
-				argos_hmpboost_apply(type, enable_flag);
 
 				if (cnode->argos_notifier.head) {
 					pr_debug("%s: Call argos notifier(%s lev:%d)\n", __func__, cnode->desc, level);
@@ -675,10 +640,8 @@ static int argos_parse_dt(struct device *dev)
 		INIT_LIST_HEAD(&cnode->irq_affinity_list);
 		cnode->task_hotplug_disable = false;
 		cnode->irq_hotplug_disable = false;
-		cnode->hmpboost_enable = false;
 		cnode->argos_block = false;
 		cnode->prev_level = -1;
-		cnode->last_speed = 0;
 		mutex_init(&cnode->level_mutex);
 		cnode->qos = devm_kzalloc(dev, sizeof(struct argos_pm_qos), GFP_KERNEL);
 		if (!cnode->qos) {
@@ -773,34 +736,8 @@ static struct platform_driver argos_driver = {
 	.remove = argos_remove
 };
 
-static int sec_argos_proc_show(struct seq_file *m, void *v)
-{
-	struct argos *cnode;
-	int i;
-
-	for (i = 0; i < argos_pdata->ndevice; i++) {
-		cnode = &argos_pdata->devices[i];
-		if (!strncmp("WIFI", cnode->desc, 5))
-			seq_printf(m, "%ld", cnode->last_speed);
-	}
-	return 0;
-}
-
-static int sec_argos_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, sec_argos_proc_show, NULL);
-}
-
-static const struct file_operations sec_argos_proc_fops = {
-	.open	= sec_argos_proc_open,
-	.read	= seq_read,
-	.llseek	= seq_lseek,
-	.release= single_release,
-};
-
 static int __init argos_init(void)
 {
-	proc_create("sec_argos", 0, NULL, &sec_argos_proc_fops);
 	return platform_driver_register(&argos_driver);
 }
 

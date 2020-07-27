@@ -41,9 +41,9 @@ static int fimc_is_hw_scp_handle_interrupt(u32 id, void *context)
 		if (!atomic_read(&hw_ip->hardware->stream_on))
 			info_hw("[ID:%d][F:%d]F.S\n", hw_ip->id, hw_ip->fcount);
 
-		atomic_set(&hw_ip->Vvalid, V_VALID);
+		atomic_set(&hw_ip->status.Vvalid, V_VALID);
 		clear_bit(HW_CONFIG, &hw_ip->state);
-		atomic_inc(&hw_ip->fs_count);
+		atomic_inc(&hw_ip->count.fs);
 	}
 
 	if (status & (1 << INTR_SCALER_CORE_END)) {
@@ -51,14 +51,14 @@ static int fimc_is_hw_scp_handle_interrupt(u32 id, void *context)
 		if (!atomic_read(&hw_ip->hardware->stream_on))
 			info_hw("[ID:%d][F:%d]F.E\n", hw_ip->id, hw_ip->fcount);
 
-		atomic_set(&hw_ip->Vvalid, V_BLANK);
-		if (atomic_read(&hw_ip->fs_count) == atomic_read(&hw_ip->fe_count)) {
-			err_hw("[MCSC] fs(%d), fe(%d), cl(%d)\n",
-				atomic_read(&hw_ip->fs_count),
-				atomic_read(&hw_ip->fe_count),
-				atomic_read(&hw_ip->cl_count));
+		atomic_set(&hw_ip->status.Vvalid, V_BLANK);
+		if (atomic_read(&hw_ip->count.fs) == atomic_read(&hw_ip->count.fe)) {
+			err_hw("[MCSC] fs(%d), fe(%d), dma(%d)\n",
+				atomic_read(&hw_ip->count.fs),
+				atomic_read(&hw_ip->count.fe),
+				atomic_read(&hw_ip->count.dma));
 		}
-		atomic_inc(&hw_ip->fe_count);
+		atomic_inc(&hw_ip->count.fe);
 		fimc_is_hardware_frame_done(hw_ip, NULL, -1, FIMC_IS_HW_CORE_END,
 			0, FRAME_DONE_NORMAL);
 	}
@@ -68,7 +68,7 @@ static int fimc_is_hw_scp_handle_interrupt(u32 id, void *context)
 		if (!atomic_read(&hw_ip->hardware->stream_on))
 			info_hw("[ID:%d][F:%d]F.E DMA\n", hw_ip->id, hw_ip->fcount);
 
-		atomic_inc(&hw_ip->cl_count);
+		atomic_inc(&hw_ip->count.dma);
 		fimc_is_hardware_frame_done(hw_ip, NULL, WORK_SCP_FDONE, ENTRY_SCP,
 			0, FRAME_DONE_NORMAL);
 	}
@@ -90,7 +90,8 @@ const struct fimc_is_hw_ip_ops fimc_is_hw_scp_ops = {
 	.load_setfile		= fimc_is_hw_scp_load_setfile,
 	.apply_setfile		= fimc_is_hw_scp_apply_setfile,
 	.delete_setfile		= fimc_is_hw_scp_delete_setfile,
-	.size_dump		= fimc_is_hw_scp_size_dump
+	.size_dump		= fimc_is_hw_scp_size_dump,
+	.clk_gate		= fimc_is_hardware_clk_gate
 };
 
 int fimc_is_hw_scp_probe(struct fimc_is_hw_ip *hw_ip, struct fimc_is_interface *itf,
@@ -108,12 +109,12 @@ int fimc_is_hw_scp_probe(struct fimc_is_hw_ip *hw_ip, struct fimc_is_interface *
 	hw_ip->ops  = &fimc_is_hw_scp_ops;
 	hw_ip->itf  = itf;
 	hw_ip->itfc = itfc;
-	hw_ip->fcount = 0;
+	atomic_set(&hw_ip->fcount, 0);
 	hw_ip->internal_fcount = 0;
 	hw_ip->is_leader = false;
-	atomic_set(&hw_ip->Vvalid, 0);
-	atomic_set(&hw_ip->ref_count, 0);
-	init_waitqueue_head(&hw_ip->wait_queue);
+	atomic_set(&hw_ip->status.Vvalid, V_BLANK);
+	atomic_set(&hw_ip->rsccount, 0);
+	init_waitqueue_head(&hw_ip->status.wait_queue);
 
 	/* set scp sfr base address */
 	hw_slot = fimc_is_hw_slot_id(id);
@@ -153,7 +154,7 @@ int fimc_is_hw_scp_open(struct fimc_is_hw_ip *hw_ip, u32 instance, u32 *size)
 		return -ENODEV;
 	}
 
-	atomic_set(&hw_ip->Vvalid, V_BLANK);
+	atomic_set(&hw_ip->status.Vvalid, V_BLANK);
 
 	return ret;
 }
@@ -181,7 +182,7 @@ int fimc_is_hw_scp_close(struct fimc_is_hw_ip *hw_ip, u32 instance)
 	if (!test_bit(HW_OPEN, &hw_ip->state))
 		return 0;
 
-	info_hw("[%d]close (%d)(%d)\n", instance, hw_ip->id, atomic_read(&hw_ip->ref_count));
+	info_hw("[%d]close (%d)(%d)\n", instance, hw_ip->id, atomic_read(&hw_ip->rsccount));
 
 	return ret;
 }
@@ -214,7 +215,8 @@ int fimc_is_hw_scp_disable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_m
 	if (!test_bit(hw_ip->id, &hw_map))
 		return 0;
 
-	info_hw("[%d][ID:%d]stream_off \n", instance, hw_ip->id);
+	info_hw("[%d][ID:%d]scp_disable: Vvalid(%d)\n", instance, hw_ip->id,
+		atomic_read(&hw_ip->status.Vvalid));
 
 	if (test_bit(HW_RUN, &hw_ip->state)) {
 		/* disable SCP */
@@ -227,7 +229,7 @@ int fimc_is_hw_scp_disable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_m
 			return -ENODEV;
 		}
 
-		atomic_set(&hw_ip->Vvalid, V_BLANK);
+		atomic_set(&hw_ip->status.Vvalid, V_BLANK);
 		clear_bit(HW_RUN, &hw_ip->state);
 		clear_bit(HW_CONFIG, &hw_ip->state);
 	} else {
@@ -587,12 +589,12 @@ int fimc_is_hw_scp_input_crop(u32 instance, struct fimc_is_hw_ip *hw_ip)
 	struct param_otf_output *otf_output = &(param->otf_output);
 	struct param_dma_output *dma_output = &(param->dma_output);
 
-	if (param->otf_output.cmd == OTF_OUTPUT_COMMAND_ENABLE) {
-		dst_width  = otf_output->width;
-		dst_height = otf_output->height;
-	} else if (dma_output->cmd == DMA_OUTPUT_COMMAND_ENABLE) {
+	if (dma_output->cmd == DMA_OUTPUT_COMMAND_ENABLE) {
 		dst_width  = dma_output->width;
 		dst_height = dma_output->height;
+	} else {
+		dst_width  = otf_output->width;
+		dst_height = otf_output->height;
 	}
 
 	fimc_is_hw_scp_adjust_pre_ratio(otf_input->width, otf_input->height,

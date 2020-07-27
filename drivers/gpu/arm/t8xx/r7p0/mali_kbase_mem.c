@@ -469,7 +469,7 @@ int kbase_region_tracker_init(struct kbase_context *kctx)
 
 	/* all have SAME_VA */
 	same_va_reg = kbase_alloc_free_region(kctx, 1,
-			(1ULL << (same_va_bits - PAGE_SHIFT)) - 1,
+			(1ULL << (same_va_bits - PAGE_SHIFT)) - 2,
 			KBASE_REG_ZONE_SAME_VA);
 
 	if (!same_va_reg)
@@ -525,13 +525,12 @@ int kbase_mem_init(struct kbase_device *kbdev)
 	KBASE_DEBUG_ASSERT(kbdev);
 
 	memdev = &kbdev->memdev;
-	kbdev->mem_pool_max_size_default = KBASE_MEM_POOL_MAX_SIZE_KCTX;
 
 	/* Initialize memory usage */
 	atomic_set(&memdev->used_pages, 0);
 
-	return kbase_mem_pool_init(&kbdev->mem_pool,
-			KBASE_MEM_POOL_MAX_SIZE_KBDEV, kbdev, NULL);
+	/* nothing to do, zero-inited when struct kbase_device was created */
+	return 0;
 }
 
 void kbase_mem_halt(struct kbase_device *kbdev)
@@ -551,8 +550,6 @@ void kbase_mem_term(struct kbase_device *kbdev)
 	pages = atomic_read(&memdev->used_pages);
 	if (pages != 0)
 		dev_warn(kbdev->dev, "%s: %d pages in use!\n", __func__, pages);
-
-	kbase_mem_pool_term(&kbdev->mem_pool);
 }
 
 KBASE_EXPORT_TEST_API(kbase_mem_term);
@@ -619,18 +616,6 @@ void kbase_free_alloced_region(struct kbase_va_region *reg)
 		kbase_mem_phy_alloc_put(reg->gpu_alloc);
 		/* To detect use-after-free in debug builds */
 		KBASE_DEBUG_CODE(reg->flags |= KBASE_REG_FREE);
-		/* MALI_SEC_SECURE_RENDERING */
-#if MALI_SEC_ASP_SECURE_RENDERING
-		if ( (reg->flags & KBASE_REG_SECURE) && !(reg->flags & KBASE_REG_SECURE_CRC)) {
-			struct kbase_device *kbdev = reg->kctx->kbdev;
-			if (kbdev->secure_mode_support == true && kbdev->secure_ops != NULL) {
-				int err = -EINVAL;
-				err = kbdev->secure_ops->secure_mem_disable(kbdev, reg);
-				if (err)
-					dev_warn(kbdev->dev, "Failed to disable secure memory : 0x%08x\n", err);
-			}
-		}
-#endif
 	}
 	kfree(reg);
 }
@@ -646,7 +631,6 @@ void kbase_mmu_update(struct kbase_context *kctx)
 	 *
 	 * as_nr won't change because the caller has the runpool_irq lock */
 	KBASE_DEBUG_ASSERT(kctx->as_nr != KBASEP_AS_NR_INVALID);
-	lockdep_assert_held(&kctx->kbdev->as[kctx->as_nr].transaction_mutex);
 
 	kctx->kbdev->mmu_mode->update(kctx);
 }
@@ -713,7 +697,7 @@ int kbase_gpu_mmap(struct kbase_context *kctx, struct kbase_va_region *reg, u64 
 			} else {
 				err = kbase_mmu_insert_single_page(kctx,
 					reg->start_pfn + i * stride,
-					page_to_phys(kctx->aliasing_sink_page),
+					kctx->aliasing_sink_page,
 					alloc->imported.alias.aliased[i].length,
 					(reg->flags & mask) | attr);
 
@@ -1002,7 +986,7 @@ int kbase_mem_free_region(struct kbase_context *kctx, struct kbase_va_region *re
 
 	KBASE_DEBUG_ASSERT(NULL != kctx);
 	KBASE_DEBUG_ASSERT(NULL != reg);
-	lockdep_assert_held(&kctx->reg_lock);
+	BUG_ON(!mutex_is_locked(&kctx->reg_lock));
 	err = kbase_gpu_munmap(kctx, reg);
 	if (err) {
 		dev_warn(reg->kctx->kbdev->dev, "Could not unmap from the GPU...\n");
@@ -1152,7 +1136,7 @@ int kbase_alloc_phy_pages_helper(
 	 * allocation is visible to the OOM killer */
 	kbase_process_page_usage_inc(alloc->imported.kctx, nr_pages_requested);
 
-	if (kbase_mem_pool_alloc_pages(&alloc->imported.kctx->mem_pool,
+	if (kbase_mem_allocator_alloc(&alloc->imported.kctx->osalloc,
 			nr_pages_requested, alloc->pages + alloc->nents) != 0)
 		goto no_alloc;
 
@@ -1192,7 +1176,7 @@ int kbase_free_phy_pages_helper(
 
 	syncback = alloc->properties & KBASE_MEM_PHY_ALLOC_ACCESSED_CACHED;
 
-	kbase_mem_pool_free_pages(&alloc->imported.kctx->mem_pool,
+	kbase_mem_allocator_free(&alloc->imported.kctx->osalloc,
 				  nr_pages_to_free,
 				  start_free,
 				  syncback);
@@ -1339,12 +1323,9 @@ bool kbase_check_alloc_flags(unsigned long flags)
 
 bool kbase_check_import_flags(unsigned long flags)
 {
-/* MALI_SEC_SECURE_RENDERING */
-#if !MALI_SEC_ASP_SECURE_RENDERING
 	/* Only known input flags should be set. */
 	if (flags & ~BASE_MEM_FLAGS_INPUT_MASK)
 		return false;
-#endif
 
 	/* At least one flag should be set */
 	if (flags == 0)

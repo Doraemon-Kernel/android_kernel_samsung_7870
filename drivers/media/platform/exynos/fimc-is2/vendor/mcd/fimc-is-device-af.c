@@ -60,7 +60,7 @@ static void fimc_is_af_i2c_config(struct i2c_client *client, bool onoff)
 		}
 	} else {
 		/* OFF */
-		pinctrl_i2c = devm_pinctrl_get_select(i2c_dev, "default");
+		pinctrl_i2c = devm_pinctrl_get_select(i2c_dev, "off_i2c");
 		if (IS_ERR_OR_NULL(pinctrl_i2c)) {
 			printk(KERN_ERR "%s: Failed to configure i2c pin\n", __func__);
 		} else {
@@ -193,10 +193,10 @@ int fimc_is_af_power(struct fimc_is_device_af *af_device, bool onoff)
 {
 	int ret = 0;
 
-	/*VDDAF_2.8V_CAM*/
-	ret = fimc_is_af_ldo_enable("VDDAF_2.8V_CAM", onoff);
+	/*CAM_AF_2.8V_AP*/
+	ret = fimc_is_af_ldo_enable("CAM_AF_2.8V_AP", onoff);
 	if (ret) {
-		err("failed to power control VDDAF_2.8V_CAM, onoff = %d", onoff);
+		err("failed to power control CAM_AF_2.8V_AP, onoff = %d", onoff);
 		return -EINVAL;
 	}
 
@@ -224,10 +224,10 @@ int fimc_is_af_power(struct fimc_is_device_af *af_device, bool onoff)
 #endif /* CAMERA_USE_OIS_VDD_1_8V */
 #endif
 
-	/*VDDIO_1.8V_CAM*/
-	ret = fimc_is_af_ldo_enable("VDDIO_1.8V_CAM", onoff);
+	/*CAM_IO_1.8V_AP*/
+	ret = fimc_is_af_ldo_enable("CAM_IO_1.8V_AP", onoff);
 	if (ret) {
-		err("failed to power control VDDIO_1.8V_CAM, onoff = %d", onoff);
+		err("failed to power control CAM_IO_1.8V_AP, onoff = %d", onoff);
 		return -EINVAL;
 	}
 
@@ -308,8 +308,8 @@ int16_t fimc_is_af_enable(void *device, bool onoff)
 			pr_info("af_noise : count = %d\n", af_noise_count);
 		} else {
 			/* Check the Power Pins */
-			af_regulator = fimc_is_check_regulator_status("VDDAF_2.8V_CAM");
-			io_regulator = fimc_is_check_regulator_status("VDDIO_1.8V_CAM");
+			af_regulator = fimc_is_check_regulator_status("CAM_AF_2.8V_AP");
+			io_regulator = fimc_is_check_regulator_status("CAM_IO_1.8V_AP");
 
 			if (af_regulator && io_regulator) {
 				ret = fimc_is_af_i2c_write(af_device->client, 0x02, 0x40);
@@ -335,8 +335,8 @@ power_off:
 			fimc_is_af_i2c_config(af_device->client, false);
 		}
 
-		af_regulator = fimc_is_check_regulator_status("VDDAF_2.8V_CAM");
-		io_regulator = fimc_is_check_regulator_status("VDDIO_1.8V_CAM");
+		af_regulator = fimc_is_check_regulator_status("CAM_AF_2.8V_AP");
+		io_regulator = fimc_is_check_regulator_status("CAM_IO_1.8V_AP");
 		if (af_regulator && io_regulator) {
 			fimc_is_af_power(af_device, false);
 		} else {
@@ -455,7 +455,7 @@ static int fimc_is_af_remove(struct i2c_client *client)
 
 static const struct i2c_device_id af_id[] = {
 	{FIMC_IS_AF_DEV_NAME, 0},
-	{}
+	{},
 };
 MODULE_DEVICE_TABLE(i2c, af_id);
 

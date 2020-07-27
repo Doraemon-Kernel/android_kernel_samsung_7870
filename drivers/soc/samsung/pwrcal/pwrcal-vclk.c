@@ -579,10 +579,7 @@ static int m1d1g1_set(struct vclk *vclk, unsigned long freq_to)
 
 	for (pidx = 0; pidx < num_of_parents && min_diff != 0; pidx++) {
 		for (didx = 1; didx < max_ratio + 1 && min_diff != 0; didx++) {
-			if (parent_freq[pidx])
-				cur_freq = parent_freq[pidx] / didx;
-			else
-				cur_freq = 0;
+			cur_freq = parent_freq[pidx] / didx;
 			if (freq_to >= cur_freq) {
 				if (min_diff > freq_to - cur_freq) {
 					min_diff = freq_to - cur_freq;
@@ -992,9 +989,10 @@ struct pwrcal_vclk_none vclk_0;
 int vclk_setrate(struct vclk *vclk, unsigned long rate)
 {
 	int ret = 0;
-#ifdef CONFIG_EXYNOS_SNAPSHOT_CLK
+#if defined(CONFIG_EXYNOS_SNAPSHOT)
 	const char *name = "vclk_setrate";
 #endif
+
 	if (!vclk->ref_count && vclk->ops->set_rate) {
 		vclk->vfreq = rate;
 		goto out;
@@ -1018,7 +1016,7 @@ out:
 unsigned long vclk_getrate(struct vclk *vclk)
 {
 	int ret = 0;
-#ifdef CONFIG_EXYNOS_SNAPSHOT_CLK
+#if defined(CONFIG_EXYNOS_SNAPSHOT)
 	const char *name = "vclk_getrate";
 #endif
 
@@ -1042,9 +1040,10 @@ int vclk_enable(struct vclk *vclk)
 {
 	int ret = 0;
 	unsigned int tmp;
-#ifdef CONFIG_EXYNOS_SNAPSHOT_CLK
+#if defined(CONFIG_EXYNOS_SNAPSHOT)
 	const char *name = "vclk_enable";
 #endif
+
 	if (vclk->ref_count++)
 		goto out;
 
@@ -1080,9 +1079,10 @@ int vclk_disable(struct vclk *vclk)
 {
 	int ret = 0;
 	int parent_disable = 0;
-#ifdef CONFIG_EXYNOS_SNAPSHOT_CLK
+#if defined(CONFIG_EXYNOS_SNAPSHOT)
 	const char *name = "vclk_disable";
 #endif
+
 	if (vclk->ref_count)
 		parent_disable = 1;
 

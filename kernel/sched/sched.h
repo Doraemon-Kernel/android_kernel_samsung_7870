@@ -469,8 +469,6 @@ struct dl_rq {
 #else
 	struct dl_bw dl_bw;
 #endif
-	/* This is the "average utilization" for this runqueue */
-	s64 avg_bw;
 };
 
 #ifdef CONFIG_SMP
@@ -550,8 +548,6 @@ struct rq {
 	struct load_weight load;
 	unsigned long nr_load_updates;
 	u64 nr_switches;
-
-	unsigned long sysload_avg_ratio;
 
 	struct cfs_rq cfs;
 	struct rt_rq rt;
@@ -658,7 +654,6 @@ struct rq {
 #ifdef CONFIG_CPU_IDLE
 	/* Must be inspected within a rcu lock section */
 	struct cpuidle_state *idle_state;
-	int idle_state_idx;
 #endif
 };
 
@@ -888,11 +883,7 @@ static inline void __set_task_cpu(struct task_struct *p, unsigned int cpu)
 	 * per-task data have been completed by this moment.
 	 */
 	smp_wmb();
-#ifdef CONFIG_THREAD_INFO_IN_TASK
-	p->cpu = cpu;
-#else
 	task_thread_info(p)->cpu = cpu;
-#endif
 	p->wake_cpu = cpu;
 #endif
 }
@@ -1014,10 +1005,9 @@ static inline void finish_lock_switch(struct rq *rq, struct task_struct *prev)
 	 * After ->on_cpu is cleared, the task can be moved to a different CPU.
 	 * We must ensure this doesn't happen until the switch is completely
 	 * finished.
-	 *
-	 * Pairs with the control dependency and rmb in try_to_wake_up().
 	 */
-	smp_store_release(&prev->on_cpu, 0);
+	smp_wmb();
+	prev->on_cpu = 0;
 #endif
 #ifdef CONFIG_DEBUG_SPINLOCK
 	/* this is a valid case when another task releases the spinlock */
@@ -1207,17 +1197,6 @@ static inline struct cpuidle_state *idle_get_state(struct rq *rq)
 	WARN_ON(!rcu_read_lock_held());
 	return rq->idle_state;
 }
-
-static inline void idle_set_state_idx(struct rq *rq, int idle_state_idx)
-{
-	rq->idle_state_idx = idle_state_idx;
-}
-
-static inline int idle_get_state_idx(struct rq *rq)
-{
-	WARN_ON(!rcu_read_lock_held());
-	return rq->idle_state_idx;
-}
 #else
 static inline void idle_set_state(struct rq *rq,
 				  struct cpuidle_state *idle_state)
@@ -1227,15 +1206,6 @@ static inline void idle_set_state(struct rq *rq,
 static inline struct cpuidle_state *idle_get_state(struct rq *rq)
 {
 	return NULL;
-}
-
-static inline void idle_set_state_idx(struct rq *rq, int idle_state_idx)
-{
-}
-
-static inline int idle_get_state_idx(struct rq *rq)
-{
-	return -1;
 }
 #endif
 
@@ -1264,11 +1234,18 @@ extern void update_idle_cpu_load(struct rq *this_rq);
 
 extern void init_task_runnable_average(struct task_struct *p);
 
+#ifdef CONFIG_SCHED_AVG_NR_RUNNING
+extern void sched_update_avg_nr_running(int cpu, unsigned long nr_running);
+#else
+static inline void sched_update_avg_nr_running(int cpu, unsigned long nr_running) { }
+#endif
+
 static inline void add_nr_running(struct rq *rq, unsigned count)
 {
 	unsigned prev_nr = rq->nr_running;
 
 	rq->nr_running = prev_nr + count;
+	sched_update_avg_nr_running(cpu_of(rq), rq->nr_running);
 
 	if (prev_nr < 2 && rq->nr_running >= 2) {
 #ifdef CONFIG_SMP
@@ -1295,6 +1272,7 @@ static inline void add_nr_running(struct rq *rq, unsigned count)
 static inline void sub_nr_running(struct rq *rq, unsigned count)
 {
 	rq->nr_running -= count;
+	sched_update_avg_nr_running(cpu_of(rq), rq->nr_running);
 }
 
 static inline void rq_last_tick_reset(struct rq *rq)
@@ -1349,13 +1327,6 @@ static inline int hrtick_enabled(struct rq *rq)
 
 #ifdef CONFIG_SMP
 extern void sched_avg_update(struct rq *rq);
-extern struct static_key __sched_freq;
-
-static inline bool sched_freq(void)
-{
-	return static_key_false(&__sched_freq);
-}
-
 static inline void sched_rt_avg_update(struct rq *rq, u64 rt_delta)
 {
 	rq->rt_avg += rt_delta;

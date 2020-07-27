@@ -51,14 +51,6 @@ static void kbasep_instr_hwcnt_cacheclean(struct kbase_device *kbdev)
 	KBASE_DEBUG_ASSERT(kbdev->hwcnt.backend.state ==
 					KBASE_INSTR_STATE_REQUEST_CLEAN);
 
-#ifdef MALI_SEC_HWCNT
-	/* consider hwcnt state before register access */
-	if (kbdev->hwcnt.backend.state != KBASE_INSTR_STATE_REQUEST_CLEAN) {
-		spin_unlock_irqrestore(&kbdev->hwcnt.lock, flags);
-		return;
-	}
-#endif
-
 	/* Enable interrupt */
 	spin_lock_irqsave(&kbdev->pm.power_change_lock, pm_flags);
 	irq_mask = kbase_reg_read(kbdev, GPU_CONTROL_REG(GPU_IRQ_MASK), NULL);
@@ -104,9 +96,7 @@ int kbase_instr_hwcnt_enable_internal(struct kbase_device *kbdev,
 
 	/* Request the cores early on synchronously - we'll release them on any
 	 * errors (e.g. instrumentation already active) */
-#ifndef MALI_SEC_HWCNT
 	kbase_pm_request_cores_sync(kbdev, true, shader_cores_needed);
-#endif
 
 	spin_lock_irqsave(&kbdev->hwcnt.lock, flags);
 
@@ -269,10 +259,8 @@ int kbase_instr_hwcnt_disable_internal(struct kbase_context *kctx)
 
 	kbase_pm_ca_instr_disable(kbdev);
 
-#ifndef MALI_SEC_HWCNT
 	kbase_pm_unrequest_cores(kbdev, true,
 		kbase_pm_get_present_cores(kbdev, KBASE_PM_CORE_SHADER));
-#endif
 
 	spin_unlock_irqrestore(&kbdev->hwcnt.lock, flags);
 
@@ -458,17 +446,6 @@ int kbase_instr_hwcnt_wait_for_dump(struct kbase_context *kctx)
 	int err;
 
 	/* Wait for dump & cacheclean to complete */
-#ifdef MALI_SEC_HWCNT
-	if (kbdev->hwcnt.is_hwcnt_attach) {
-		int ret = wait_event_timeout(kbdev->hwcnt.backend.wait, kbdev->hwcnt.backend.triggered != 0, kbdev->hwcnt.timeout);
-		if (ret == 0) {
-			kbdev->hwcnt.backend.state = KBASE_INSTR_STATE_IDLE;
-			err = -EINVAL;
-			GPU_LOG(DVFS_ERROR, DUMMY, 0u, 0u, "wait_event_timeout error in %s %d \n", __FUNCTION__, err);
-			return err;
-		}
-	} else
-#endif
 	wait_event(kbdev->hwcnt.backend.wait,
 					kbdev->hwcnt.backend.triggered != 0);
 
@@ -477,11 +454,6 @@ int kbase_instr_hwcnt_wait_for_dump(struct kbase_context *kctx)
 	if (kbdev->hwcnt.backend.state == KBASE_INSTR_STATE_RESETTING) {
 		/* GPU is being reset */
 		spin_unlock_irqrestore(&kbdev->hwcnt.lock, flags);
-#ifdef MALI_SEC_HWCNT
-		if (kbdev->hwcnt.is_hwcnt_attach)
-			wait_event_timeout(kbdev->hwcnt.backend.wait, kbdev->hwcnt.backend.triggered != 0, kbdev->hwcnt.timeout);
-		else
-#endif
 		wait_event(kbdev->hwcnt.backend.wait,
 					kbdev->hwcnt.backend.triggered != 0);
 		spin_lock_irqsave(&kbdev->hwcnt.lock, flags);

@@ -15,19 +15,15 @@
 #define EXYNOS_SNAPSHOT_H
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT
-#include <linux/kernel.h>
 #include <asm/ptrace.h>
 #include "exynos-ss-soc.h"
-#include <linux/bug.h>
-
-extern unsigned int *exynos_ss_base_enabled;
 
 /* mandatory */
-extern void __exynos_ss_task(int cpu, void *v_task);
-extern void __exynos_ss_work(void *worker, void *work, void *fn, int en);
-extern void __exynos_ss_cpuidle(char *modes, unsigned state, int diff, int en);
-extern void __exynos_ss_suspend(void *fn, void *dev, int en);
-extern void __exynos_ss_irq(int irq, void *fn, unsigned long val, int en);
+extern void exynos_ss_task(int cpu, void *v_task);
+extern void exynos_ss_work(void *worker, void *work, void *fn, int en);
+extern void exynos_ss_cpuidle(int index, unsigned state, int diff, int en);
+extern void exynos_ss_suspend(void *fn, void *dev, int en);
+extern void exynos_ss_irq(int irq, void *fn, unsigned int val, int en);
 extern int exynos_ss_try_enable(const char *name, unsigned long long duration);
 extern int exynos_ss_set_enable(const char *name, int en);
 extern int exynos_ss_get_enable(const char *name, bool init);
@@ -42,160 +38,78 @@ extern int exynos_ss_get_hardlockup(void);
 extern unsigned int exynos_ss_get_item_size(char *);
 extern unsigned int exynos_ss_get_item_paddr(char *);
 extern void exynos_ss_panic_handler_safe(struct pt_regs *regs);
-extern unsigned long exynos_ss_get_last_pc(unsigned int cpu);
-extern unsigned long exynos_ss_get_last_pc_paddr(void);
-extern void exynos_ss_hook_hardlockup_entry(void *v_regs);
-extern void exynos_ss_hook_hardlockup_exit(void);
-
 #ifdef CONFIG_EXYNOS_DRAMTEST
 extern int disable_mc_powerdn(void);
 #endif
+
 /* option */
 #ifdef CONFIG_EXYNOS_SNAPSHOT_REGULATOR
-extern void __exynos_ss_regulator(char *f_name, unsigned int addr, unsigned int volt, int en);
-
-static inline void exynos_ss_regulator(char *f_name, unsigned int addr, unsigned int volt, int en)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_regulator(f_name, addr, volt, en);
-}
+extern void exynos_ss_regulator(char* f_name, unsigned int addr, unsigned int volt, int en);
 #else
 #define exynos_ss_regulator(a,b,c,d)         do { } while(0)
 #endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_THERMAL
-extern void __exynos_ss_thermal(void *data, unsigned int temp, char *name, unsigned int max_cooling);
-
-static inline void exynos_ss_thermal(void *data, unsigned int temp, char *name, unsigned int max_cooling)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_thermal(data, temp, name, max_cooling);
-}
+extern void exynos_ss_thermal(void *data, unsigned int temp, char *name, unsigned int max_cooling);
 #else
 #define exynos_ss_thermal(a,b,c,d)	do { } while(0)
 #endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_MBOX
-extern void __exynos_ss_mailbox(void *msg, int mode, char *f_name, void *volt);
-
-static inline void exynos_ss_mailbox(void *msg, int mode, char *f_name, void *volt)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_mailbox(msg, mode, f_name, volt);
-}
+extern void exynos_ss_mailbox(void *msg, int mode, char* f_name, void *volt);
 #else
 #define exynos_ss_mailbox(a,b,c,d)         do { } while(0)
 #endif
 
 #ifndef CONFIG_EXYNOS_SNAPSHOT_MINIMIZED_MODE
-extern void __exynos_ss_clockevent(void* dev, unsigned long long clc, int64_t delta, void *next_event);
-extern void __exynos_ss_printk(const char *fmt, ...);
-extern void __exynos_ss_printkl(size_t msg, size_t val);
-
-static inline void exynos_ss_clockevent(void* dev, unsigned long long clc, int64_t delta, void *next_event)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_clockevent(dev, clc, delta, next_event);
-}
-
-#define exynos_ss_printk(fmt, ...)				\
-({								\
-	if (unlikely(*exynos_ss_base_enabled))			\
-		__exynos_ss_printk(fmt, ##__VA_ARGS__);		\
-})
-
-static inline void exynos_ss_printkl(size_t msg, size_t val)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_printkl(msg, val);
-}
+extern void exynos_ss_clockevent(unsigned long long clc, int64_t delta, void *next_event);
+extern void exynos_ss_printk(const char *fmt, ...);
+extern void exynos_ss_printkl(size_t msg, size_t val);
 #else
-#define exynos_ss_clockevent(a,b,c,d)	do { } while(0)
+#define exynos_ss_clockevent(a,b,c)	do { } while(0)
 #define exynos_ss_printk(...)		do { } while(0)
 #define exynos_ss_printkl(a,b)		do { } while(0)
 #endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_IRQ_DISABLED
-extern void __exynos_ss_irqs_disabled(unsigned long flags);
-
-static inline void exynos_ss_irqs_disabled(unsigned long flags);
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_irqs_disabled(flags);
-}
+extern void exynos_ss_irqs_disabled(unsigned long flags);
 #else
 #define exynos_ss_irqs_disabled(a)	do { } while(0);
 #endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_HRTIMER
-extern void __exynos_ss_hrtimer(void *timer, s64 *now, void *fn, int en);
-
-static inline void exynos_ss_hrtimer(void *timer, s64 *now, void *fn, int en)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_hrtimer(timer, now, fn, en);
-}
+extern void exynos_ss_hrtimer(void *timer, s64 *now, void *fn, int en);
 #else
 #define exynos_ss_hrtimer(a,b,c,d)	do { } while(0);
 #endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_REG
-extern void __exynos_ss_reg(unsigned int read, size_t val, size_t reg, int en);
-
-static inline void exynos_ss_reg(unsigned int read, size_t val, size_t reg, int en)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_reg(read, val, reg, en);
-}
+extern void exynos_ss_reg(unsigned int read, size_t val, size_t reg, int en);
 #else
 #define exynos_ss_reg(a,b,c,d)		do { } while(0);
 #endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_SPINLOCK
-extern void __exynos_ss_spinlock(void *lock, int en);
-
-static inline void exynos_ss_spinlock(void *lock, int en)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_spinlock(lock, en);
-}
+extern void exynos_ss_spinlock(void *lock, int en);
 #else
 #define exynos_ss_spinlock(a,b)		do { } while(0);
 #endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_CLK
 struct clk;
-extern void __exynos_ss_clk(void *clock, const char *func_name, int mode);
-
-static inline void exynos_ss_clk(void *clock, const char *func_name, int mode)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_clk(clock, func_name, mode);
-}
+extern void exynos_ss_clk(void *clock, const char *func_name, int mode);
 #else
 #define exynos_ss_clk(a,b,c)		do { } while(0);
 #endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_FREQ
-extern void __exynos_ss_freq(int type, unsigned long old_freq, unsigned long target_freq, int en);
-
-static inline void exynos_ss_freq(int type, unsigned long old_freq, unsigned long target_freq, int en)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_freq(type, old_freq, target_freq, en);
-}
+void exynos_ss_freq(int type, unsigned long old_freq, unsigned long target_freq, int en);
 #else
 #define exynos_ss_freq(a,b,c,d)	do { } while(0);
 #endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_IRQ_EXIT
-extern void __exynos_ss_irq_exit(unsigned int irq, unsigned long long start_time);
-
-static inline void exynos_ss_irq_exit(unsigned int irq, unsigned long long start_time)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_irq_exit(irq, start_time);
-}
+extern void exynos_ss_irq_exit(unsigned int irq, unsigned long long start_time);
 #define exynos_ss_irq_exit_var(v)	do {	v = cpu_clock(raw_smp_processor_id());	\
 					} while(0)
 #else
@@ -221,44 +135,7 @@ void exynos_ss_dump_sfr(void);
 #define exynos_ss_dump_sfr()		do { } while(0)
 #endif
 
-/* inline functions */
-static inline void exynos_ss_task(int cpu, void *v_task)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_task(cpu, v_task);
-}
-
-static inline void exynos_ss_work(void *worker, void *work, void *fn, int en)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_work(worker, work, fn, en);
-}
-
-static inline void exynos_ss_cpuidle(char *modes, unsigned state, int diff, int en)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_cpuidle(modes, state, diff, en);
-}
-
-static inline void exynos_ss_suspend(void *fn, void *dev, int en)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_suspend(fn, dev, en);
-}
-
-static inline void exynos_ss_irq(int irq, void *fn, unsigned long val, int en)
-{
-	if (unlikely(*exynos_ss_base_enabled))
-		__exynos_ss_irq(irq, fn, val, en);
-}
-
-#ifdef CONFIG_SEC_DEBUG
-extern void exynos_ss_get_hardlockup_info(unsigned int cpu, void *info);
-extern void exynos_ss_get_softlockup_info(unsigned int cpu, void *info);
-#else
-#define exynos_ss_get_hardlockup_info(a, b)	do { } while (0)
-#define exynos_ss_get_softlockup_info(a, b)	do { } while (0)
-#endif
+extern void exynos_ss_i2c_clk(struct clk *clk, int bus_id, int en);
 
 #else
 #define exynos_ss_task(a,b)		do { } while(0)
@@ -294,17 +171,9 @@ extern void exynos_ss_get_softlockup_info(unsigned int cpu, void *info);
 #define exynos_ss_get_hardlockup()	do { } while(0)
 #define exynos_ss_get_item_size(a)	do { } while(0)
 #define exynos_ss_get_item_paddr(a)	do { } while(0)
-#define exynos_ss_check_crash_key(a,b)	do { } while(0)
-#define exynos_ss_panic_handler_safe() do { } while(0)
-#define exynos_ss_get_last_pc(a)       do { } while(0)
-#define exynos_ss_get_last_pc_paddr()  do { } while(0)
-#define exynos_ss_hook_hardlockup_entry(a) do { } while(0)
-#define exynos_ss_hook_hardlockup_exit() do { } while(0)
-#define exynos_ss_get_hardlockup_info(a, b)	do { } while (0)
-#define exynos_ss_get_softlockup_info(a, b)	do { } while (0)
+#define exynos_ss_check_crash_key(a, b)	do { } while (0)
+#define exynos_ss_i2c_clk(a, b)		do { } while (0)
 #endif /* CONFIG_EXYNOS_SNAPSHOT */
-
-static inline void exynos_ss_bug(void) {BUG();}
 
 /**
  * esslog_flag - added log information supported.

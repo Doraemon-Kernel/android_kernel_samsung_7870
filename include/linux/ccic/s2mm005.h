@@ -32,6 +32,7 @@
 #include <linux/firmware.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
+#include <linux/usb_notify.h>
 #include <linux/wakelock.h>
 
 #if defined(CONFIG_CCIC_NOTIFIER)
@@ -53,7 +54,6 @@
 #define REG_RX_SRC_CAPA_MSG	0x0260
 
 #define CCIC_FW_VERSION_INVALID -1
-#define CCIC_I2C_VALUE_INVALID 274
 
 /******************************************************************************/
 /* definitions & structures                                                   */
@@ -198,7 +198,7 @@ typedef union
                     IS_DFP:1,
                     RP_CurrentLvl:2,
                     VBUS_CC_Short:1,
-			VBUS_SBU_Short:1,
+                    RSP_BYTE3:1,
                     RESET:1;
 	}BITS;
 } FUNC_STATE_Type;
@@ -216,16 +216,15 @@ typedef union
                     RUN_DRY:1,
                     removing_charge_by_sbu_low:1,
                     BOOTING_RUN_DRY:1,
-			Sleep_Cable_Detect:1, //b8
-			PDSTATE29_SBU_DONE:1, //b9
-			RSP_BYTE:22;		//b10 ~ b31
+                    Sleep_Cable_Detect:1, 
+                    RSP_BYTE:23;
 	} BITS;
 } LP_STATE_Type;
 
 typedef union
 {
 	uint32_t        DATA;
-	uint8_t	BYTE[4];
+	uint8_t			BYTE[4];
     struct {
         uint32_t    Flash_State:8,
                     Reserved:24;
@@ -468,7 +467,7 @@ typedef struct
     MSG_IRQ_STATUS_Type		MSG_IRQ_STATUS;		// 0x0040h
     VDM_MSG_IRQ_STATUS_Type	VDM_MSG_IRQ_STATUS;	// 0x0044h
     SSM_MSG_IRQ_STATUS_Type	SSM_MSG_IRQ_STATUS;	// 0x0048h
-    AP_REQ_GET_STATUS_Type      AP_REQ_GET_STATUS;      // 0x004Ch
+    AP_REQ_GET_STATUS_Type      AP_REQ_GET_STATUS;// 0x004Ch
     SSM_HW_ID_VALUE_Type	SSM_HW_ID_VALUE;	// 0x0050h
     SSM_HW_PID_VALUE_Type	SSM_HW_PID_VALUE;	// 0x0054h
     SSM_HW_USE_MSG_Type		SSM_HW_USE_MSG;		// 0x0058h
@@ -799,7 +798,7 @@ typedef enum
 
 typedef enum
 {
-	Rp_Sbu_check = 0,
+	Rp_None = 0,
 	Rp_56K = 1,	/* 80uA */
 	Rp_22K = 2,	/* 180uA */
 	Rp_10K = 3,	/* 330uA */
@@ -831,7 +830,6 @@ struct s2mm005_data {
 	int s2mm005_om;
 	int s2mm005_sda;
 	int s2mm005_scl;
-	int s2mm005_i2c_err;
 	u32 hw_rev;
 	struct mutex i2c_mutex;
 	u8 attach;
@@ -842,7 +840,6 @@ struct s2mm005_data {
 	int p_prev_rid;
 	int prev_rid;
 	int cur_rid;
-	int water_detect_support;
 	int water_det;
 	int run_dry;
 	int booting_run_dry;
@@ -880,10 +877,6 @@ struct s2mm005_data {
 	int host_turn_on_event;
 	int host_turn_on_wait_time;
 	int is_samsung_accessory_enter_mode;
-	int is_in_first_sec_uvdm_req;
-	int is_in_sec_uvdm_out;
-	struct completion uvdm_out_wait;
-	struct completion uvdm_longpacket_in_wait;
 #endif
 	int manual_lpm_mode;
 #if defined(CONFIG_DUAL_ROLE_USB_INTF)
@@ -902,6 +895,7 @@ struct s2mm005_data {
 	int typec_power_role;
 	int typec_data_role;
 	int typec_try_state_change;
+	struct delayed_work typec_role_swap_work;
 #endif
 	int s2mm005_fw_product_id;
 	u8 fw_product_id;
@@ -911,8 +905,9 @@ struct s2mm005_data {
 #endif
 	struct delayed_work ccic_init_work;
 	int ccic_check_at_booting;
+	int vconn_en;
 	struct delayed_work usb_external_notifier_register_work;
 	struct notifier_block usb_external_notifier_nb;
-	int vconn_en;
+	u8 skip_ccic_fwupdate;
 };
 #endif /* __S2MM005_H */

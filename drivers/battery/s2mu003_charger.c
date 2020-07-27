@@ -424,12 +424,8 @@ static bool s2mu003_chg_init(struct s2mu003_charger_data *charger)
 
 	rev_id = ret & 0x0f;
 
-	if (charger->pdata->is_750kHz_switching)
-		ret = s2mu003_clr_bits(charger->client, S2MU003_CHG_CTRL1,
-				S2MU003_SEL_SWFREQ_MASK);
-	else
-		ret = s2mu003_set_bits(charger->client, S2MU003_CHG_CTRL1,
-				S2MU003_SEL_SWFREQ_MASK);
+	ret = s2mu003_set_bits(charger->client, S2MU003_CHG_CTRL1,
+			       S2MU003_SEL_SWFREQ_MASK);
 
 	/* Disable Timer function (Charging timeout fault) */
 	s2mu003_clr_bits(charger->client,
@@ -514,7 +510,7 @@ static int s2mu003_get_charge_type(struct i2c_client *iic)
 		break;
 	default:
 		/* pre-charge mode */
-		status = POWER_SUPPLY_CHARGE_TYPE_TRICKLE;
+		status = POWER_SUPPLY_CHARGE_TYPE_UNKNOWN;
 		break;
 	}
 
@@ -928,12 +924,6 @@ static int s2mu003_charger_parse_dt(struct device *dev,
 	const u32 *p;
 	int ret, i, len;
 
-	if (of_find_property(np, "is_750kHz_switching", NULL))
-		pdata->is_750kHz_switching = 1;
-	if (of_find_property(np, "is_fixed_switching", NULL))
-		pdata->is_fixed_switching = 1;
-	pr_info("%s : is_750kHz_switching = %d\n", __func__,
-			pdata->is_750kHz_switching);
 	pr_info("%s : is_fixed_switching = %d\n", __func__,
 			pdata->is_fixed_switching);
 

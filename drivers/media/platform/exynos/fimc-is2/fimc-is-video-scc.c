@@ -215,17 +215,18 @@ const struct v4l2_file_operations fimc_is_scc_video_fops = {
 static int fimc_is_scc_video_querycap(struct file *file, void *fh,
 						struct v4l2_capability *cap)
 {
-	struct fimc_is_core *isp = video_drvdata(file);
+	struct fimc_is_video *video = video_drvdata(file);
 
-	strncpy(cap->driver, isp->pdev->name, sizeof(cap->driver) - 1);
+	FIMC_BUG(!cap);
+	FIMC_BUG(!video);
 
+	snprintf(cap->driver, sizeof(cap->driver), "%s", video->vd.name);
+	snprintf(cap->card, sizeof(cap->card), "%s", video->vd.name);
 	dbg("(devname : %s)\n", cap->driver);
-	strncpy(cap->card, isp->pdev->name, sizeof(cap->card) - 1);
-	cap->bus_info[0] = 0;
-	cap->version = KERNEL_VERSION(1, 0, 0);
-	cap->capabilities = V4L2_CAP_STREAMING
+	cap->capabilities |= V4L2_CAP_STREAMING
 				| V4L2_CAP_VIDEO_CAPTURE
 				| V4L2_CAP_VIDEO_CAPTURE_MPLANE;
+	cap->device_caps |= cap->capabilities;
 
 	return 0;
 }
@@ -666,6 +667,7 @@ static void fimc_is_scc_buffer_finish(struct vb2_buffer *vb)
 
 const struct vb2_ops fimc_is_scc_qops = {
 	.queue_setup		= fimc_is_scc_queue_setup,
+	.buf_init			= fimc_is_buffer_init,
 	.buf_prepare		= fimc_is_scc_buffer_prepare,
 	.buf_queue		= fimc_is_scc_buffer_queue,
 	.buf_finish		= fimc_is_scc_buffer_finish,

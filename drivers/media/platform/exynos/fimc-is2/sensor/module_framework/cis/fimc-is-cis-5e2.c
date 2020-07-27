@@ -27,8 +27,8 @@
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
-#include <exynos-fimc-is-sensor.h>
 
+#include <exynos-fimc-is-sensor.h>
 #include "fimc-is-hw.h"
 #include "fimc-is-core.h"
 #include "fimc-is-param.h"
@@ -157,6 +157,11 @@ int sensor_5e2_cis_init(struct v4l2_subdev *subdev)
 	struct fimc_is_cis *cis;
 	u32 setfile_index = 0;
 	cis_setting_info setinfo;
+#ifdef USE_CAMERA_HW_BIG_DATA
+	struct cam_hw_param *hw_param = NULL;
+	struct fimc_is_device_sensor_peri *sensor_peri = NULL;
+#endif
+
 	setinfo.param = NULL;
 	setinfo.return_value = 0;
 
@@ -171,11 +176,22 @@ int sensor_5e2_cis_init(struct v4l2_subdev *subdev)
 
 	BUG_ON(!cis->cis_data);
 	memset(cis->cis_data, 0, sizeof(cis_shared_data));
+	cis->rev_flag = false;
 
 	ret = sensor_cis_check_rev(cis);
 	if (ret < 0) {
-		err("sensor_5e2_check_rev is fail");
-		goto p_err;
+#ifdef USE_CAMERA_HW_BIG_DATA
+		sensor_peri = container_of(cis, struct fimc_is_device_sensor_peri, cis);
+		if (sensor_peri && sensor_peri->module->position == SENSOR_POSITION_REAR)
+			fimc_is_sec_get_rear_hw_param(&hw_param);
+		else if (sensor_peri && sensor_peri->module->position == SENSOR_POSITION_FRONT)
+			fimc_is_sec_get_front_hw_param(&hw_param);
+		if (hw_param)
+			hw_param->i2c_sensor_err_cnt++;
+#endif
+		warn("sensor_5e2_check_rev is fail when cis init");
+		cis->rev_flag = true;
+		ret = 0;
 	}
 
 	cis->cis_data->cur_width = SENSOR_5E2_MAX_WIDTH;
@@ -184,12 +200,6 @@ int sensor_5e2_cis_init(struct v4l2_subdev *subdev)
 	cis->need_mode_change = false;
 
 	sensor_5e2_cis_data_calculation(sensor_5e2_pllinfos[setfile_index], cis->cis_data);
-
-	ret = sensor_cis_set_registers(subdev, sensor_5e2_setfiles[setfile_index], sensor_5e2_setfile_sizes[setfile_index]);
-	if (ret < 0) {
-		err("sensor_5e2_set_registers fail!!");
-		goto p_err;
-	}
 
 	setinfo.return_value = 0;
 	CALL_CISOPS(cis, cis_get_min_exposure_time, subdev, &setinfo.return_value);
@@ -224,8 +234,8 @@ int sensor_5e2_cis_log_status(struct v4l2_subdev *subdev)
 	int ret = 0;
 	struct fimc_is_cis *cis;
 	struct i2c_client *client = NULL;
-	u8 data8;
-	u16 data16;
+	u8 data8 = 0;
+	u16 data16 = 0;
 
 	BUG_ON(!subdev);
 
@@ -343,6 +353,16 @@ int sensor_5e2_cis_mode_change(struct v4l2_subdev *subdev, u32 mode)
 		err("invalid mode(%d)!!", mode);
 		ret = -EINVAL;
 		goto p_err;
+	}
+
+	/* If check_rev fail when cis_init, one more check_rev in mode_change */
+	if (cis->rev_flag == true) {
+		cis->rev_flag = false;
+		ret = sensor_cis_check_rev(cis);
+		if (ret < 0) {
+			err("sensor_5e2_check_rev is fail");
+			goto p_err;
+		}
 	}
 
 	sensor_5e2_cis_data_calculation(sensor_5e2_pllinfos[mode], cis->cis_data);
@@ -783,7 +803,6 @@ p_err:
 int sensor_5e2_cis_get_max_exposure_time(struct v4l2_subdev *subdev, u32 *max_expo)
 {
 	int ret = 0;
-	int hold = 0;
 	struct fimc_is_cis *cis;
 	cis_shared_data *cis_data;
 	u32 max_integration_time = 0;
@@ -840,12 +859,6 @@ int sensor_5e2_cis_get_max_exposure_time(struct v4l2_subdev *subdev, u32 *max_ex
 #endif
 
 p_err:
-	if (hold > 0) {
-		hold = sensor_5e2_cis_group_param_hold_func(subdev, 0x00);
-		if (hold < 0)
-			ret = hold;
-	}
-
 	return ret;
 }
 
@@ -1576,6 +1589,7 @@ static struct fimc_is_cis_ops cis_ops = {
 	.cis_get_min_digital_gain = sensor_5e2_cis_get_min_digital_gain,
 	.cis_get_max_digital_gain = sensor_5e2_cis_get_max_digital_gain,
 	.cis_compensate_gain_for_extremely_br = sensor_cis_compensate_gain_for_extremely_br,
+	.cis_wait_streamoff = sensor_cis_wait_streamoff,
 };
 
 int cis_5e2_probe(struct i2c_client *client,
@@ -1597,7 +1611,7 @@ int cis_5e2_probe(struct i2c_client *client,
 
 	core = (struct fimc_is_core *)dev_get_drvdata(fimc_is_dev);
 	if (!core) {
-		probe_err("core device is not yet probed");
+		probe_info("core device is not yet probed");
 		return -EPROBE_DEFER;
 	}
 
@@ -1616,7 +1630,7 @@ int cis_5e2_probe(struct i2c_client *client,
 
 	sensor_peri = find_peri_by_cis_id(device, SENSOR_NAME_S5K5E2);
 	if (!sensor_peri) {
-		probe_err("sensor peri is net yet probed");
+		probe_info("sensor peri is net yet probed");
 		return -EPROBE_DEFER;
 	}
 
@@ -1703,6 +1717,7 @@ MODULE_DEVICE_TABLE(of, exynos_fimc_is_cis_5e2_match);
 
 static const struct i2c_device_id cis_5e2_idt[] = {
 	{ SENSOR_NAME, 0 },
+	{},
 };
 
 static struct i2c_driver cis_5e2_driver = {

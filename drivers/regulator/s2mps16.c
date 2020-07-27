@@ -30,8 +30,6 @@
 #include <linux/mutex.h>
 #include <linux/exynos-ss.h>
 
-#include "internal.h"
-
 #include <soc/samsung/exynos-pmu.h>
 #if defined(CONFIG_PWRCAL)
 #include <../drivers/soc/samsung/pwrcal/pwrcal.h>
@@ -48,9 +46,6 @@
 #define G3D_DVS_CTRL                   (0x1 << 1)
 #define G3D_DVS_STATUS                 (0x1)
 #define LOCAL_PWR_CFG                  (0xF << 0)
-#define BUCK2_ASV_MAX		       (1250000)
-#define BUCK2_SYNC_VOLTAGE	       (1150000)
-#define LDO8_MAX		       (1000000)
 
 static struct s2mps16_info *static_info;
 static struct regulator_desc regulators[][S2MPS16_REGULATOR_MAX];
@@ -70,14 +65,6 @@ struct s2mps16_info {
 	bool buck11_en;
 	unsigned int desc_type;
 
-	bool buck_dvs_on;
-	int buck2_sync;
-	int buck2_dvs;
-	int int_max;
-	int int_vthr;
-	int int_delta;
-	int buck4_sel;
-	int buck5_sel;
 };
 
 /* Some LDOs supports [LPM/Normal]ON mode during suspend state */
@@ -291,301 +278,6 @@ out:
 	return ret;
 }
 
-static int s2m_get_max_int_voltage(struct s2mps16_info *s2mps16)
-{
-	int buck4_val, buck5_val, int_max;
-
-	buck4_val = s2mps16->buck4_sel
-			* regulators[s2mps16->desc_type][S2MPS16_BUCK4].uV_step
-			+ regulators[s2mps16->desc_type][S2MPS16_BUCK4].min_uV;
-	buck5_val = s2mps16->buck5_sel
-			* regulators[s2mps16->desc_type][S2MPS16_BUCK5].uV_step
-			+ regulators[s2mps16->desc_type][S2MPS16_BUCK5].min_uV;
-	int_max = buck4_val >= buck5_val ? buck4_val : buck5_val;
-	int_max = (int_max >= s2mps16->int_vthr) ? int_max : s2mps16->int_vthr;
-	int_max += s2mps16->int_delta;
-
-	return int_max;
-}
-
-static int s2m_set_max_int_voltage(struct regulator_dev *rdev, unsigned sel)
-{
-	struct s2mps16_info *s2mps16 = rdev_get_drvdata(rdev);
-	int ret, ldo_sel;
-	int buck_val, int_max = 0;
-	int reg_id = rdev_get_id(rdev);
-	unsigned int old_sel_buck = 0, old_val_buck, old_val_ldo, buck_delay = 0, target_val;
-	char name[16];
-
-	if (reg_id == S2MPS16_BUCK4) {	/*INT*/
-		old_sel_buck = s2mps16->buck4_sel;
-		s2mps16->buck4_sel = sel;
-	} else if (reg_id == S2MPS16_BUCK5) { /*DISP_CAM*/
-		old_sel_buck = s2mps16->buck5_sel;
-		s2mps16->buck5_sel = sel;
-	}
-
-	old_val_buck = rdev->desc->min_uV + (rdev->desc->uV_step * old_sel_buck);
-	old_val_ldo = s2mps16->int_max;
-
-	buck_val = rdev->desc->min_uV + (rdev->desc->uV_step * sel);
-	target_val = buck_val + s2mps16->int_delta;
-	if (target_val > LDO8_MAX)
-		target_val = LDO8_MAX;
-
-	if (target_val > s2mps16->int_max) { /* UP */
-		ldo_sel = DIV_ROUND_UP(target_val - regulators[s2mps16->desc_type][S2MPS16_LDO8].min_uV,
-							regulators[s2mps16->desc_type][S2MPS16_LDO8].uV_step);
-		if (ldo_sel < 0)
-			goto out;
-
-		/* Update int_max */
-		s2mps16->int_max = target_val;
-
-		exynos_ss_regulator("LDO8", S2MPS16_REG_L8CTRL, target_val, ESS_FLAG_IN);
-		ret = sec_reg_update(s2mps16->iodev, S2MPS16_REG_L8CTRL, ldo_sel, 0x3f);
-		if (ret < 0) {
-			exynos_ss_regulator("LDO8", S2MPS16_REG_L8CTRL, target_val, ESS_FLAG_ON);
-			goto out;
-		}
-		exynos_ss_regulator("LDO8", S2MPS16_REG_L8CTRL, target_val, ESS_FLAG_OUT);
-
-		udelay(DIV_ROUND_UP((s2mps16->int_max - old_val_ldo), 12000));
-
-		snprintf(name, sizeof(name), "BUCK%d", (reg_id - S2MPS16_BUCK1) + 1);
-		exynos_ss_regulator(name, rdev->desc->vsel_reg, buck_val, ESS_FLAG_IN);
-		s2mps16->vsel_value[reg_id] = sel;
-		ret = sec_reg_write(s2mps16->iodev, rdev->desc->vsel_reg, sel);
-		if (ret < 0) {
-			exynos_ss_regulator(name, rdev->desc->vsel_reg, buck_val, ESS_FLAG_ON);
-			goto out;
-		}
-		exynos_ss_regulator(name, rdev->desc->vsel_reg, buck_val, ESS_FLAG_OUT);
-
-	} else {
-		if (buck_val < old_val_buck)
-			buck_delay = DIV_ROUND_UP((old_val_buck - buck_val),
-					rdev->constraints->ramp_delay);
-		else
-			buck_delay = DIV_ROUND_UP((buck_val- old_val_buck),
-					rdev->constraints->ramp_delay);
-
-		snprintf(name, sizeof(name), "BUCK%d", (reg_id - S2MPS16_BUCK1) + 1);
-		exynos_ss_regulator(name, rdev->desc->vsel_reg, buck_val, ESS_FLAG_IN);
-		s2mps16->vsel_value[reg_id] = sel;
-		ret = sec_reg_write(s2mps16->iodev, rdev->desc->vsel_reg, sel);
-		if (ret < 0) {
-			exynos_ss_regulator(name, rdev->desc->vsel_reg, buck_val, ESS_FLAG_ON);
-			goto out;
-		}
-		exynos_ss_regulator(name, rdev->desc->vsel_reg, buck_val, ESS_FLAG_OUT);
-
-		udelay(buck_delay);
-
-		int_max = s2m_get_max_int_voltage(s2mps16);
-		if (s2mps16->int_max != int_max) {
-			s2mps16->int_max = int_max;
-			ret = DIV_ROUND_UP(int_max -
-			regulators[s2mps16->desc_type][S2MPS16_LDO8].min_uV,
-			regulators[s2mps16->desc_type][S2MPS16_LDO8].uV_step);
-			if (ret < 0)
-				goto out;
-
-			exynos_ss_regulator("LDO8", S2MPS16_REG_L8CTRL, int_max, ESS_FLAG_IN);
-			ret = sec_reg_update(s2mps16->iodev, S2MPS16_REG_L8CTRL,
-							  ret, 0x3f);
-			exynos_ss_regulator("LDO8", S2MPS16_REG_L8CTRL, int_max, ESS_FLAG_OUT);
-			if (ret < 0)
-				goto out;
-
-			udelay(DIV_ROUND_UP((old_val_ldo - s2mps16->int_max), 12000));
-		}
-	}
-	return ret;
-out:
-	pr_warn("%s: failed to set the max int voltage\n", __func__);
-	return ret;
-}
-
-static int s2m_set_fix_ldo_voltage(struct regulator_dev *rdev, bool fix_en)
-{
-	int ret, old_sel, old_val;
-	struct s2mps16_info *s2mps16 = rdev_get_drvdata(rdev);
-	int reg_id = rdev_get_id(rdev);
-	unsigned int buck2_sync_val = 0;
-	char name[16];
-
-	if (s2mps16->cache_data && s2mps16->vsel_value[reg_id])
-		old_val = rdev->desc->min_uV +
-			(s2mps16->vsel_value[reg_id] * rdev->desc->uV_step);
-	else {
-		ret = sec_reg_read(s2mps16->iodev, rdev->desc->vsel_reg, &old_sel);
-		if (ret < 0)
-			goto out;
-		old_val = rdev->desc->min_uV + (rdev->desc->uV_step * old_sel);
-	}
-
-	snprintf(name, sizeof(name), "BUCK%d", (reg_id - S2MPS16_BUCK1) + 1);
-	/* Set buck2 voltage BUCK2_SYNC_VOLTAGE(1150mV) */
-	buck2_sync_val = (BUCK2_SYNC_VOLTAGE - S2MPS16_BUCK_MIN1) / S2MPS16_BUCK_STEP1;
-	exynos_ss_regulator(name, rdev->desc->vsel_reg, BUCK2_SYNC_VOLTAGE, ESS_FLAG_IN);
-	s2mps16->vsel_value[reg_id] = buck2_sync_val;
-	ret = sec_reg_write(s2mps16->iodev, rdev->desc->vsel_reg, buck2_sync_val);
-	if (ret < 0) {
-		exynos_ss_regulator(name, rdev->desc->vsel_reg, BUCK2_SYNC_VOLTAGE, ESS_FLAG_ON);
-		goto out;
-	}
-	exynos_ss_regulator(name, rdev->desc->vsel_reg, BUCK2_SYNC_VOLTAGE, ESS_FLAG_OUT);
-
-	if (BUCK2_SYNC_VOLTAGE > old_val)
-		udelay(DIV_ROUND_UP((BUCK2_SYNC_VOLTAGE - old_val), rdev->constraints->ramp_delay));
-
-	if (reg_id == S2MPS16_BUCK2) {
-		ret = sec_reg_update(s2mps16->iodev, S2MPS16_REG_LDO7_DVS,
-					fix_en << 2, 0x1 << 2);
-		if (ret < 0)
-			goto out;
-
-		s2mps16->buck2_sync = fix_en ? true : false;
-	}
-
-	return ret;
-out:
-	pr_warn("%s: failed to fix_ldo_voltage\n", rdev->desc->name);
-	return ret;
-}
-
-static int s2m_set_ldo_dvs_control(struct regulator_dev *rdev)
-{
-	int ret = -1;
-	struct s2mps16_info *s2mps16 = rdev_get_drvdata(rdev);
-	int reg_id = rdev_get_id(rdev);
-	unsigned int sram_vthr, sram_delta;
-	int asv_info;
-	int vthr_mask, delta_mask;
-	int vthr_val, delta_val = 0;
-	int dvs_reg;
-	unsigned int ctrl_value;
-
-	asv_info = cal_asv_pmic_info();
-	if (asv_info < 0) {
-		pr_warn("Do not read asv pmic fuse value \n");
-		goto out;
-	}
-
-	switch (reg_id) {
-	case S2MPS16_BUCK2:
-		vthr_mask = 0x3;
-		delta_mask = 0x3 << 2;
-		sram_vthr = asv_info & vthr_mask;
-		sram_delta = (asv_info & delta_mask) >> 2;
-		s2mps16->buck2_dvs = sram_delta;
-		dvs_reg = S2MPS16_REG_LDO7_DVS;
-		break;
-	case S2MPS16_BUCK3:
-		vthr_mask = 0x3 << 4;
-		delta_mask = 0x3 << 6;
-		sram_vthr = (asv_info & vthr_mask) >> 4;
-		sram_delta = (asv_info & delta_mask) >> 6;
-		dvs_reg = S2MPS16_REG_LDO10_DVS;
-		break;
-	case S2MPS16_LDO8:
-		vthr_mask = 0x3 << 12;
-		delta_mask = 0x3 << 14;
-		sram_vthr = (asv_info & vthr_mask) >> 12;
-		sram_delta = (asv_info & delta_mask) >> 14;
-		break;
-	case S2MPS16_BUCK1:
-		vthr_mask = 0x3 << 16;
-		delta_mask = 0x3 << 18;
-		sram_vthr = (asv_info & vthr_mask) >> 16;
-		sram_delta = (asv_info & delta_mask) >> 18;
-		dvs_reg = S2MPS16_REG_LDO9_DVS;
-		break;
-	default:
-		dev_err(&rdev->dev, "%s, set invalid reg_id(%d)\n", __func__, reg_id);
-		break;
-	}
-
-	switch (sram_vthr) {
-	case 0x0:
-		if (reg_id == S2MPS16_LDO8)
-			s2mps16->int_vthr = 800000;
-		else if (reg_id == S2MPS16_BUCK2)
-			vthr_val = 0x6 << 5;
-		else if ((reg_id == S2MPS16_BUCK3) || (reg_id == S2MPS16_BUCK1))
-			vthr_val = 0x4 << 5;
-		break;
-	case 0x1:
-		if (reg_id == S2MPS16_LDO8)
-			s2mps16->int_vthr = 750000;
-		else if ((reg_id == S2MPS16_BUCK1) || (reg_id == S2MPS16_BUCK2) || (reg_id == S2MPS16_BUCK3))
-			vthr_val = 0x3 << 5;
-		break;
-	case 0x2:
-		if (reg_id == S2MPS16_LDO8)
-			s2mps16->int_vthr = 850000;
-		else if ((reg_id == S2MPS16_BUCK1) || (reg_id == S2MPS16_BUCK2) || (reg_id == S2MPS16_BUCK3))
-			vthr_val = 0x5 << 5;
-		break;
-	case 0x3:
-		if (reg_id == S2MPS16_LDO8)
-			s2mps16->int_vthr = 900000;
-		else if ((reg_id == S2MPS16_BUCK1) ||(reg_id == S2MPS16_BUCK3))
-			vthr_val = 0x6 << 5;
-		else if (reg_id == S2MPS16_BUCK2)
-			vthr_val = 0x4 << 5;
-		break;
-	}
-
-	switch (sram_delta) {
-	case 0x0:
-		if (reg_id == S2MPS16_BUCK2)
-			delta_val = 0x3 << 3;
-		else if (reg_id == S2MPS16_BUCK3)
-			delta_val = 0x1 << 3;
-		else if (reg_id == S2MPS16_BUCK1)
-			delta_val = 0x1 << 3;
-		else if (reg_id == S2MPS16_LDO8)
-			s2mps16->int_delta = 50000;
-		break;
-	case 0x1:
-		if (reg_id == S2MPS16_LDO8)
-			s2mps16->int_delta = 0;
-		else if ((reg_id == S2MPS16_BUCK1) || (reg_id == S2MPS16_BUCK2) || (reg_id == S2MPS16_BUCK3))
-			delta_val = 0x0 << 3;
-		break;
-	case 0x2:
-		if (reg_id == S2MPS16_LDO8)
-			s2mps16->int_delta = 75000;
-		else if ((reg_id == S2MPS16_BUCK1) || (reg_id == S2MPS16_BUCK2) || (reg_id == S2MPS16_BUCK3))
-			delta_val = 0x2 << 3;
-		break;
-	case 0x3:
-		if (reg_id == S2MPS16_BUCK2)
-			delta_val = 0x1 << 3;
-		else if ((reg_id == S2MPS16_BUCK3) || (reg_id == S2MPS16_BUCK1))
-			delta_val = 0x3 << 3;
-		else if (reg_id == S2MPS16_LDO8)
-			s2mps16->int_delta = 100000;
-		break;
-	}
-
-	if (reg_id == S2MPS16_LDO8)
-		return 0;
-
-	ctrl_value = vthr_val | delta_val;
-	ret = sec_reg_update(s2mps16->iodev, dvs_reg,
-			ctrl_value, 0xf8);
-	if (ret < 0)
-		goto out;
-
-	return ret;
-out:
-	pr_warn("%s: failed to ldo dvs control\n", rdev->desc->name);
-	return ret;
-
-}
 
 static int s2m_set_voltage_sel_regmap_buck(struct regulator_dev *rdev,
 								unsigned sel)
@@ -595,102 +287,34 @@ static int s2m_set_voltage_sel_regmap_buck(struct regulator_dev *rdev,
 	int reg_id = rdev_get_id(rdev);
 	unsigned int voltage;
 	char name[16];
-	int buck2_set_val, delta_val;
 
 	/* If dvs_en = 0, dvs_pin = 1, occur BUG_ON */
 	if (reg_id == S2MPS16_BUCK6
 		&& !s2mps16->dvs_en && gpio_is_valid(s2mps16->dvs_pin)) {
 		BUG_ON(s2m_get_dvs_is_on());
 	}
-
-	/* Save cached mode buffer */
-	if (reg_id == S2MPS16_BUCK1 || reg_id == S2MPS16_BUCK3)
-		s2mps16->vsel_value[reg_id] = sel;
-
-	if ((reg_id == S2MPS16_BUCK2 || reg_id == S2MPS16_BUCK4 ||
-		reg_id == S2MPS16_BUCK5) && !s2mps16->buck_dvs_on)
-		s2mps16->vsel_value[reg_id] = sel;
-
-	/* BUCK2 Control */
-	if (reg_id == S2MPS16_BUCK2 && s2mps16->buck_dvs_on) {
-		mutex_lock(&s2mps16->lock);
-
-		if (s2mps16->buck2_dvs == 0)
-			delta_val = 100000;
-		else if (s2mps16->buck2_dvs == 1)
-			delta_val = 0;
-		else if (s2mps16->buck2_dvs == 2)
-			delta_val = 75000;
-		else if (s2mps16->buck2_dvs == 3)
-			delta_val = 50000;
-		else
-			delta_val = 0;
-
-		buck2_set_val = rdev->desc->min_uV + (rdev->desc->uV_step * sel);
-
-		if (delta_val + buck2_set_val <= BUCK2_ASV_MAX) {
-			if (!s2mps16->buck2_sync) {
-				ret = s2m_set_fix_ldo_voltage(rdev, 1);
-				if (ret < 0)
-					goto out;
-			}
-		} else {
-			if (s2mps16->buck2_sync) {
-				ret = s2m_set_fix_ldo_voltage(rdev, 0);
-				if (ret < 0)
-					goto out;
-			}
-		}
-
-		snprintf(name, sizeof(name), "BUCK%d", (reg_id - S2MPS16_BUCK1) + 1);
-		voltage = (sel * S2MPS16_BUCK_STEP1) + S2MPS16_BUCK_MIN1;
-		exynos_ss_regulator(name, rdev->desc->vsel_reg, voltage, ESS_FLAG_IN);
-		s2mps16->vsel_value[reg_id] = sel;
-
-		ret = sec_reg_write(s2mps16->iodev, rdev->desc->vsel_reg, sel);
-		if (ret < 0)
-			goto out;
-
-		exynos_ss_regulator(name, rdev->desc->vsel_reg, voltage, ESS_FLAG_OUT);
-
-		mutex_unlock(&s2mps16->lock);
-		return ret;
-	}
-
-	if ((reg_id == S2MPS16_BUCK4 || reg_id == S2MPS16_BUCK5) && s2mps16->buck_dvs_on) {
-		mutex_lock(&s2mps16->lock);
-		ret = s2m_set_max_int_voltage(rdev, sel);
-		if (ret < 0)
-			goto out;
-		mutex_unlock(&s2mps16->lock);
-		return ret;
-	}
-
 	/* voltage information logging to snapshot feature */
 	snprintf(name, sizeof(name), "BUCK%d", (reg_id - S2MPS16_BUCK1) + 1);
-	if (reg_id == S2MPS16_BUCK8 || reg_id == S2MPS16_BUCK9){
-		voltage = (sel * S2MPS16_BUCK_STEP2) + S2MPS16_BUCK_MIN2;
-		dev_info(&rdev->dev, ":BUCK%d	voltage :%d	\n",
-				(reg_id - S2MPS16_BUCK1) + 1, voltage);
-	} else
-		voltage = (sel * S2MPS16_BUCK_STEP1) + S2MPS16_BUCK_MIN1;
+	voltage = (sel * S2MPS16_BUCK_STEP1) + S2MPS16_BUCK_MIN1;
 	exynos_ss_regulator(name, rdev->desc->vsel_reg, voltage, ESS_FLAG_IN);
+
+	if (reg_id == S2MPS16_BUCK1 || reg_id == S2MPS16_BUCK2 ||
+		reg_id == S2MPS16_BUCK3 || reg_id == S2MPS16_BUCK4 ||
+		reg_id == S2MPS16_BUCK5)
+		s2mps16->vsel_value[reg_id] = sel;
 
 	ret = sec_reg_write(s2mps16->iodev, rdev->desc->vsel_reg, sel);
 	if (ret < 0)
 		goto i2c_out;
 
-	exynos_ss_regulator(name, rdev->desc->vsel_reg, voltage, ESS_FLAG_OUT);
-
 	if (rdev->desc->apply_bit)
 		ret = sec_reg_update(s2mps16->iodev, rdev->desc->apply_reg,
 					 rdev->desc->apply_bit,
 					 rdev->desc->apply_bit);
+	exynos_ss_regulator(name, rdev->desc->vsel_reg, voltage, ESS_FLAG_OUT);
 
 	return ret;
 
-out:
-	mutex_unlock(&s2mps16->lock);
 i2c_out:
 	pr_warn("%s: failed to set voltage_sel_regmap\n", rdev->desc->name);
 	exynos_ss_regulator(name, rdev->desc->vsel_reg, voltage, ESS_FLAG_ON);
@@ -703,7 +327,6 @@ static int s2m_set_voltage_time_sel(struct regulator_dev *rdev,
 {
 	unsigned int ramp_delay = 0;
 	int old_volt, new_volt;
-	int reg_id = rdev_get_id(rdev);
 
 	if (rdev->constraints->ramp_delay)
 		ramp_delay = rdev->constraints->ramp_delay;
@@ -713,12 +336,6 @@ static int s2m_set_voltage_time_sel(struct regulator_dev *rdev,
 	if (ramp_delay == 0) {
 		pr_warn("%s: ramp_delay not set\n", rdev->desc->name);
 		return -EINVAL;
-	}
-
-	/* Add buck1/2/3 ramp up delay margin x2 */
-	if (reg_id == S2MPS16_BUCK1 || reg_id == S2MPS16_BUCK2
-		|| reg_id == S2MPS16_BUCK3) {
-		ramp_delay = ramp_delay / 2;
 	}
 
 	/* sanity check */
@@ -733,21 +350,6 @@ static int s2m_set_voltage_time_sel(struct regulator_dev *rdev,
 
 	return 0;
 }
-
-int s2m_set_vth(struct regulator *reg, bool enable)
-{
-	struct regulator_dev *rdev = reg->rdev;
-	struct s2mps16_info *s2mps16 = rdev_get_drvdata(rdev);
-	int ret;
-
-	if(enable)
-		ret = sec_reg_update(s2mps16->iodev, S2MPS16_REG_VTH_OFFSET, S2MPS16_UP_VTH, 0xFF);
-	else
-		ret = sec_reg_update(s2mps16->iodev, S2MPS16_REG_VTH_OFFSET, S2MPS16_DOWN_VTH, 0xFF);
-
-	return ret;
-}
-EXPORT_SYMBOL_GPL(s2m_set_vth);
 
 void s2m_init_dvs()
 {
@@ -1031,9 +633,6 @@ static int s2mps16_pmic_dt_parse_pdata(struct sec_pmic_dev *iodev,
 		pdata->adc_en = true;
 	iodev->adc_en = pdata->adc_en;
 
-	pdata->buck_dvs_on = (of_find_property(pmic_np, "buck_dvs_on", NULL))
-			? true : false;
-
 	regulators_np = of_find_node_by_name(pmic_np, "regulators");
 	if (!regulators_np) {
 		dev_err(iodev->dev, "could not find regulators sub-node\n");
@@ -1092,10 +691,8 @@ static int s2mps16_pmic_probe(struct platform_device *pdev)
 	struct sec_platform_data *pdata = iodev->pdata;
 	struct regulator_config config = { };
 	struct s2mps16_info *s2mps16;
-	int i, ret, delta_sel;
-	unsigned int temp;
+	int i, ret;
 	unsigned int s2mps16_desc_type;
-	unsigned int buck2_temp = 0;
 
 	ret = sec_reg_read(iodev, S2MPS16_REG_ID, &SEC_PMIC_REV(iodev));
 	if (ret < 0)
@@ -1129,11 +726,6 @@ static int s2mps16_pmic_probe(struct platform_device *pdev)
 	s2mps16->dvs_en = pdata->dvs_en;
 	s2mps16->g3d_en = pdata->g3d_en;
 	s2mps16->cache_data = pdata->cache_data;
-	s2mps16->int_max = 0;
-	s2mps16->buck_dvs_on = pdata->buck_dvs_on;
-
-	if (s2mps16->buck_dvs_on)
-		dev_info(&pdev->dev, "Buck dvs mode enabled \n");
 
 	if (gpio_is_valid(pdata->dvs_pin)) {
 		ret = devm_gpio_request(&pdev->dev, pdata->dvs_pin,
@@ -1141,8 +733,8 @@ static int s2mps16_pmic_probe(struct platform_device *pdev)
 		if (ret < 0)
 			return ret;
 		if (pdata->dvs_en) {
-			/* Set DVS Regulator Voltage 0x20 - 0.5 voltage */
-			ret = sec_reg_write(iodev, S2MPS16_REG_B6CTRL2, 0x20);
+			/* Set DVS Regulator Voltage 0x30 - 0.6 voltage */
+			ret = sec_reg_write(iodev, S2MPS16_REG_B6CTRL2, 0x30);
 			if (ret < 0)
 				return ret;
 			s2m_init_dvs();
@@ -1172,78 +764,10 @@ static int s2mps16_pmic_probe(struct platform_device *pdev)
 			s2mps16->rdev[i] = NULL;
 			goto err;
 		}
-
-		if ((id == S2MPS16_BUCK1 || id == S2MPS16_BUCK2
-				|| id == S2MPS16_BUCK3 || id == S2MPS16_LDO8)
-				&& s2mps16->buck_dvs_on) {
-			mutex_lock(&s2mps16->lock);
-			ret = s2m_set_ldo_dvs_control(s2mps16->rdev[i]);
-			if (ret < 0)
-				dev_err(&pdev->dev, "failed vth/delta init, id(%d)\n", id);
-			mutex_unlock(&s2mps16->lock);
-		}
 	}
 
 	s2mps16->num_regulators = pdata->num_regulators;
 
-	if (s2mps16->buck_dvs_on) {
-		delta_sel = 0;
-
-		if (s2mps16->buck2_dvs == 0)
-			delta_sel = 100000;
-		else if (s2mps16->buck2_dvs == 1)
-			delta_sel = 0;
-		else if (s2mps16->buck2_dvs == 2)
-			delta_sel = 75000;
-		else if (s2mps16->buck2_dvs == 3)
-			delta_sel = 50000;
-		else
-			delta_sel = 0;
-
-		delta_sel = delta_sel / S2MPS16_BUCK_STEP1;
-
-		/* Read BUCK2_OUT value */
-		ret = sec_reg_read(iodev, S2MPS16_REG_B2CTRL2, &temp);
-		if (ret < 0)
-			goto err;
-
-		buck2_temp = temp;
-
-		/* Check tar_volt+delta range (0x98 means 1250000uV) */
-		s2mps16->buck2_sync = (temp + delta_sel > 0x98) ? false : true;
-		if (!s2mps16->buck2_sync) {
-			/* Set BUCK2 output voltage 1150000uV */
-			ret = sec_reg_write(s2mps16->iodev, S2MPS16_REG_B2CTRL2, 0x88);
-			if (ret < 0)
-				goto err;
-			/* Disable buck2 dvs mode */
-			ret = sec_reg_update(s2mps16->iodev, S2MPS16_REG_LDO7_DVS,
-								0 << 2, 0x1 << 2);
-			if (ret < 0)
-				goto err;
-			/* Set buck previous target voltage */
-			ret = sec_reg_write(s2mps16->iodev, S2MPS16_REG_B2CTRL2, buck2_temp);
-			if (ret < 0)
-				goto err;
-		}
-
-		ret = sec_reg_read(iodev, S2MPS16_REG_LDO7_DVS, &temp);
-		if (ret < 0)
-			goto err;
-
-		ret = sec_reg_read(iodev, S2MPS16_REG_B4CTRL2, &s2mps16->buck4_sel);
-		if (ret < 0)
-			goto err;
-		ret = sec_reg_read(iodev, S2MPS16_REG_B5CTRL2, &s2mps16->buck5_sel);
-		if (ret < 0)
-			goto err;
-
-		dev_info(&pdev->dev, "S2MPS16_REG_LDO7_DVS : %8.x \n", temp);
-		dev_info(&pdev->dev, "S2MPS16_REG_B4CTRL2 : %8.x \n", s2mps16->buck4_sel);
-		dev_info(&pdev->dev, "S2MPS16_REG_B5CTRL2 : %8.x \n", s2mps16->buck5_sel);
-
-		s2mps16->int_max = s2m_get_max_int_voltage(s2mps16);
-	}
 
 	if (pdata->g3d_en) {
 		/* for buck6 gpio control, disable i2c control */
@@ -1307,12 +831,6 @@ static int s2mps16_pmic_probe(struct platform_device *pdev)
 
 	sec_reg_update(iodev, S2MPS16_REG_B4CTRL1, 0x00, 0x10);
 
-	ret = sec_reg_write(iodev, 0x9B, 0x10);
-	if (ret) {
-		dev_err(&pdev->dev, "BUCK8, BUCK9 DVS setting failed\n");
-		goto err;
-	}
-
 	/* On sequence Config for PWREN_MIF */
 	sec_reg_write(iodev, 0x70, 0xB4);	/* seq. Buck2, Buck1 */
 	sec_reg_write(iodev, 0x71, 0x2C);	/* seq. Buck4, Buck3 */
@@ -1374,7 +892,6 @@ static struct platform_driver s2mps16_pmic_driver = {
 	.driver = {
 		.name = "s2mps16-pmic",
 		.owner = THIS_MODULE,
-		.suppress_bind_attrs = true,
 	},
 	.probe = s2mps16_pmic_probe,
 	.remove = s2mps16_pmic_remove,

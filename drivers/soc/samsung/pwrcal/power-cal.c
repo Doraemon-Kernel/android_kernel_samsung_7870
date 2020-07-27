@@ -6,7 +6,6 @@
 #include "pwrcal-vclk.h"
 #include "pwrcal-rae.h"
 #include "pwrcal-asv.h"
-#include "pwrcal-dram.h"
 #include <linux/exynos-ss.h>
 
 #define MARGIN_UNIT 6250
@@ -289,9 +288,10 @@ int cal_dfs_set_rate(unsigned int id, unsigned long rate)
 	struct vclk *vclk;
 	unsigned long flag;
 	int ret = 0;
-#ifdef CONFIG_EXYNOS_SNAPSHOT_CLK
+#if defined(CONFIG_EXYNOS_SNAPSHOT)
 	const char *name = "cal_dfs_set_rate";
 #endif
+
 	vclk = cal_get_vclk(id);
 	if (!vclk)
 		return -1;
@@ -364,9 +364,10 @@ unsigned long cal_dfs_cached_get_rate(unsigned int id)
 	struct vclk *vclk;
 	unsigned long flag;
 	unsigned long ret = 0;
-#ifdef CONFIG_EXYNOS_SNAPSHOT_CLK
+#if defined(CONFIG_EXYNOS_SNAPSHOT)
 	const char *name = "cal_dfs_get_rate";
 #endif
+
 	vclk = cal_get_vclk(id);
 	if (!vclk)
 		return 0;
@@ -397,9 +398,10 @@ unsigned long cal_dfs_get_rate(unsigned int id)
 	struct vclk *vclk;
 	unsigned long flag;
 	unsigned long ret = 0;
-#ifdef CONFIG_EXYNOS_SNAPSHOT_CLK
+#if defined(CONFIG_EXYNOS_SNAPSHOT)
 	const char *name = "cal_dfs_get_rate";
 #endif
+
 	vclk = cal_get_vclk(id);
 	if (!vclk)
 		return 0;
@@ -460,6 +462,9 @@ int cal_dfs_get_asv_table(unsigned int id, unsigned int *table)
 	int num_of_entry, i;
 	int volt_offset = 0;
 	int org_volt, percent_volt;
+
+	if (!dfsops)
+		return 0;
 
 	if (dfsops->get_margin_param)
 		volt_offset = dfsops->get_margin_param(id);
@@ -528,10 +533,6 @@ int cal_dfs_ext_ctrl(unsigned int id,
 			if (dfsops->init_smpl)
 				return dfsops->init_smpl();
 			break;
-		case cal_dfs_deinitsmpl:
-			if (dfsops->deinit_smpl)
-				return dfsops->deinit_smpl();
-			break;
 		case cal_dfs_setsmpl:
 			if (dfsops->set_smpl)
 				return dfsops->set_smpl();
@@ -552,13 +553,6 @@ int cal_dfs_ext_ctrl(unsigned int id,
 			if (dfsops->cpu_idle_clock_down)
 				return dfsops->cpu_idle_clock_down(para);
 			break;
-		case cal_dfs_ctrl_clk_gate:
-			if (dfsops->ctrl_clk_gate)
-				return dfsops->ctrl_clk_gate(para);
-			break;
-		case cal_dfs_rate_lock:
-			if (dfsops->rate_lock)
-				return dfsops->rate_lock(para);
 		default:
 			return -1;
 		}
@@ -598,14 +592,6 @@ int cal_dfs_get_rate_asv_table(unsigned int id,
 	}
 
 	return num_of_entry;
-}
-
-int cal_asv_pmic_info(void)
-{
-	if (cal_asv_ops.asv_pmic_info)
-		return cal_asv_ops.asv_pmic_info();
-
-	return -1;
 }
 
 void cal_asv_print_info(void)
@@ -659,20 +645,6 @@ void cal_asv_set_ssa0(unsigned int id, unsigned int ssa0)
 {
 	if (cal_asv_ops.set_ssa0)
 		cal_asv_ops.set_ssa0(id, ssa0);
-}
-
-int cal_asv_get_ids_info(unsigned int domain)
-{
-	if (cal_asv_ops.get_ids_info)
-		return cal_asv_ops.get_ids_info(domain);
-
-	return -1;
-}
-
-void cal_dram_print_info(void)
-{
-	if (cal_dram_ops.print_dram_info)
-		cal_dram_ops.print_dram_info();
 }
 
 int cal_init(void)

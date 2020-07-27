@@ -59,7 +59,7 @@ int charger_notifier_unregister(struct notifier_block *nb)
 
 	return ret;
 }
-
+#if 0
 int pdic_notifier_register(struct notifier_block *nb, notifier_fn_t notifier,
 			pdic_notifier_device_t listener)
 {
@@ -100,7 +100,7 @@ int pdic_notifier_unregister(struct notifier_block *nb)
 
 	return ret;
 }
-
+#endif
 static int battery_notifier_notify(int type)
 {
 	int ret = 0;

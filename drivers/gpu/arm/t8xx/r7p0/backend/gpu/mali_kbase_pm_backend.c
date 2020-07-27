@@ -40,7 +40,7 @@ void kbase_pm_register_access_enable(struct kbase_device *kbdev)
 #endif /* CONFIG_MALI_PLATFORM_DEVICETREE */
 	callbacks = (struct kbase_pm_callback_conf *)POWER_MANAGEMENT_CALLBACKS;
 
-	if (callbacks)
+	if (callbacks->power_on_callback)
 		callbacks->power_on_callback(kbdev);
 
 	kbdev->pm.backend.gpu_powered = true;
@@ -242,8 +242,7 @@ int kbase_hwaccess_pm_powerup(struct kbase_device *kbdev,
 
 	kbasep_pm_read_present_cores(kbdev);
 
-	kbdev->pm.debug_core_mask =
-			kbdev->gpu_props.props.raw_props.shader_present;
+	kbdev->pm.debug_core_mask = kbdev->shader_present_bitmap;
 
 	/* Pretend the GPU is active to prevent a power policy turning the GPU
 	 * cores off */

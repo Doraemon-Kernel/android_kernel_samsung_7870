@@ -130,7 +130,7 @@ struct kbase_va_region *kbase_mem_alloc(struct kbase_context *kctx, u64 va_pages
 	else
 		reg->extent = 0;
 
-	if (kbase_alloc_phy_pages(reg, va_pages, commit_pages) != 0) {
+	if (kbase_alloc_phy_pages(reg, va_pages, commit_pages)) {
 		dev_warn(dev, "Failed to allocate %lld pages (va_pages=%lld)",
 				(unsigned long long)commit_pages,
 				(unsigned long long)va_pages);
@@ -506,10 +506,6 @@ static struct kbase_va_region *kbase_mem_from_umm(struct kbase_context *kctx, in
 	if (IS_ERR_OR_NULL(reg->gpu_alloc))
 		goto no_alloc_obj;
 
-	/* MALI_SEC_SECURE_RENDERING */
-	reg->phys_by_ion = 0;
-	reg->len_by_ion = 0;
-
 	reg->cpu_alloc = kbase_mem_phy_alloc_get(reg->gpu_alloc);
 
 	/* No pages to map yet */
@@ -532,22 +528,12 @@ static struct kbase_va_region *kbase_mem_from_umm(struct kbase_context *kctx, in
 	if (*flags & BASE_MEM_PROT_GPU_RD)
 		reg->flags |= KBASE_REG_GPU_RD;
 
-	if (*flags & BASE_MEM_SECURE) {
-		/* MALI_SEC_SECURE_RENDERING */
-		if (kctx->kbdev->secure_mode_support == true &&
-			kctx->kbdev->secure_ops != NULL) {
-			int err = -EINVAL;
-			err = kctx->kbdev->secure_ops->secure_mem_enable(kctx->kbdev, fd, *flags, reg);
-			if (err)
-				dev_warn(kctx->kbdev->dev, "Failed to enable secure memory : 0x%08x\n", err);
-		} else {
-			dev_warn(kctx->kbdev->dev, "%s: wrong operation! DDK cannot support Secure Rendering\n", __func__);
-		}
-	}
+	if (*flags & BASE_MEM_SECURE)
+		reg->flags |= KBASE_REG_SECURE;
 
 	/* no read or write permission given on import, only on run do we give the right permissions */
 
-	reg->gpu_alloc->type = BASE_MEM_IMPORT_TYPE_UMM;
+	reg->gpu_alloc->type = BASE_TMEM_IMPORT_TYPE_UMM;
 	reg->gpu_alloc->imported.umm.sgt = NULL;
 	reg->gpu_alloc->imported.umm.dma_buf = dma_buf;
 	reg->gpu_alloc->imported.umm.dma_attachment = dma_attachment;
@@ -866,14 +852,17 @@ static int zap_range_nolock(struct mm_struct *mm,
 		if (end < local_end)
 			local_end = end;
 
-/* MALI_SEC_INTEGRATION */
 		if (start < vma->vm_start) {
 			start = vma->vm_start;
 		}
-
 		err = zap_vma_ptes(vma, start, local_end - start);
 		if (unlikely(err))
+#ifdef MALI_SEC_INTEGRATION
 			break;
+#else
+			printk(KERN_WARNING "[G3D] Failed to zap_vma_ptes : 0x%lx - 0x%lx flags:%lx, vma start : 0x%lx, vma end : 0x%lx\n",
+				start, local_end, vma->vm_flags, vma->vm_start, vma->vm_end);
+#endif
 
 try_next:
 		/* go to next vma, if any */
@@ -990,12 +979,14 @@ int kbase_mem_commit(struct kbase_context *kctx, u64 gpu_addr, u64 new_pages, en
 						mapping->vm_start +
 						(first_bad << PAGE_SHIFT),
 						mapping->vm_end);
+#ifdef MALI_SEC_INTEGRATION
 				WARN(zap_res,
 				     "Failed to zap VA range (0x%lx - 0x%lx);\n",
 				     mapping->vm_start +
 				     (first_bad << PAGE_SHIFT),
 				     mapping->vm_end
 				     );
+#endif
 			}
 		}
 
@@ -1110,7 +1101,8 @@ static int kbase_cpu_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 locked_bad_fault:
 	kbase_gpu_vm_unlock(map->kctx);
-	return VM_FAULT_SIGBUS;
+	send_sig(SIGSEGV, current, 1);
+	return VM_FAULT_NOPAGE;
 }
 
 static const struct vm_operations_struct kbase_vm_ops = {
@@ -1163,7 +1155,7 @@ static int kbase_cpu_mmap(struct kbase_va_region *reg, struct vm_area_struct *vm
 	    (reg->flags & (KBASE_REG_CPU_WR|KBASE_REG_CPU_RD))) {
 		/* We can't map vmalloc'd memory uncached.
 		 * Other memory will have been returned from
-		 * kbase_mem_pool which would be
+		 * kbase_mem_allocator_alloc which would be
 		 * suitable for mapping uncached.
 		 */
 		BUG_ON(kaddr);

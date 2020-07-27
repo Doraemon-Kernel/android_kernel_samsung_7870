@@ -23,173 +23,23 @@
 #include "regs-mcu_ipc.h"
 #include "mcu_ipc.h"
 
-#ifdef CONFIG_MCU_IPC_LOG
-#define LOG_MAX_NUM	SZ_4K
-#define LOG_DIR_RX	0
-#define LOG_DIR_TX	1
-
-struct mailbox_log {
-	int mcu_int;
-
-	atomic_t gic_mbox_rx_idx;
-	atomic_t mbox_idx;
-
-	struct gic_mbox_rx {
-		unsigned long long time;
-		unsigned int count;
-	} gic_mbox_rx_log[LOG_MAX_NUM];
-
-	struct mbox_rx_tx {
-		unsigned long long time;
-		int dir;
-		unsigned int count_rx;
-		unsigned int count_tx;
-		u32 intgr0;
-		u32 intmr0;
-		u32 intsr0;
-		u32 intmsr0;
-	} mbox_rx_tx_log[LOG_MAX_NUM * 2];
-};
-
-static struct mailbox_log mbx_log;
-
-#ifdef CONFIG_ARM64
-static inline unsigned long pure_arch_local_irq_save(void)
-{
-	unsigned long flags;
-
-	asm volatile(
-		"mrs	%0, daif		// arch_local_irq_save\n"
-		"msr	daifset, #2"
-		: "=r" (flags)
-		:
-		: "memory");
-
-	return flags;
-}
-
-static inline void pure_arch_local_irq_restore(unsigned long flags)
-{
-	asm volatile(
-		"msr    daif, %0                // arch_local_irq_restore"
-		:
-		: "r" (flags)
-		: "memory");
-}
-#else
-static inline unsigned long arch_local_irq_save(void)
-{
-	unsigned long flags;
-
-	asm volatile(
-		"	mrs	%0, cpsr	@ arch_local_irq_save\n"
-		"	cpsid	i"
-		: "=r" (flags) : : "memory", "cc");
-	return flags;
-}
-
-static inline void arch_local_irq_restore(unsigned long flags)
-{
-	asm volatile(
-		"	msr	cpsr_c, %0	@ local_irq_restore"
-		:
-		: "r" (flags)
-		: "memory", "cc");
-}
-#endif
-
-void mbox_check_mcu_irq(int irq)
-{
-	unsigned long flags;
-	static unsigned int count;
-
-	if (mbx_log.mcu_int != irq)
-		return;
-
-	flags = pure_arch_local_irq_save();
-	{
-		unsigned long i;
-		int cpu = get_current_cpunum();
-
-		i = atomic_inc_return(&mbx_log.gic_mbox_rx_idx) &
-			(ARRAY_SIZE(mbx_log.gic_mbox_rx_log) - 1);
-
-		mbx_log.gic_mbox_rx_log[i].time = cpu_clock(cpu);
-		mbx_log.gic_mbox_rx_log[i].count = count++;
-	}
-	pure_arch_local_irq_restore(flags);
-
-}
-EXPORT_SYMBOL_GPL(mbox_check_mcu_irq);
-
-static void mbox_save_rx_tx_log(int dir)
-{
-	unsigned long flags;
-	static unsigned int count_rx;
-	static unsigned int count_tx;
-
-	flags = pure_arch_local_irq_save();
-	{
-		unsigned long i;
-		int cpu = get_current_cpunum();
-
-		i = atomic_inc_return(&mbx_log.mbox_idx) &
-			(ARRAY_SIZE(mbx_log.mbox_rx_tx_log) - 1);
-
-		mbx_log.mbox_rx_tx_log[i].time = cpu_clock(cpu);
-		mbx_log.mbox_rx_tx_log[i].dir = dir;
-		if (dir == LOG_DIR_RX)
-			mbx_log.mbox_rx_tx_log[i].count_rx = count_rx++;
-		else
-			mbx_log.mbox_rx_tx_log[i].count_tx = count_tx++;
-
-		mbx_log.mbox_rx_tx_log[i].intgr0 =
-			mcu_ipc_readl(EXYNOS_MCU_IPC_INTGR0);
-		mbx_log.mbox_rx_tx_log[i].intmr0 =
-			mcu_ipc_readl(EXYNOS_MCU_IPC_INTMR0);
-		mbx_log.mbox_rx_tx_log[i].intsr0 =
-			mcu_ipc_readl(EXYNOS_MCU_IPC_INTSR0);
-		mbx_log.mbox_rx_tx_log[i].intmsr0 =
-			mcu_ipc_readl(EXYNOS_MCU_IPC_INTMSR0);
-	}
-	pure_arch_local_irq_restore(flags);
-}
-#endif
-
 static irqreturn_t mcu_ipc_handler(int irq, void *data)
 {
 	u32 irq_stat, i;
-	u32 mr0;
+	u32 id;
 
-	if (!mcu_dat.ioaddr) {
-		pr_err("%s: can't exec this func, probe failure\n", __func__);
-		goto exit;
-	}
-
-#ifdef CONFIG_MCU_IPC_LOG
-	mbox_save_rx_tx_log(LOG_DIR_RX);
-#endif
-
-	/* Check SFR vs Memory for INTMR0 */
-	mr0 = mcu_ipc_readl(EXYNOS_MCU_IPC_INTMR0) & 0xFFFF0000;
-	if (mr0 != mcu_dat.mr0) {
-		dev_info(mcu_dat.mcu_ipc_dev, "ERR: INTMR0 is not matched. memory:%X SFR:%X\n"
-				, mr0, mcu_dat.mr0);
-		dev_info(mcu_dat.mcu_ipc_dev, "Update memory value to SFR\n");
-		mcu_ipc_writel(mcu_dat.mr0, EXYNOS_MCU_IPC_INTMR0);
-	}
-
-	irq_stat = mcu_ipc_readl(EXYNOS_MCU_IPC_INTSR0) & 0xFFFF0000;
+	id = ((struct mcu_ipc_drv_data *)data)->id;
+	irq_stat = mcu_ipc_readl(id, EXYNOS_MCU_IPC_INTSR0) & 0xFFFF0000;
 	/* Interrupt Clear */
-	mcu_ipc_writel(irq_stat, EXYNOS_MCU_IPC_INTCR0);
+	mcu_ipc_writel(id, irq_stat, EXYNOS_MCU_IPC_INTCR0);
 
 	for (i = 0; i < 16; i++) {
 		if (irq_stat & (1 << (i + 16))) {
-			if ((1 << (i + 16)) & mcu_dat.registered_irq)
-				mcu_dat.hd[i].handler(mcu_dat.hd[i].data);
+			if ((1 << (i + 16)) & mcu_dat[id].registered_irq)
+				mcu_dat[id].hd[i].handler(mcu_dat[id].hd[i].data);
 			else
-				dev_err_ratelimited(mcu_dat.mcu_ipc_dev,
-					"irq:0x%x, Unregistered INT received.\n", irq_stat);
+				dev_err(mcu_dat[id].mcu_ipc_dev,
+					"Unregistered INT received.\n");
 
 			irq_stat &= ~(1 << (i + 16));
 		}
@@ -198,130 +48,94 @@ static irqreturn_t mcu_ipc_handler(int irq, void *data)
 			break;
 	}
 
-exit:
 	return IRQ_HANDLED;
 }
 
-int mbox_request_irq(u32 int_num, void (*handler)(void *), void *data)
+int mbox_request_irq(enum mcu_ipc_region id, u32 int_num,
+					void (*handler)(void *), void *data)
 {
-	u32 mr0;
-
-	if ((!handler) || (int_num > 15) || !mcu_dat.ioaddr)
+	if ((!handler) || (int_num > 15))
 		return -EINVAL;
 
-	mcu_dat.hd[int_num].data = data;
-	mcu_dat.hd[int_num].handler = handler;
-	mcu_dat.registered_irq |= 1 << (int_num + 16);
-
-	/* Update SFR */
-	mr0 = mcu_ipc_readl(EXYNOS_MCU_IPC_INTMR0) & 0xFFFF0000;
-	mr0 &= ~(1 << (int_num + 16));
-	mcu_ipc_writel(mr0, EXYNOS_MCU_IPC_INTMR0);
-
-	/* Update Memory */
-	mcu_dat.mr0 &= ~(1 << (int_num + 16));
+	mcu_dat[id].hd[int_num].data = data;
+	mcu_dat[id].hd[int_num].handler = handler;
+	mcu_dat[id].registered_irq |= 1 << (int_num + 16);
 
 	return 0;
 }
 EXPORT_SYMBOL(mbox_request_irq);
 
-int mcu_ipc_unregister_handler(u32 int_num, void (*handler)(void *))
+int mcu_ipc_unregister_handler(enum mcu_ipc_region id, u32 int_num,
+								void (*handler)(void *))
 {
-	u32 mr0;
-
-	if (!handler || !mcu_dat.ioaddr ||
-			(mcu_dat.hd[int_num].handler != handler))
+	if (!handler || (mcu_dat[id].hd[int_num].handler != handler))
 		return -EINVAL;
 
-	mcu_dat.hd[int_num].data = NULL;
-	mcu_dat.hd[int_num].handler = NULL;
-	mcu_dat.registered_irq &= ~(1 << (int_num + 16));
-
-	/* Update SFR */
-	mr0 = mcu_ipc_readl(EXYNOS_MCU_IPC_INTMR0) & 0xFFFF0000;
-	mr0 |= (1 << (int_num + 16));
-	mcu_ipc_writel(mr0, EXYNOS_MCU_IPC_INTMR0);
-
-	/* Update Memory */
-	mcu_dat.mr0 |= (1 << (int_num + 16));
+	mcu_dat[id].hd[int_num].data = NULL;
+	mcu_dat[id].hd[int_num].handler = NULL;
+	mcu_dat[id].registered_irq &= ~(1 << (int_num + 16));
 
 	return 0;
 }
 EXPORT_SYMBOL(mcu_ipc_unregister_handler);
 
-void mbox_set_interrupt(u32 int_num)
+void mbox_set_interrupt(enum mcu_ipc_region id, u32 int_num)
 {
-	if (!mcu_dat.ioaddr) {
-		pr_err("%s: can't exec this func, probe failure\n", __func__);
-		return;
-	}
-
 	/* generate interrupt */
 	if (int_num < 16)
-		mcu_ipc_writel(0x1 << int_num, EXYNOS_MCU_IPC_INTGR1);
-
-#ifdef CONFIG_MCU_IPC_LOG
-	mbox_save_rx_tx_log(LOG_DIR_TX);
-#endif
+		mcu_ipc_writel(id, 0x1 << int_num, EXYNOS_MCU_IPC_INTGR1);
 }
 EXPORT_SYMBOL(mbox_set_interrupt);
 
-void mcu_ipc_send_command(u32 int_num, u16 cmd)
+void mcu_ipc_send_command(enum mcu_ipc_region id, u32 int_num, u16 cmd)
 {
-	if (!mcu_dat.ioaddr) {
-		pr_err("%s: can't exec this func, probe failure\n", __func__);
-		return;
-	}
-
 	/* write command */
 	if (int_num < 16)
-		mcu_ipc_writel(cmd, EXYNOS_MCU_IPC_ISSR0 + (8 * int_num));
+		mcu_ipc_writel(id, cmd, EXYNOS_MCU_IPC_ISSR0 + (8 * int_num));
 
 	/* generate interrupt */
-	mbox_set_interrupt(int_num);
+	mbox_set_interrupt(id, int_num);
 }
 EXPORT_SYMBOL(mcu_ipc_send_command);
 
-void mcu_ipc_clear_all_interrupt(void)
+u32 mbox_get_value(enum mcu_ipc_region id, u32 mbx_num)
 {
-	if (!mcu_dat.ioaddr) {
-		pr_err("%s: can't exec this func, probe failure\n", __func__);
-		return;
-	}
-
-	mcu_ipc_writel(0xFFFF, EXYNOS_MCU_IPC_INTCR1);
-
-	/* apply all interrupt mask */
-	mcu_ipc_writel(0xFFFF0000, EXYNOS_MCU_IPC_INTMR0);
-	mcu_dat.mr0 = 0xFFFF0000;
-}
-
-u32 mbox_get_value(u32 mbx_num)
-{
-	if (!mcu_dat.ioaddr)
-		return -EINVAL;
-
 	if (mbx_num < 64)
-		return mcu_ipc_readl(EXYNOS_MCU_IPC_ISSR0 + (4 * mbx_num));
+		return mcu_ipc_readl(id, EXYNOS_MCU_IPC_ISSR0 + (4 * mbx_num));
 	else
 		return 0;
 }
 EXPORT_SYMBOL(mbox_get_value);
 
-void mbox_set_value(u32 mbx_num, u32 msg)
+void mbox_set_value(enum mcu_ipc_region id, u32 mbx_num, u32 msg)
 {
-	if (!mcu_dat.ioaddr) {
-		pr_err("%s: can't exec this func, probe failure\n", __func__);
-		return;
-	}
-
 	if (mbx_num < 64)
-		mcu_ipc_writel(msg, EXYNOS_MCU_IPC_ISSR0 + (4 * mbx_num));
+		mcu_ipc_writel(id, msg, EXYNOS_MCU_IPC_ISSR0 + (4 * mbx_num));
 }
 EXPORT_SYMBOL(mbox_set_value);
 
+void mbox_sw_reset(enum mcu_ipc_region id)
+{
+	u32 reg_val;
+
+	printk("Reset Mailbox registers\n");
+
+	reg_val = mcu_ipc_readl(id, EXYNOS_MCU_IPC_MCUCTLR);
+	reg_val |= (0x1 << MCU_IPC_MCUCTLR_MSWRST);
+
+	mcu_ipc_writel(id, reg_val, EXYNOS_MCU_IPC_MCUCTLR) ;
+
+	udelay(5);
+}
+EXPORT_SYMBOL(mbox_sw_reset);
+
+static void mcu_ipc_clear_all_interrupt(enum mcu_ipc_region id)
+{
+	mcu_ipc_writel(id, 0xFFFF, EXYNOS_MCU_IPC_INTCR1);
+}
+
 #ifdef CONFIG_ARGOS
-static int mcu_ipc_set_affinity(struct device *dev, int irq)
+static int mcu_ipc_set_affinity(enum mcu_ipc_region id, struct device *dev, int irq)
 {
 	struct device_node *np = dev->of_node;
 	u32 irq_affinity_mask = 0;
@@ -339,34 +153,47 @@ static int mcu_ipc_set_affinity(struct device *dev, int irq)
 
 	dev_info(dev, "irq_affinity_mask = 0x%x\n", irq_affinity_mask);
 
-	if (!zalloc_cpumask_var(&mcu_dat.dmask, GFP_KERNEL))
+	if (!zalloc_cpumask_var(&mcu_dat[id].dmask, GFP_KERNEL))
 		return -ENOMEM;
-	if (!zalloc_cpumask_var(&mcu_dat.imask, GFP_KERNEL))
+	if (!zalloc_cpumask_var(&mcu_dat[id].imask, GFP_KERNEL))
 		return -ENOMEM;
 
-	cpumask_or(mcu_dat.imask, mcu_dat.imask, cpumask_of(irq_affinity_mask));
-	cpumask_copy(mcu_dat.dmask, get_default_cpu_mask());
+	cpumask_or(mcu_dat[id].imask, mcu_dat[id].imask, cpumask_of(irq_affinity_mask));
+	cpumask_copy(mcu_dat[id].dmask, get_default_cpu_mask());
 
-	return argos_irq_affinity_setup_label(irq, "IPC", mcu_dat.imask,
-			mcu_dat.dmask);
+	return argos_irq_affinity_setup_label(irq, "IPC", mcu_dat[id].imask,
+			mcu_dat[id].dmask);
 }
 #else
-static inline int mcu_ipc_set_affinity(struct device *dev, int irq)
+static int mcu_ipc_set_affinity(enum mcu_ipc_region id, struct device *dev, int irq)
 {
 	return 0;
 }
 #endif
 
 #ifdef CONFIG_MCU_IPC_TEST
-static void test_without_cp(void)
+static void test_without_dev(enum mcu_ipc_region id)
 {
 	int i;
+	char *region;
+
+	switch(id) {
+	case MCU_CP:
+		region = "CP";
+		break;
+	case MCU_GNSS:
+		region = "GNSS";
+		break;
+	default:
+		region = NULL;
+	}
 
 	for (i = 0; i < 64; i++) {
-		mbox_set_value(i, 64 - i);
+		mbox_set_value(id, i, 64 - i);
 		mdelay(50);
-		dev_err(mcu_dat.mcu_ipc_dev, "Test without CP: Read mbox value[%d]: %d\n",
-				i, mbox_get_value(i));
+		dev_err(mcu_dat[id].mcu_ipc_dev,
+				"Test without %s(%d): Read mbox value[%d]: %d\n",
+				region, id, i, mbox_get_value(i));
 	}
 }
 #endif
@@ -377,83 +204,68 @@ static int mcu_ipc_probe(struct platform_device *pdev)
 	struct resource *res = NULL;
 	int mcu_ipc_irq;
 	int err = 0;
+	u32 id = 0;
 
-	dev_err(dev, "%s: mcu init\n", __func__);
-	mcu_dat.mcu_ipc_dev = dev;
+	dev_err(&pdev->dev, "%s: mcu_ipc probe start.\n", __func__);
 
-	if (!dev->dma_mask)
-		dev->dma_mask = &dev->coherent_dma_mask;
-	if (!dev->coherent_dma_mask)
-		dev->coherent_dma_mask = DMA_BIT_MASK(32);
+	err = of_property_read_u32(dev->of_node, "mcu,id", &id);
+	if (err) {
+		dev_err(&pdev->dev, "MCU IPC parse error! [id]\n");
+		return err;
+	}
+
+	if (id >= MCU_MAX) {
+		dev_err(&pdev->dev, "MCU IPC Invalid ID [%d]\n", id);
+		return -EINVAL;
+	}
+
+	mcu_dat[id].id = id;
+	mcu_dat[id].mcu_ipc_dev = &pdev->dev;
+
+	if (!pdev->dev.dma_mask)
+		pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
+	if (!pdev->dev.coherent_dma_mask)
+		pdev->dev.coherent_dma_mask = DMA_BIT_MASK(32);
 
 	if (dev->of_node) {
-		mcu_dt_read_string(dev->of_node, "mcu,name", mcu_dat.name);
-		if (IS_ERR(&mcu_dat)) {
-			dev_err(dev, "MCU IPC parse error!\n");
-			return PTR_ERR(&mcu_dat);
+		mcu_dt_read_string(dev->of_node, "mcu,name", mcu_dat[id].name);
+		if (IS_ERR(&mcu_dat[id])) {
+			dev_err(&pdev->dev, "MCU IPC parse error!\n");
+			return PTR_ERR(&mcu_dat[id]);
 		}
 	}
 
 	/* resource for mcu_ipc SFR region */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res) {
-		dev_err(dev, "no memory resource defined\n");
-		return -ENOENT;
-	}
-
-	res = request_mem_region(res->start, resource_size(res), mcu_dat.name);
-	if (!res) {
-		dev_err(dev, "failded to request memory resource\n");
-		return -ENOENT;
-	}
-
-	mcu_dat.ioaddr = ioremap(res->start, resource_size(res));
-	if (!mcu_dat.ioaddr) {
-		dev_err(dev, "failded to request memory resource\n");
-		err = -ENXIO;
-		goto release_mcu_ipc;
+	mcu_dat[id].ioaddr = devm_ioremap_resource(&pdev->dev, res);
+	if (IS_ERR(mcu_dat[id].ioaddr)) {
+		dev_err(&pdev->dev, "failded to request memory resource\n");
+		return PTR_ERR(mcu_dat[id].ioaddr);
 	}
 
 	/* Request IRQ */
 	mcu_ipc_irq = platform_get_irq(pdev, 0);
-	dev_err(dev, "%s: mcu interrupt num: %d\n", __func__, mcu_ipc_irq);
-	if (mcu_ipc_irq < 0) {
-		dev_err(dev, "no irq specified\n");
-		err = mcu_ipc_irq;
-		goto unmap_ioaddr;
-	}
-
-	err = request_irq(mcu_ipc_irq, mcu_ipc_handler, 0, pdev->name, pdev);
+	err = devm_request_irq(&pdev->dev, mcu_ipc_irq, mcu_ipc_handler, 0,
+			pdev->name, &mcu_dat[id]);
 	if (err) {
-		dev_err(dev, "Can't request MCU_IPC IRQ\n");
-		goto unmap_ioaddr;
+		dev_err(&pdev->dev, "Can't request MCU_IPC IRQ\n");
+		return err;
 	}
 
-#ifdef CONFIG_MCU_IPC_LOG
-	mbx_log.mcu_int = mcu_ipc_irq;
-#endif
-
-	mcu_ipc_clear_all_interrupt();
+	mcu_ipc_clear_all_interrupt(id);
 
 	/* set argos irq affinity */
-	err = mcu_ipc_set_affinity(dev, mcu_ipc_irq);
+	err = mcu_ipc_set_affinity(id, dev, mcu_ipc_irq);
 	if (err)
 		dev_err(dev, "Can't set IRQ affinity with(%d)\n", err);
 
 #ifdef CONFIG_MCU_IPC_TEST
-	test_without_cp();
+	test_without_dev(id);
 #endif
+
+	dev_err(&pdev->dev, "%s: mcu_ipc probe done.\n", __func__);
+
 	return 0;
-
-unmap_ioaddr:
-	iounmap(mcu_dat.ioaddr);
-	mcu_dat.ioaddr = NULL;
-
-release_mcu_ipc:
-	release_mem_region(res->start, resource_size(res));
-	mcu_dat.mcu_ipc_dev = NULL;
-
-	return err;
 }
 
 static int __exit mcu_ipc_remove(struct platform_device *pdev)
@@ -488,6 +300,8 @@ static const struct of_device_id exynos_mcu_ipc_dt_match[] = {
 		{ .compatible = "samsung,exynos7580-mailbox", },
 		{ .compatible = "samsung,exynos7890-mailbox", },
 		{ .compatible = "samsung,exynos8890-mailbox", },
+		{ .compatible = "samsung,exynos7870-mailbox", },
+		{ .compatible = "samsung,exynos-shd-ipc-mailbox", },
 		{},
 };
 MODULE_DEVICE_TABLE(of, exynos_mcu_ipc_dt_match);

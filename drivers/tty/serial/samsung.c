@@ -32,6 +32,7 @@
 #include <linux/ioport.h>
 #include <linux/io.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/sysrq.h>
 #include <linux/console.h>
@@ -44,7 +45,10 @@
 #include <linux/clk.h>
 #include <linux/suspend.h>
 #include <linux/of.h>
-#include <linux/slab.h>
+#include <soc/samsung/exynos-pmu.h>
+#include <soc/samsung/pmu-cp.h>
+
+#include <linux/sched.h>
 
 #ifdef CONFIG_SND_SAMSUNG_AUDSS
 #include <sound/exynos.h>
@@ -61,7 +65,6 @@
 #ifdef CONFIG_PM_DEVFREQ
 #include <linux/pm_qos.h>
 #endif
-
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 
@@ -94,25 +97,15 @@ static void dbg(const char *fmt, ...)
 #define S3C24XX_SERIAL_MAJOR	204
 #define S3C24XX_SERIAL_MINOR	64
 
-/*  This port SHOULD be matched with the parameter
-  *  which is delivered to Kernel from BL via command line as below.
-  *     androidboot.sec_atd.tty=/dev/ttySAC4
-  */
-#define FACTORY_UART_PORT_LINE 4
-#define is_factory_port(port) (FACTORY_UART_PORT_LINE == (port)->line)
+#ifndef CONFIG_SAMSUNG_PRODUCT_SHIP
+#define SERIAL_UART_TRACE 1
+#define PROC_SERIAL_DIR	"serial/uart"
+#define SERIAL_UART_PORT_LINE 0
+#endif
 
 /* Baudrate definition*/
 #define MAX_BAUD	3000000
 #define MIN_BAUD	0
-
-#define BT_UART_TRACE 1
-#define LOG_BUFFER_SIZE (0xC8000) /* Allocate 800KB of buffer */
-#define PROC_DIR	"bluetooth/uart"
-#define BLUETOOTH_UART_PORT_LINE 1
-
-#if defined(CONFIG_BCM4359)
-#define WIFI_UART_PORT_LINE 3
-#endif
 
 /* macros to change one thing to another */
 
@@ -129,7 +122,10 @@ EXPORT_SYMBOL_GPL(s3c2410_serial_wake_peer);
 #define UART_LOOPBACK_MODE	(0x1 << 0)
 #define UART_DBG_MODE		(0x1 << 1)
 
+
 void s3c24xx_serial_rx_fifo_wait(void);
+/* Allocate 800KB of buffer for UART logging */
+#define LOG_BUFFER_SIZE		(0xC8000)
 
 static void print_uart_mode(struct uart_port *port,
 		struct ktermios *termios, unsigned int baud)
@@ -227,6 +223,55 @@ uart_dbg_store(struct device *dev, struct device_attribute *attr,
 
 static DEVICE_ATTR(uart_dbg, 0640, uart_dbg_show, uart_dbg_store);
 
+
+struct proc_dir_entry *serial_dir, *serial_log_dir;
+
+static void uart_copy_to_local_buf(int dir, struct uart_local_buf* local_buf,
+				unsigned char* trace_buf, int len)
+{
+	unsigned long long time;
+	unsigned long rem_nsec;
+	int i;
+	int cpu = raw_smp_processor_id();
+
+	time = cpu_clock(cpu);
+	rem_nsec = do_div(time, NSEC_PER_SEC);
+
+	if (local_buf->index + (len * 3 + 30) >= local_buf->size) {
+		local_buf->index = 0;
+	}
+
+	local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
+				 local_buf->size - local_buf->index,
+				"[%5lu.%06lu] ",
+				(unsigned long)time, rem_nsec / NSEC_PER_USEC);
+
+	if (dir == 2) {
+		local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
+                local_buf->size - local_buf->index, "[reg] ");
+
+		local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
+					local_buf->size - local_buf->index,
+					"%s", trace_buf);
+	} else {
+		if (dir == 1) {
+			local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
+					local_buf->size - local_buf->index, "[RX] ");
+		} else {
+			local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
+					local_buf->size - local_buf->index, "[TX] ");
+		}
+		for (i = 0; i < len; i++) {
+			local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
+					local_buf->size - local_buf->index,
+					"%02X ", trace_buf[i]);
+		}
+	}
+
+	local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
+					local_buf->size - local_buf->index, "\n");
+}
+
 static ssize_t
 uart_error_cnt_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
@@ -247,43 +292,6 @@ uart_error_cnt_show(struct device *dev, struct device_attribute *attr, char *buf
 }
 
 static DEVICE_ATTR(error_cnt, 0664, uart_error_cnt_show, NULL);
-
-struct proc_dir_entry *bluetooth_dir, *bt_log_dir;
-static void uart_copy_to_local_buf(int dir, struct uart_local_buf *local_buf,
-		unsigned char *trace_buf, int len)
-{
-	unsigned long long time;
-	unsigned long rem_nsec;
-	int i;
-	int cpu = raw_smp_processor_id();
-
-	time = cpu_clock(cpu);
-	rem_nsec = do_div(time, NSEC_PER_SEC);
-
-	if (local_buf->index + (len * 3 + 30) >= local_buf->size)
-        local_buf->index = 0;
-
-	local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
-			local_buf->size - local_buf->index,
-			"[%5lu.%06lu] ",
-			(unsigned long)time, rem_nsec / NSEC_PER_USEC);
-
-    if (dir == 1)
-		local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
-				local_buf->size - local_buf->index, "[RX] ");
-    else
-		local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
-				local_buf->size - local_buf->index, "[TX] ");
-
-	for (i = 0; i < len; i++) {
-		local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
-				local_buf->size - local_buf->index,
-				"%02X ", trace_buf[i]);
-    }
-
-	local_buf->index += scnprintf(local_buf->buffer + local_buf->index,
-			local_buf->size - local_buf->index, "\n");
-}
 
 static void s3c24xx_serial_resetport(struct uart_port *port,
 				   struct s3c2410_uartcfg *cfg);
@@ -474,12 +482,9 @@ s3c24xx_serial_rx_chars(int irq, void *dev_id)
 	unsigned int ufcon, ch, flag, ufstat, uerstat;
 	unsigned long flags;
 	int fifocnt = 0;
-	int max_count = 64;
-	unsigned char insert_buf[256] = {0, };
-	unsigned int insert_cnt = 0;
+	int max_count = port->fifosize;
 	unsigned char trace_buf[256] = {0, };
 	int trace_cnt = 0;
-
 
 	spin_lock_irqsave(&port->lock, flags);
 
@@ -491,10 +496,8 @@ s3c24xx_serial_rx_chars(int irq, void *dev_id)
 		if (fifocnt == 0) {
 			ufstat = rd_regl(port, S3C2410_UFSTAT);
 			fifocnt = s3c24xx_serial_rx_fifocnt(ourport, ufstat);
-			if (fifocnt == 0) {
-				wr_regl(port, S3C64XX_UINTP, S3C64XX_UINTM_RXD_MSK);
+			if (fifocnt == 0)
 				break;
-			}
 		}
 		fifocnt--;
 
@@ -534,6 +537,7 @@ s3c24xx_serial_rx_chars(int irq, void *dev_id)
 
 			/* check for break */
 			if (uerstat & S3C2410_UERSTAT_BREAK) {
+				printk("[UART] BREAK Error!\n");
 				dbg("break!\n");
 				port->icount.brk++;
 				if (uart_handle_break(port))
@@ -541,47 +545,42 @@ s3c24xx_serial_rx_chars(int irq, void *dev_id)
 			}
 
 			if (uerstat & S3C2410_UERSTAT_FRAME) {
-                printk("[UART] Frame Error!\n");
-                port->icount.frame++;
-            }
+				printk("[UART] Frame Error!\n");
+				port->icount.frame++;
+			}
 			if (uerstat & S3C2410_UERSTAT_OVERRUN) {
-                printk("[UART] Overrun Error!\n");
-                port->icount.overrun++;
-            }
-
+				printk("[UART] Overrun Error!\n");
+				port->icount.overrun++;
+			}
 			uerstat &= port->read_status_mask;
 
-			if (uerstat & S3C2410_UERSTAT_BREAK) {
-                printk("[UART] Break signal!\n");
-                flag = TTY_BREAK;
-            }
-			else if (uerstat & S3C2410_UERSTAT_PARITY) {
-                printk("[UART] Parity error!\n");
-                flag = TTY_PARITY;
-            }
+			if (uerstat & S3C2410_UERSTAT_BREAK)
+				flag = TTY_BREAK;
+			else if (uerstat & S3C2410_UERSTAT_PARITY)
+				flag = TTY_PARITY;
 			else if (uerstat & (S3C2410_UERSTAT_FRAME |
-					    S3C2410_UERSTAT_OVERRUN)) {
-                printk("[UART] Frame&Overrunn Error!\n");
-                flag = TTY_FRAME;
-            }
+					    S3C2410_UERSTAT_OVERRUN))
+				flag = TTY_FRAME;
 		}
+
 		if (uart_handle_sysrq_char(port, ch))
 			goto ignore_char;
 
 		if (ourport->uart_logging)
 			trace_buf[trace_cnt++] = ch;
 
-		insert_buf[insert_cnt++] = ch;
+		uart_insert_char(port, uerstat, S3C2410_UERSTAT_OVERRUN,
+				 ch, flag);
 
  ignore_char:
 		continue;
 	}
+	wr_regl(port, S3C64XX_UINTP, S3C64XX_UINTM_RXD_MSK);
 
 	if (ourport->uart_logging && trace_cnt)
 		uart_copy_to_local_buf(1, &ourport->uart_local_buf, trace_buf, trace_cnt);
 
 	spin_unlock_irqrestore(&port->lock, flags);
-	tty_insert_flip_string(&port->state->port, insert_buf, insert_cnt);
 	tty_flip_buffer_push(&port->state->port);
 	flush_workqueue(system_unbound_wq);
 
@@ -595,7 +594,7 @@ static irqreturn_t s3c24xx_serial_tx_chars(int irq, void *id)
 	struct uart_port *port = &ourport->port;
 	struct circ_buf *xmit = &port->state->xmit;
 	unsigned long flags;
-	int count = 256;
+	int count = port->fifosize;
 	unsigned char trace_buf[256] = {0, };
 	int trace_cnt = 0;
 
@@ -607,7 +606,6 @@ static irqreturn_t s3c24xx_serial_tx_chars(int irq, void *id)
 			trace_buf[trace_cnt++] = port->x_char;
 		port->icount.tx++;
 		port->x_char = 0;
-
 		goto out;
 	}
 
@@ -627,10 +625,8 @@ static irqreturn_t s3c24xx_serial_tx_chars(int irq, void *id)
 			break;
 
 		wr_regb(port, S3C2410_UTXH, xmit->buf[xmit->tail]);
-
 		if (ourport->uart_logging)
 			trace_buf[trace_cnt++] = (unsigned char)xmit->buf[xmit->tail];
-
 		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
 		port->icount.tx++;
 	}
@@ -644,12 +640,11 @@ static irqreturn_t s3c24xx_serial_tx_chars(int irq, void *id)
 	if (uart_circ_empty(xmit))
 		s3c24xx_serial_stop_tx(port);
 
- out:
+out:
 	if (ourport->uart_logging && trace_cnt)
 		uart_copy_to_local_buf(0, &ourport->uart_local_buf, trace_buf, trace_cnt);
 
 	wr_regl(port, S3C64XX_UINTP, S3C64XX_UINTM_TXD_MSK);
-
 	spin_unlock_irqrestore(&port->lock, flags);
 	return IRQ_HANDLED;
 }
@@ -693,7 +688,6 @@ static irqreturn_t s3c64xx_serial_handle_irq(int irq, void *id)
 
 	if (rd_regl(port, S3C64XX_UINTP) & S3C64XX_UINTM_TXD_MSK)
 		ret = s3c24xx_serial_tx_chars(irq, id);
-
 	return ret;
 }
 
@@ -936,6 +930,19 @@ static void s3c24xx_serial_pm(struct uart_port *port, unsigned int level,
 		if (ourport->domain == DOMAIN_AUD)
 			aud_uart_gpio_cfg(&ourport->pdev->dev, level);
 
+		if (ourport->use_alive_io == 1) {
+			unsigned int uart_ctrl;
+			exynos_pmu_read(EXYNOS_PMU_UART_IO_SHARE_CTRL, &uart_ctrl);
+			if (!(uart_ctrl & SEL_CP_UART_DBG)) {
+				struct pinctrl *uart_sleep_pinctrl;
+				uart_sleep_pinctrl =
+					devm_pinctrl_get_select(port->dev, "uart_sleep");
+				if (IS_ERR(uart_sleep_pinctrl))
+					dev_err(port->dev,
+						"failed to set uart pin for sleep\n");
+			}
+		}
+
 		uart_clock_disable(ourport);
 		break;
 
@@ -944,6 +951,15 @@ static void s3c24xx_serial_pm(struct uart_port *port, unsigned int level,
 
 		if (ourport->domain == DOMAIN_AUD)
 			aud_uart_gpio_cfg(&ourport->pdev->dev, level);
+
+		if (ourport->use_alive_io == 1) {
+			struct pinctrl *uart_default_pinctrl;
+			uart_default_pinctrl =
+				devm_pinctrl_get_select(port->dev, "default");
+			if (IS_ERR(uart_default_pinctrl))
+					dev_err(port->dev,
+						"failed to set uart pin for default\n");
+		}
 
 		s3c24xx_serial_resetport(port, s3c24xx_port_to_cfg(port));
 		break;
@@ -1067,8 +1083,6 @@ static void s3c24xx_serial_set_termios(struct uart_port *port,
 	unsigned int ulcon;
 	unsigned int umcon;
 	unsigned int udivslot = 0;
-	unsigned int real_baud_rd, real_baud_ru = 0;
-	int calc_deviation_rd, calc_deviation_ru = 0;
 
 	/*
 	 * We don't support modem control lines.
@@ -1081,12 +1095,6 @@ static void s3c24xx_serial_set_termios(struct uart_port *port,
 	 */
 
 	baud = uart_get_baud_rate(port, termios, old, MIN_BAUD, MAX_BAUD);
-#if defined(CONFIG_BCM4359)
-	if (ourport->port.line == WIFI_UART_PORT_LINE){
-		baud = 460800;
-		printk("set baud as 460800!!\n");
-	}
-#endif
 	quot = s3c24xx_serial_getclk(ourport, baud, &clk, &clk_sel);
 	if (baud == 38400 && (port->flags & UPF_SPD_MASK) == UPF_SPD_CUST)
 		quot = port->custom_divisor;
@@ -1101,27 +1109,6 @@ static void s3c24xx_serial_set_termios(struct uart_port *port,
 
 	if (ourport->info->has_divslot) {
 		unsigned int div = ourport->baudclk_rate / baud;
-
-		/*
-		 * Find udivslot of the lowest error rate
-		 *
-		 * udivslot cannot be round-up to 0 because quot is fixed
-		 */
-		if ((div & 15) != 15) {
-			real_baud_rd = ourport->baudclk_rate / div;
-			real_baud_ru = ourport->baudclk_rate / (div + 1);
-
-			calc_deviation_rd = baud - real_baud_rd;
-			calc_deviation_ru = baud - real_baud_ru;
-
-			if (calc_deviation_rd < 0)
-				calc_deviation_rd = -calc_deviation_rd;
-			if (calc_deviation_ru < 0)
-				calc_deviation_ru = -calc_deviation_ru;
-
-			if (calc_deviation_rd > calc_deviation_ru)
-				div = div + 1;
-		}
 
 		if (cfg->has_fracval) {
 			udivslot = (div & 15);
@@ -1482,13 +1469,15 @@ static void s3c24xx_serial_resetport(struct uart_port *port,
 		ucon |= S3C2443_UCON_LOOPBACK;
 	}
 
+	/* To prevent unexpected Interrupt before enabling the channel */
+	wr_regl(port, S3C64XX_UINTM, 0xf);
+
 	/* reset both fifos */
 	wr_regl(port, S3C2410_UFCON, cfg->ufcon | S3C2410_UFCON_RESETBOTH);
 	wr_regl(port, S3C2410_UFCON, cfg->ufcon);
 
 	/* some delay is required after fifo reset */
 	udelay(1);
-
 	wr_regl(port, S3C2410_UCON,  ucon | cfg->ucon);
 }
 
@@ -1660,7 +1649,6 @@ static inline struct s3c24xx_serial_drv_data *s3c24xx_get_driver_data(
 			platform_get_device_id(pdev)->driver_data;
 }
 
-
 void s3c24xx_serial_rx_fifo_wait(void)
 {
    struct s3c24xx_uart_port *ourport;
@@ -1700,6 +1688,7 @@ void s3c24xx_serial_rx_fifo_wait(void)
 
 EXPORT_SYMBOL_GPL(s3c24xx_serial_rx_fifo_wait);
 
+
 void s3c24xx_serial_fifo_wait(void)
 {
 	struct s3c24xx_uart_port *ourport;
@@ -1708,7 +1697,7 @@ void s3c24xx_serial_fifo_wait(void)
 	unsigned long wait_time;
 
 	list_for_each_entry(ourport, &drvdata_list, node) {
-		if (!uart_console(&ourport->port))
+		if (ourport->port.line != CONFIG_S3C_LOWLEVEL_UART_PORT)
 			continue;
 
 		wait_time = jiffies + HZ / 4;
@@ -1722,10 +1711,10 @@ void s3c24xx_serial_fifo_wait(void)
 }
 EXPORT_SYMBOL_GPL(s3c24xx_serial_fifo_wait);
 
-#ifdef BT_UART_TRACE
+
+#if defined(BT_UART_TRACE) || defined(SERIAL_UART_TRACE)
 static void s3c24xx_print_reg_status(struct s3c24xx_uart_port *ourport)
 {
-	if (ourport->port.line == BLUETOOTH_UART_PORT_LINE) {
 		struct uart_port *port = &ourport->port;
 
 		unsigned int ulcon = rd_regl(port, S3C2410_ULCON);
@@ -1735,7 +1724,7 @@ static void s3c24xx_print_reg_status(struct s3c24xx_uart_port *ourport)
 		unsigned int utrstat = rd_regl(port, S3C2410_UTRSTAT);
 		unsigned int ufstat = rd_regl(port, S3C2410_UFSTAT);
 		unsigned int umstat = rd_regl(port, S3C2410_UMSTAT);
-        unsigned int uerstat = rd_regl(port, S3C2410_UERSTAT);
+		unsigned int uerstat = rd_regl(port, S3C2410_UERSTAT);
 
 		int tx_fifo_full = ufstat & S5PV210_UFSTAT_TXFULL;
 		int tx_fifo_count = s3c24xx_serial_tx_fifocnt(ourport, ufstat);
@@ -1745,37 +1734,35 @@ static void s3c24xx_print_reg_status(struct s3c24xx_uart_port *ourport)
 
 		pr_err("[BT]: ulcon = 0x%08x, ucon = 0x%08x, ufcon = 0x%08x\n, umcon = 0x%08x\n", ulcon, ucon, ufcon, umcon);
 		pr_err("[BT]: utrstat = 0x%08x, ufstat = 0x%08x, umstat = 0x%08x\n", utrstat, ufstat, umstat);
-        pr_err("[BT]: uerstat = 0x%08x\n", uerstat);
+		pr_err("[BT]: uerstat = 0x%08x\n", uerstat);
 		pr_err("[BT]: tx_fifo_full = %d, tx_fifo_count = %d\n", tx_fifo_full, tx_fifo_count);
 		pr_err("[BT]: rx_fifo_full = %d, rx_fifo_count = %d\n", rx_fifo_full, rx_fifo_count);
-	}
 }
+#endif
 
-
-
-static ssize_t s3c24xx_serial_bt_log(struct file *file, char __user *userbuf, size_t bytes, loff_t *off)
+#ifdef SERIAL_UART_TRACE
+static ssize_t s3c24xx_serial_log(struct file *file, char __user *userbuf, size_t bytes, loff_t *off)
 {
 	int ret;
-	struct s3c24xx_uart_port *ourport = &s3c24xx_serial_ports[BLUETOOTH_UART_PORT_LINE];
-	static int copied_bytes = 0;
+	struct s3c24xx_uart_port *ourport = &s3c24xx_serial_ports[SERIAL_UART_PORT_LINE];
+	static int copied_bytes;
 
 	if (copied_bytes >= LOG_BUFFER_SIZE) {
-        struct uart_port *port;
+		struct uart_port *port;
 
-        port = &ourport->port;
+		port = &ourport->port;
 
 		copied_bytes = 0;
 
-        if (port && port->state->pm_state == UART_PM_STATE_ON)
-    		s3c24xx_print_reg_status(ourport);
+		if (port && port->state->pm_state == UART_PM_STATE_ON)
+			s3c24xx_print_reg_status(ourport);
 		return 0;
 	}
 
 	if (copied_bytes + bytes < LOG_BUFFER_SIZE) {
 		ret = copy_to_user(userbuf, ourport->uart_local_buf.buffer+copied_bytes, bytes);
-		if(ret)
-		{
-			pr_err("Failed to s3c24xx_serial_bt_log : %d\n", (int)ret);
+		if (ret) {
+			pr_err("Failed to s3c24xx_serial_serial_log : %d\n", (int)ret);
 			return ret;
 		}
 		copied_bytes += bytes;
@@ -1784,9 +1771,8 @@ static ssize_t s3c24xx_serial_bt_log(struct file *file, char __user *userbuf, si
 		int byte_to_read = LOG_BUFFER_SIZE-copied_bytes;
 
 		ret = copy_to_user(userbuf, ourport->uart_local_buf.buffer+copied_bytes, byte_to_read);
-		if(ret)
-		{
-			pr_err("Failed to s3c24xx_serial_bt_log : %d\n", (int)ret);
+		if (ret) {
+			pr_err("Failed to s3c24xx_serial_log : %d\n", (int)ret);
 			return ret;
 		}
 		copied_bytes += byte_to_read;
@@ -1795,9 +1781,9 @@ static ssize_t s3c24xx_serial_bt_log(struct file *file, char __user *userbuf, si
 
 	return 0;
 }
-static const struct file_operations proc_fops_btlog = {
+static const struct file_operations proc_fops_serial_log = {
 	.owner = THIS_MODULE,
-	.read = s3c24xx_serial_bt_log,
+	.read = s3c24xx_serial_log,
 };
 #endif
 
@@ -1819,13 +1805,10 @@ static int s3c24xx_serial_notifier(struct notifier_block *self,
 	case SICD_ENTER:
 	case SICD_AUD_ENTER:
 		list_for_each_entry(ourport, &drvdata_list, node) {
+			if (ourport->port.line == CONFIG_S3C_LOWLEVEL_UART_PORT)
+				continue;
+
 			port = &ourport->port;
-
-			if (uart_console(port))
-				continue;
-
-			if (is_factory_port(port))
-				continue;
 
 			if (port->state->pm_state == UART_PM_STATE_OFF)
 				continue;
@@ -1839,20 +1822,15 @@ static int s3c24xx_serial_notifier(struct notifier_block *self,
 
 			spin_unlock_irqrestore(&port->lock, flags);
 		}
-
-		s3c24xx_serial_fifo_wait();
 		break;
 
 	case SICD_EXIT:
 	case SICD_AUD_EXIT:
 		list_for_each_entry(ourport, &drvdata_list, node) {
+			if (ourport->port.line == CONFIG_S3C_LOWLEVEL_UART_PORT)
+				continue;
+
 			port = &ourport->port;
-
-			if (uart_console(port))
-				continue;
-
-			if (is_factory_port(port))
-				continue;
 
 			if (port->state->pm_state == UART_PM_STATE_OFF)
 				continue;
@@ -1866,6 +1844,7 @@ static int s3c24xx_serial_notifier(struct notifier_block *self,
 
 			spin_unlock_irqrestore(&port->lock, flags);
 		}
+		s3c24xx_serial_fifo_wait();
 		break;
 
 	default:
@@ -1888,11 +1867,11 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 	int port_index = probe_index;
 
 	dbg("s3c24xx_serial_probe(%p) %d\n", pdev, index);
-	
-	if (index >= ARRAY_SIZE(s3c24xx_serial_ports)) {
-		dev_err(&pdev->dev, "serial%d out of range\n", index);
-		return -EINVAL;
-	}
+
+        if (index >= ARRAY_SIZE(s3c24xx_serial_ports)) {
+                dev_err(&pdev->dev, "serial%d out of range\n", index);
+                return -EINVAL;
+        }
 
 	if (pdev->dev.of_node) {
 		ret = of_alias_get_id(pdev->dev.of_node, "uart");
@@ -1951,8 +1930,8 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 						&ourport->uart_irq_affinity))
 		ourport->uart_irq_affinity = 0;
 
-	if (of_property_read_u32(pdev->dev.of_node, "qos_timeout",
-					(u32 *)&ourport->qos_timeout))
+	if (of_property_read_u64(pdev->dev.of_node, "qos_timeout",
+					(u64 *)&ourport->qos_timeout))
 		ourport->qos_timeout = 0;
 
 	if ((ourport->mif_qos_val || ourport->cpu_qos_val)
@@ -1969,12 +1948,6 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 						PM_QOS_CLUSTER1_FREQ_MIN, 0);
 	}
 #endif
-
-	if (of_get_property(pdev->dev.of_node, "samsung,uart-logging", NULL))
-		ourport->uart_logging = 1;
-	else
-		ourport->uart_logging = 0;
-
 	if (of_find_property(pdev->dev.of_node, "samsung,lpass-subip", NULL))
 		ourport->domain = DOMAIN_AUD;
 	else
@@ -1985,44 +1958,56 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 	else
 		ourport->use_default_irq =0;
 
+	if (of_find_property(pdev->dev.of_node, "samsung,alive-io", NULL))
+		ourport->use_alive_io = 1;
+	else
+		ourport->use_alive_io = 0;
+
+#ifdef SERIAL_UART_TRACE
+        if (of_get_property(pdev->dev.of_node, "samsung,uart-logging", NULL))
+            ourport->uart_logging = 1;
+        else
+            ourport->uart_logging = 0;
+#endif
+            pr_err("uart logging %d, index %d\n",ourport->uart_logging,port_index);
+
 	ret = s3c24xx_serial_init_port(ourport, pdev);
 	if (ret < 0)
 		return ret;
 
-	if (ourport->uart_logging == 1) {
-		/* Allocate memory for UART logging */
-		ourport->uart_local_buf.buffer = kzalloc(LOG_BUFFER_SIZE, GFP_KERNEL);
-
-		if (!ourport->uart_local_buf.buffer)
-			dev_err(&pdev->dev, "could not allocate buffer for UART logging\n");
-
-		ourport->uart_local_buf.size = LOG_BUFFER_SIZE;
-		ourport->uart_local_buf.index = 0;
-
-#ifdef BT_UART_TRACE
-		if (port_index == BLUETOOTH_UART_PORT_LINE) {
-			struct proc_dir_entry *ent;
-
-			bluetooth_dir = proc_mkdir("bluetooth", NULL);
-			if (bluetooth_dir == NULL) {
-				pr_err("Unable to create /proc/bluetooth directory\n");
-				return -ENOMEM;
-			}
-
-			bt_log_dir = proc_mkdir("uart", bluetooth_dir);
-			if (bt_log_dir == NULL) {
-				pr_err("Unable to create /proc/%s directory\n", PROC_DIR);
-				return -ENOMEM;
-			}
-
-			ent = proc_create("log", 0440, bt_log_dir, &proc_fops_btlog);
-			if (ent == NULL) {
-				pr_err("Unable to create /proc/%s/log entry\n", PROC_DIR);
-				return -ENOMEM;
-			}
-		}
+        if (ourport->uart_logging == 1) {
+            /* Allocate memory for UART logging */
+            ourport->uart_local_buf.buffer = kzalloc(LOG_BUFFER_SIZE, GFP_KERNEL);
+    
+            if (!ourport->uart_local_buf.buffer)
+                dev_err(&pdev->dev, "could not allocate buffer for UART logging\n");
+    
+            ourport->uart_local_buf.size = LOG_BUFFER_SIZE;
+            ourport->uart_local_buf.index = 0;
+#ifdef SERIAL_UART_TRACE
+                    if (port_index == SERIAL_UART_PORT_LINE) {
+                        struct proc_dir_entry *ent;
+            
+                        serial_dir = proc_mkdir("serial", NULL);
+                        if (serial_dir == NULL) {
+                            pr_err("Unable to create /proc/serial directory\n");
+                            return -ENOMEM;
+                        }
+            
+                        serial_log_dir = proc_mkdir("uart", serial_dir);
+                        if (serial_log_dir == NULL) {
+                            pr_err("Unable to create /proc/serial/uart directory\n");
+                            return -ENOMEM;
+                        }
+                    
+                        ent = proc_create("log", 0444, serial_log_dir, &proc_fops_serial_log);
+                        if (ent == NULL) {
+                            pr_err("Unable to create /proc/%s/log entry\n", PROC_SERIAL_DIR);
+                            return -ENOMEM;
+                        }
+                    }
 #endif
-	}
+        }
 
 	/* Registering notifier for audio uart */
 	if (ourport->domain == DOMAIN_AUD) {
@@ -2049,14 +2034,6 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "AUD-UART : Audio block power enable.\n");
 #endif
 	}
-
-    if (port_index == BLUETOOTH_UART_PORT_LINE) {
-        struct pinctrl *bt_uart_pinctrl;
-        bt_uart_pinctrl = devm_pinctrl_get_select(&pdev->dev, "btdefault");
-        if (IS_ERR(bt_uart_pinctrl)) {
-			dev_err(&pdev->dev, "could not get bt uart pinctrl\n");
-		}
-    }
 
 	dbg("%s: adding port\n", __func__);
 	uart_add_one_port(&s3c24xx_uart_drv, &ourport->port);
@@ -2112,16 +2089,8 @@ static int s3c24xx_serial_remove(struct platform_device *dev)
 		device_remove_file(&dev->dev, &dev_attr_clock_source);
 #endif
 
-		if (ourport->uart_logging == 1) {
-		if (ourport->port.line == BLUETOOTH_UART_PORT_LINE) {
-			remove_proc_entry("lpm", bt_log_dir);
-			remove_proc_entry("sleep", bluetooth_dir);
-			remove_proc_entry("bluetooth", 0);
-		}
-
+		if (ourport->uart_logging == 1)
 			kfree(ourport->uart_local_buf.buffer);
-		}
-
 		uart_remove_one_port(&s3c24xx_uart_drv, port);
 	}
 
@@ -2138,24 +2107,11 @@ static int s3c24xx_serial_suspend(struct device *dev)
 	struct s3c24xx_uart_port *ourport = to_ourport(port);
 
 	if (port) {
-
-        if (ourport->port.line == BLUETOOTH_UART_PORT_LINE) {
-            struct pinctrl *bt_uart_pinctrl;
-
-            bt_uart_pinctrl = devm_pinctrl_get_select(dev, "btsleep");
-    		if (IS_ERR(bt_uart_pinctrl)) {
-    			dev_err(dev, "could not set bt sleep pins\n");
-    		}
-        }
-
-		udelay(300);//dealy for sfr update	
+		udelay(300);//delay for sfr update
 		s3c24xx_serial_rx_fifo_wait();
-
 		uart_suspend_port(&s3c24xx_uart_drv, port);
-
 		if (ourport->dbg_mode & UART_DBG_MODE)
 			dev_err(dev, "UART suspend notification for tty framework.\n");
-
 	}
 
 	return 0;
@@ -2167,15 +2123,6 @@ static int s3c24xx_serial_resume(struct device *dev)
 	struct s3c24xx_uart_port *ourport = to_ourport(port);
 
 	if (port) {
-        if (ourport->port.line == BLUETOOTH_UART_PORT_LINE) {
-            struct pinctrl *bt_uart_pinctrl;
-
-            bt_uart_pinctrl = devm_pinctrl_get_select(dev, "btdefault");
-    		if (IS_ERR(bt_uart_pinctrl)) {
-    			dev_err(dev, "could not set bt default pins\n");
-    		}
-        }
-
 		uart_resume_port(&s3c24xx_uart_drv, port);
 		if (ourport->dbg_mode & UART_DBG_MODE)
 			dev_err(dev, "UART resume notification for tty framework.\n");
@@ -2636,11 +2583,6 @@ static struct s3c24xx_serial_drv_data exynos4210_serial_drv_data = {
 	.fifosize = { 256, 64, 16, 16 },
 };
 
-static struct s3c24xx_serial_drv_data exynos5433_serial_drv_data = {
-	EXYNOS_COMMON_SERIAL_DRV_DATA,
-	.fifosize = { 64, 256, 16, 256 },
-};
-
 static struct s3c24xx_serial_drv_data exynos_serial_drv_data = {
 	.info = &(struct s3c24xx_uart_info) {
 		.name		= "Samsung Exynos UART",
@@ -2666,11 +2608,9 @@ static struct s3c24xx_serial_drv_data exynos_serial_drv_data = {
 };
 
 #define EXYNOS4210_SERIAL_DRV_DATA ((kernel_ulong_t)&exynos4210_serial_drv_data)
-#define EXYNOS5433_SERIAL_DRV_DATA ((kernel_ulong_t)&exynos5433_serial_drv_data)
 #define EXYNOS_SERIAL_DRV_DATA ((kernel_ulong_t)&exynos_serial_drv_data)
 #else
 #define EXYNOS4210_SERIAL_DRV_DATA (kernel_ulong_t)NULL
-#define EXYNOS5433_SERIAL_DRV_DATA (kernel_ulong_t)NULL
 #define EXYNOS_SERIAL_DRV_DATA (kernel_ulong_t)NULL
 #endif
 
@@ -2694,8 +2634,6 @@ static struct platform_device_id s3c24xx_serial_driver_ids[] = {
 		.name		= "exynos4210-uart",
 		.driver_data	= EXYNOS4210_SERIAL_DRV_DATA,
 	}, {
-		.name		= "exynos5433-uart",
-		.driver_data	= EXYNOS5433_SERIAL_DRV_DATA,
 	}, {
 		.name		= "exynos-uart",
 		.driver_data	= EXYNOS_SERIAL_DRV_DATA,
@@ -2718,8 +2656,6 @@ static const struct of_device_id s3c24xx_uart_dt_match[] = {
 		.data = (void *)S5PV210_SERIAL_DRV_DATA },
 	{ .compatible = "samsung,exynos4210-uart",
 		.data = (void *)EXYNOS4210_SERIAL_DRV_DATA },
-	{ .compatible = "samsung,exynos5433-uart",
-		.data = (void *)EXYNOS5433_SERIAL_DRV_DATA },
 	{ .compatible = "samsung,exynos-uart",
 		.data = (void *)EXYNOS_SERIAL_DRV_DATA },
 	{},

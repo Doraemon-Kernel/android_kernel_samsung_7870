@@ -1017,6 +1017,8 @@ int fimc_is_flite_probe(struct fimc_is_device_sensor *device,
 		goto err_get_resource;
 	}
 
+	flite->regs_start = mem_res->start;
+	flite->regs_end = mem_res->end;
 	flite->base_reg =  devm_ioremap_nocache(&pdev->dev, mem_res->start, resource_size(mem_res));
 	if (!flite->base_reg) {
 		probe_err("Failed to remap io region(%p)", flite->base_reg);

@@ -45,12 +45,11 @@
 #include <soc/samsung/asv-exynos.h>
 #include <soc/samsung/exynos-pm.h>
 #include <soc/samsung/exynos-powermode.h>
-#include <soc/samsung/ect_parser.h>
 #include "../../soc/samsung/pwrcal/pwrcal.h"
 
 /* firmware file information */
 #define fw_checksum	61921
-char *firmware_file = "APMFW";
+char *firmware_file = "apm_8890_v6.h";
 void __iomem *sram_base;
 void __iomem *exynos_mailbox_reg;
 struct regmap *cortexm3_pmu_regmap;
@@ -64,12 +63,6 @@ static struct workqueue_struct *mailbox_wq;
 static struct cl_init_data cl_init;
 static struct class *mailbox_class;
 static struct debug_data tx, rx;
-static unsigned int firmware_load_mode;
-
-extern u32 mngs_lv;
-extern u32 apo_lv;
-extern u32 gpu_lv;
-extern u32 mif_lv;
 
 #ifdef CONFIG_EXYNOS_APM_VOLTAGE_DEBUG
 u32 atl_voltage;
@@ -116,65 +109,6 @@ static inline struct samsung_mbox *to_samsung_mbox(struct mbox_chan *pchan)
 	return to_samsung_mchan(pchan)->smc;
 }
 
-#ifdef CONFIG_ECT
-int memcpy_integer(char *src1, char *src2, unsigned int size)
-{
-	int i, chunk_count, remain_count;
-	unsigned int *int_src1 = (unsigned int *)src1;
-	unsigned int *int_src2 = (unsigned int *)src2;
-
-	chunk_count = size / sizeof(int);
-	remain_count = size % sizeof(int);
-
-	for (i = 0; i < chunk_count; ++i) {
-		*int_src1 = *int_src2;
-		int_src1++;
-		int_src2++;
-	}
-
-	src1 += chunk_count * sizeof(int);
-	src2 += chunk_count * sizeof(int);
-
-	for (i = 0; i < remain_count; ++i) {
-		*src1 = *src2;
-		src1++;
-		src2++;
-	}
-
-	return 0;
-}
-
-int memcmp_integer(char *src1, char *src2, unsigned int size)
-{
-	int i, chunk_count, remain_count;
-	unsigned int *int_src1 = (unsigned int *)src1;
-	unsigned int *int_src2 = (unsigned int *)src2;
-
-	chunk_count = size / sizeof(int);
-	remain_count = size % sizeof(int);
-
-	for (i = 0; i < chunk_count; ++i) {
-		if (*int_src1 != *int_src2)
-			return *int_src1 - *int_src2;
-
-		int_src1++;
-		int_src2++;
-	}
-
-	src1 += chunk_count * sizeof(int);
-	src2 += chunk_count * sizeof(int);
-
-	for(i = 0; i < remain_count; ++i) {
-		if (*src1 != *src2)
-			return *src1 - *src2;
-		src1++;
-		src2++;
-	}
-
-	return 0;
-}
-#endif
-
 static void firmware_load(const char *firmware, int size)
 {
 	dram_checksum = csum_partial(firmware, size, 0);
@@ -187,116 +121,21 @@ static void firmware_load(const char *firmware, int size)
 static int firmware_update(struct device *dev)
 {
 	const struct firmware *fw_entry = NULL;
-#ifdef CONFIG_ECT
-	struct ect_bin *fw = NULL;
-	void *firmware;
-#endif
 	int err;
 
 	dev_info(dev, "Loading APM firmware ... ");
+	err = request_firmware(&fw_entry, firmware_file, dev);
+	if (err) {
+		dev_err(dev, "FAIL \n");
+		return err;
+	}
 
-#ifdef CONFIG_ECT
-	firmware = ect_get_block(BLOCK_BIN);
-	if (firmware) {
-		fw = ect_binary_get_bin(firmware, firmware_file);
-		if (fw)
-			firmware_load_mode = 1;
-	}
-#endif
-	if (firmware_load_mode) {
-		dram_checksum = csum_partial(fw->ptr, fw->binary_size, 0);
-		memcpy_integer(sram_base, fw->ptr, fw->binary_size);
-		pr_info("OK : Use ect func\n");
-	} else {
-#ifdef CONFIG_ECT
-		pr_info("ECT firmware file is not exist, so do not turn on APM \n");
-		return -1;
-#endif
-		err = request_firmware(&fw_entry, firmware_file, dev);
-		if (err) {
-			dev_err(dev, "FAIL \n");
-			return err;
-		}
-		firmware_load(fw_entry->data, fw_entry->size);
-		release_firmware(fw_entry);
-		pr_info("OK : Use firmware f/w\n");
-	}
+	firmware_load(fw_entry->data, fw_entry->size);
+
+	release_firmware(fw_entry);
 
 	return 0;
 }
-
-#ifdef CONFIG_EXYNOS_MBOX_INTERRUPT
-static int samsung_mbox_startup(struct mbox_chan *chan)
-{
-	return 0;
-}
-#else
-static int samsung_mbox_startup(struct mbox_chan *chan) { return 0;}
-#endif
-
-static int samsung_mbox_send_data(struct mbox_chan *chan, void *msg)
-{
-	struct samsung_mlink *samsung_link = to_samsung_mchan(chan);
-	u32 *msg_data = (u32 *)msg;
-	u32 i, status, limit_cnt = 0;
-
-	samsung_link->data = msg_data;
-
-	/* Check rx interrupt status */
-	/* rx interrupt is clear, and then main core send message */
-	do {
-		status = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_IRQ0) & CM3_INTERRPUT_SHIFT;
-		limit_cnt++;
-		if (limit_cnt > CM3_COUNT_MAX)
-			return -1;
-	} while (status);
-
-	/* Insert apm debug buffer */
-	tx.buf[tx.cnt][G3D_STATUS] = (exynos_cortexm3_pmu_read(EXYNOS_PMU_G3D_STATUS) & G3D_STATUS_MASK);
-	tx.name[tx.cnt] = protocol_name;
-
-	limit_cnt = 0;
-	/* Check Tx interrupt status */
-	do {
-		status = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX_IRQ0) & CM3_INTERRPUT_SHIFT;
-		limit_cnt++;
-		if (limit_cnt > CM3_COUNT_MAX)
-			return -1;
-	} while (status);
-
-	/* Save information and data to mailbox SFR */
-	for (i = 0; i < MAILBOX_REG_CNT; i++) {
-		writel(msg_data[i], exynos_mailbox_reg + EXYNOS_MAILBOX_TX_MSG(i));
-		tx.buf[tx.cnt][i] = readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX_MSG(i));
-		/* Save a time and message information */
-		tx.time[tx.cnt] = ktime_to_ms(ktime_get());
-	}
-	/* Send tx interrupt */
-	writel(msg_data[4], exynos_mailbox_reg + EXYNOS_MAILBOX_TX_IRQ0);
-
-#ifdef CONFIG_EXYNOS_APM_VOLTAGE_DEBUG
-	tx.vol[rx.cnt][0] = atl_in_voltage;
-	tx.vol[rx.cnt][1] = apo_in_voltage;
-	tx.vol[rx.cnt][2] = g3d_in_voltage;
-	tx.vol[rx.cnt][3] = mif_in_voltage;
-	exynos_ss_mailbox(msg_data, 0, protocol_name, tx.vol[rx.cnt]);
-#else
-	exynos_ss_mailbox(msg_data, 0, protocol_name, default_vol);
-#endif
-
-	tx.cnt++;
-	if (tx.cnt == DEBUG_COUNT) tx.cnt = 0;
-
-	return 0;
-}
-
-#ifdef CONFIG_EXYNOS_MBOX_INTERRUPT
-static void samsung_mbox_shutdown(struct mbox_chan *chan)
-{
-}
-#else
-static void samsung_mbox_shutdown(struct mbox_chan *chan) {}
-#endif
 
 #ifdef CONFIG_EXYNOS_MBOX_INTERRUPT
 static irqreturn_t samsung_ipc_handler(int irq, void *p)
@@ -308,22 +147,20 @@ static irqreturn_t samsung_ipc_handler(int irq, void *p)
 	mbox_link_txdone(&plink->link, MBOX_OK);
 
 	/* Acknowledge the interrupt by clearing the interrupt register */
-	tmp = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_IRQ0);
+	tmp = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_INT);
 	tmp &= ~RX_INT_CLEAR;
-	__raw_writel(tmp, exynos_mailbox_reg + EXYNOS_MAILBOX_RX_IRQ0);
+	__raw_writel(tmp, exynos_mailbox_reg + EXYNOS_MAILBOX_RX_INT);
 
 	/* Debug information */
 	rx.buf[rx.cnt][G3D_STATUS] = (exynos_cortexm3_pmu_read(EXYNOS_PMU_G3D_STATUS) & G3D_STATUS_MASK);
 	rx.name[rx.cnt] = protocol_name;
 	for (i = 0; i < MAILBOX_REG_CNT; i++) {
 		rx.time[rx.cnt] = ktime_to_ms(ktime_get());
-		rx.buf[rx.cnt][i] = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_MSG(i));
+		rx.buf[rx.cnt][i] = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX(i));
 	}
-	rx.buf[rx.cnt][INT_STATUS] = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_IRQ0);
-
 #ifdef CONFIG_EXYNOS_APM_VOLTAGE_DEBUG
 	/* Debug register clear */
-	__raw_writel(0x0, exynos_mailbox_reg + EXYNOS_MAILBOX_RX_MSG0);
+	__raw_writel(0x0, exynos_mailbox_reg + EXYNOS_MAILBOX_RX(0));
 
 	/* Check firmware setting voltage */
 	rx.atl_value = ((rx.buf[rx.cnt][0] >> ATL_VOL_SHIFT) & VOL_MASK);
@@ -352,48 +189,109 @@ static irqreturn_t samsung_ipc_handler(int irq, void *p)
 }
 #endif
 
+#ifdef CONFIG_EXYNOS_MBOX_INTERRUPT
+static int samsung_mbox_startup(struct mbox_chan *chan)
+{
+	return 0;
+}
+#else
+static int samsung_mbox_startup(struct mbox_chan *chan) { return 0;}
+#endif
+
+static int samsung_mbox_send_data(struct mbox_chan *chan, void *msg)
+{
+	struct samsung_mlink *samsung_link = to_samsung_mchan(chan);
+	u32 *msg_data = (u32 *)msg;
+	u32 i, status, limit_cnt = 0, tmp;
+
+	samsung_link->data = msg_data;
+
+	/* Check cortex m3 hardware status */
+	tmp = exynos_cortexm3_pmu_read(EXYNOS_PMU_CORTEXM3_APM_STATUS);
+	status = (((tmp >> STANDBYWFI) & STANDBYWFI_MASK) & (tmp & APM_STATUS_MASK));
+	if (status)
+		return -1;
+
+	/* Check rx interrupt status */
+	do {
+		status = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX(3)) & CM3_INTERRPUT_SHIFT;
+		limit_cnt++;
+		if (limit_cnt > CM3_COUNT_MAX) return -1;
+	} while (status);
+
+	tx.buf[tx.cnt][G3D_STATUS] = (exynos_cortexm3_pmu_read(EXYNOS_PMU_G3D_STATUS) & G3D_STATUS_MASK);
+	tx.name[tx.cnt] = protocol_name;
+
+	limit_cnt = 0;
+	/* Check Tx interrupt status */
+	do {
+		status = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX(3)) & CM3_INTERRPUT_SHIFT;
+		limit_cnt++;
+		if (limit_cnt > CM3_COUNT_MAX) return -1;
+	} while (status);
+
+	/* Save information and data to mailbox SFR */
+	for (i = 0; i < MAILBOX_REG_CNT; i++) {
+		writel(msg_data[i], exynos_mailbox_reg + EXYNOS_MAILBOX_TX(i));
+		tx.buf[tx.cnt][i] = readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX(i));
+		/* Save a time and message information */
+		tx.time[tx.cnt] = ktime_to_ms(ktime_get());
+	}
+#ifdef CONFIG_EXYNOS_APM_VOLTAGE_DEBUG
+	tx.vol[rx.cnt][0] = atl_in_voltage;
+	tx.vol[rx.cnt][1] = apo_in_voltage;
+	tx.vol[rx.cnt][2] = g3d_in_voltage;
+	tx.vol[rx.cnt][3] = mif_in_voltage;
+	exynos_ss_mailbox(msg_data, 0, protocol_name, tx.vol[rx.cnt]);
+#else
+	exynos_ss_mailbox(msg_data, 0, protocol_name, default_vol);
+#endif
+
+	tx.cnt++;
+	if (tx.cnt == DEBUG_COUNT) tx.cnt = 0;
+
+	return 0;
+}
+
+#ifdef CONFIG_EXYNOS_MBOX_INTERRUPT
+static void samsung_mbox_shutdown(struct mbox_chan *chan)
+{
+}
+#else
+static void samsung_mbox_shutdown(struct mbox_chan *chan) {}
+#endif
+
 int samsung_mbox_last_tx_done(struct mbox_chan *chan)
 {
 	unsigned int status, limit_cnt = 0, tmp, i;
-	ktime_t __start;
-	s64 __elapsed;
 
-	__start = ktime_get();
 	do {
 		if (limit_cnt) {
 			cpu_relax();
 			usleep_range(28, 30);
 		}
 
-		status = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_IRQ0) & CM3_POLLING_SHIFT;
+		status = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_INT) & CM3_POLLING_SHIFT;
 
 		limit_cnt++;
-
-		/* RX interrupt timeout check */
-		if (limit_cnt > 100) {
-			__elapsed = ktime_to_ns(ktime_sub(ktime_get(), __start));
-			pr_info("mailbox timeout : %lld ns \n", __elapsed);
-			return -EIO;
-		}
+		if (limit_cnt > 100) return -EIO;
 	} while(!status);
 
 	/* Acknowledge the interrupt by clearing the interrupt register */
-	tmp = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_IRQ0);
+	tmp = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_INT);
 	tmp &= ~RX_INT_CLEAR;
-	__raw_writel(tmp, exynos_mailbox_reg + EXYNOS_MAILBOX_RX_IRQ0);
+	__raw_writel(tmp, exynos_mailbox_reg + EXYNOS_MAILBOX_RX_INT);
 
 	/* Debug information */
 	rx.buf[rx.cnt][G3D_STATUS] = (exynos_cortexm3_pmu_read(EXYNOS_PMU_G3D_STATUS) & G3D_STATUS_MASK);
 	rx.name[rx.cnt] = protocol_name;
 	for (i = 0; i < MAILBOX_REG_CNT; i++) {
 		rx.time[rx.cnt] = ktime_to_ms(ktime_get());
-		rx.buf[rx.cnt][i] = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_MSG(i));
+		rx.buf[rx.cnt][i] = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX(i));
 	}
-	rx.buf[rx.cnt][INT_STATUS] = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_IRQ0);
-
 #ifdef CONFIG_EXYNOS_APM_VOLTAGE_DEBUG
 	/* Debug register clear */
-	__raw_writel(0x0, exynos_mailbox_reg + EXYNOS_MAILBOX_RX_MSG0);
+	__raw_writel(0x0, exynos_mailbox_reg + EXYNOS_MAILBOX_RX(0));
 
 	/* Check firmware setting voltage */
 	rx.atl_value = ((rx.buf[rx.cnt][0] >> ATL_VOL_SHIFT) & VOL_MASK);
@@ -432,16 +330,18 @@ static struct mbox_chan_ops samsung_mbox_ops = {
  * [DEBUG] Check mailbox related register and TX/RX data history
  */
 int data_history(void) {
-	pr_info("EXYNOS_MAILBOX_TX_MSG0 : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX_MSG0));
-	pr_info("EXYNOS_MAILBOX_TX_MSG1 : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX_MSG1));
-	pr_info("EXYNOS_MAILBOX_TX_MSG2 : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX_MSG2));
-	pr_info("EXYNOS_MAILBOX_TX_MSG3 : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX_MSG3));
-	pr_info("EXYNOS_MAILBOX_TX_IRQ0 : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX_IRQ0));
-	pr_info("EXYNOS_MAILBOX_RX_MSG0 : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_MSG0));
-	pr_info("EXYNOS_MAILBOX_RX_MSG1 : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_MSG1));
-	pr_info("EXYNOS_MAILBOX_RX_MSG2 : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_MSG2));
-	pr_info("EXYNOS_MAILBOX_RX_MSG3 : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_MSG3));
-	pr_info("EXYNOS_MAILBOX_RX_IRQ0 : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_IRQ0));
+#if 0
+	int count;
+#endif
+
+	pr_info("EXYNOS_MAILBOX_TX_CON : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX_CON));
+	pr_info("EXYNOS_MAILBOX_TX_ADDR : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX_ADDR));
+	pr_info("EXYNOS_MAILBOX_TX_DATA : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX_DATA));
+	pr_info("EXYNOS_MAILBOX_TX_INT : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_TX_INT));
+	pr_info("EXYNOS_MAILBOX_RX(0) : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX(0)));
+	pr_info("EXYNOS_MAILBOX_RX(1) : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX(1)));
+	pr_info("EXYNOS_MAILBOX_RX(2) : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX(2)));
+	pr_info("EXYNOS_MAILBOX_RX(3) : %8.0x \n", __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX(3)));
 	pr_info("EXYNOS_CORTEXM3_APM_CONFIGURATION : %8.0x \n",
 		exynos_cortexm3_pmu_read(EXYNOS_PMU_CORTEXM3_APM_CONFIGURATION));
 	pr_info("EXYNOS_CORTEXM3_APM_STATUS : %8.0x \n",
@@ -449,6 +349,16 @@ int data_history(void) {
 	pr_info("EXYNOS_CORTEXM3_APM_OPTION : %8.0x \n",
 		exynos_cortexm3_pmu_read(EXYNOS_PMU_CORTEXM3_APM_OPTION));
 
+#if 0
+	for (count = 0; count < DEBUG_COUNT; count++) {
+		pr_info("[%lld ms]TX data : %8.x %8.x %8.x %8.x %8.x\n", tx.time[count], tx.buf[count][0],
+				tx.buf[count][1], tx.buf[count][2], tx.buf[count][3], tx.buf[count][4]);
+	}
+	for (count = 0; count < DEBUG_COUNT; count++) {
+		pr_info("[%lld ms]RX data : %8.x %8.x %8.x %8.x %8.x\n", rx.time[count], rx.buf[count][0],
+				rx.buf[count][1], rx.buf[count][2], rx.buf[count][3], rx.buf[count][4]);
+	}
+#endif
 	return 0;
 }
 
@@ -456,26 +366,17 @@ static void thread_mailbox_work(struct work_struct *work)
 {
 	const struct firmware *fw_entry = NULL;
 	unsigned int tmp, status, limit_cnt = 0;
-	unsigned int sram_checksum = 0;
-	struct ect_bin *fw;
-	void *firmware;
 	int ret, err;
+	unsigned int sram_checksum = 0;
 
 	if (!apm_power_down) {
-		if (firmware_load_mode) {
-			firmware = ect_get_block(BLOCK_BIN);
-			fw = ect_binary_get_bin(firmware, firmware_file);
-			sram_checksum = csum_partial(sram_base, fw->binary_size, 0);
-			ret = memcmp_integer(sram_base, fw->ptr, fw->binary_size);
-		} else {
-			err = request_firmware(&fw_entry, firmware_file, NULL);
-			if (err) {
-				pr_err("mailbox : request firmware fail \n");
-			}
-			sram_checksum = csum_partial(sram_base, fw_entry->size, 0);
-			ret = memcmp(sram_base, fw_entry->data, fw_entry->size);
-			release_firmware(fw_entry);
+		err = request_firmware(&fw_entry, firmware_file, NULL);
+		if (err) {
+			pr_err("mailbox : request firmware fail \n");
 		}
+
+		sram_checksum = csum_partial(sram_base, fw_entry->size, 0);
+		ret = memcmp(sram_base, fw_entry->data, fw_entry->size);
 		if (ret) {
 			/* Cortex M3 compare error case */
 			sram_status = SRAM_UNSTABLE;
@@ -487,6 +388,8 @@ static void thread_mailbox_work(struct work_struct *work)
 		}
 		pr_info("mailbox : fw_checksum [%d], DRAM checksum [%d], sram checksum [%d] \n",
 								fw_checksum, dram_checksum, sram_checksum);
+
+		release_firmware(fw_entry);
 
 		/* This condition is lcd on */
 		/* Local power up to cortex M3 */
@@ -515,11 +418,6 @@ static void thread_mailbox_work(struct work_struct *work)
 	} else {
 		/* This condition is lcd off */
 		if (sram_status == SRAM_STABLE) {
-			if (cl_init.apm_status == APM_OFF) {
-				pr_info("APM device already disable staus \n");
-				return;
-			}
-
 #if (defined(CONFIG_EXYNOS_CL_DVFS_CPU) || defined(CONFIG_EXYNOS_CL_DVFS_G3D) || defined(CONFIG_EXYNOS_CL_DVFS_MIF))
 			exynos_cl_dvfs_mode_disable();
 			cl_init.apm_status = APM_OFF;
@@ -544,8 +442,7 @@ static void thread_mailbox_work(struct work_struct *work)
 			/* local power down(reset) to CORTEX M3 */
 			exynos_apm_power_down();
 
-			exynos_update_ip_idle_status(idle_ip_index, 1);
-		}
+			exynos_update_ip_idle_status(idle_ip_index, 1); }
 	}
 }
 static DECLARE_WORK(mailbox_work, thread_mailbox_work);
@@ -660,7 +557,6 @@ static int samsung_mbox_probe(struct platform_device *pdev)
 	int loop, count, ret = 0;
 	struct resource *res;
 	struct device *dev = &pdev->dev;
-	int asv_table_ver = 0;
 
 	if (!node) {
 		dev_err(&pdev->dev, "driver doesnt support"
@@ -729,15 +625,9 @@ static int samsung_mbox_probe(struct platform_device *pdev)
 		}
 
 		/* Get of cl dvfs related information to DT */
-		asv_table_ver = cal_asv_get_tablever();
-		pr_info("[mailbox] asv_table_ver : %d \n", asv_table_ver);
-		switch (asv_table_ver) {
+		switch (exynos_get_table_ver()) {
 		case 0 :
-		case 1 :
-		case 2 :
-		case 3 :
-		case 4 :
-			ret = of_property_read_u32_index(node, "asv_v0_mngs_margin", 0, &cl_init.atlas_margin);
+			ret = of_property_read_u32_index(node, "asv_v0_atlas_margin", 0, &cl_init.atlas_margin);
 			if (ret) {
 				dev_err(&pdev->dev, "atlas_margin do not set, Set to default 0mV Value\n");
 				cl_init.atlas_margin = MARGIN_0MV;
@@ -913,31 +803,6 @@ static int mailbox_receive_data_open_show(struct seq_file *buf, void *d)
 	return 0;
 }
 
-static int hpm_read_open_show(struct seq_file *buf, void *d)
-{
-	unsigned int tmp = 0;
-	unsigned int cur_hpm[4] = {0, 0, 0, 0};
-	unsigned int tar_hpm[4] = {0, 0, 0, 0};
-
-	tmp = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_MSG3);
-	cur_hpm[0] = tmp & 0xFF;
-	cur_hpm[1] = (tmp >> 8) & 0xFF;
-	cur_hpm[2] = (tmp >> 16) & 0xFF;
-	cur_hpm[3] = (tmp >> 24) & 0xFF;
-
-	tmp = __raw_readl(exynos_mailbox_reg + EXYNOS_MAILBOX_RX_MSG7);
-	tar_hpm[0] = tmp & 0xFF;
-	tar_hpm[1] = (tmp >> 8) & 0xFF;
-	tar_hpm[2] = (tmp >> 16) & 0xFF;
-	tar_hpm[3] = (tmp >> 24) & 0xFF;
-
-	seq_printf(buf,"mngs[%d][%d], apo[%d][%d], gpu[%d][%d], mif[%d][%d]\n",
-			cur_hpm[3], tar_hpm[3], cur_hpm[2], tar_hpm[2],
-			cur_hpm[1], tar_hpm[1], cur_hpm[0], tar_hpm[0]);
-
-	return 0;
-}
-
 static int cm3_margin_open_show(struct seq_file *buf, void *d)
 {
 #ifdef CONFIG_EXYNOS_CL_DVFS_CPU
@@ -957,10 +822,11 @@ static int cm3_margin_open_show(struct seq_file *buf, void *d)
 #ifdef CONFIG_EXYNOS_APM_VOLTAGE_DEBUG
 static int cl_voltage_open_show(struct seq_file *buf, void *d)
 {
-	seq_printf(buf, "[Voltage rail][input uV][cl_volt uV]\n");
-	seq_printf(buf, "MNGS[L%d] : %d %d APO[L%d] : %d %d GPU[L%d] : %d %d MIF[L%d] : %d %d \n",
-		mngs_lv, atl_in_voltage, atl_voltage, apo_lv, apo_in_voltage, apo_voltage,
-		gpu_lv, g3d_in_voltage, g3d_voltage, mif_lv, mif_in_voltage, mif_voltage);
+	seq_printf(buf, "=========== [input]==[cl_volt]==============\n");
+	seq_printf(buf, "atl_voltage : %d %d\n", atl_in_voltage, atl_voltage);
+	seq_printf(buf, "apo_voltage : %d %d\n", apo_in_voltage, apo_voltage);
+	seq_printf(buf, "g3d_voltage : %d %d\n", g3d_in_voltage, g3d_voltage);
+	seq_printf(buf, "mif_voltage : %d %d\n", mif_in_voltage, mif_voltage);
 
 	return 0;
 }
@@ -1115,11 +981,6 @@ static int cm3_margin_open(struct inode *inode, struct file *file)
 	return single_open(file, cm3_margin_open_show, inode->i_private);
 }
 
-static int hpm_read_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, hpm_read_open_show, inode->i_private);
-}
-
 #ifdef CONFIG_EXYNOS_APM_VOLTAGE_DEBUG
 static int cl_voltage_open(struct inode *inode, struct file *file)
 {
@@ -1162,13 +1023,6 @@ static const struct file_operations mode_margin_fops = {
 	.release	= single_release,
 };
 
-static const struct file_operations hpm_fops = {
-	.open		= hpm_read_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
 #ifdef CONFIG_EXYNOS_APM_VOLTAGE_DEBUG
 static const struct file_operations cl_voltage_fops = {
 	.open		= cl_voltage_open,
@@ -1201,7 +1055,6 @@ void mailbox_debugfs(void)
 	debugfs_create_file("receive_data", 0644, den, NULL, &receive_status_fops);
 	debugfs_create_file("mode", 0644, den, NULL, &mode_status_fops);
 	debugfs_create_file("cl_dvs_margin", 0644, den, NULL, &mode_margin_fops);
-	debugfs_create_file("hpm", 0644, den, NULL, &hpm_fops);
 #ifdef CONFIG_EXYNOS_APM_VOLTAGE_DEBUG
 	debugfs_create_file("cl_voltage", 0644, den, NULL, &cl_voltage_fops);
 #endif

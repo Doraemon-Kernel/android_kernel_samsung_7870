@@ -48,21 +48,25 @@
 #define FIMC_IS_COMPANION_FW_START_ADDR			(0x00080000)
 #define FIMC_IS_COMPANION_CAL_START_ADDR		(0x0003F5E0)
 #define FIMC_IS_COMPANION_CAL_SIZE			(0x8A20)
-#define FIMC_IS_COMPANION_CRC_ENABLE_ADDR		(0x6C00)
-#define FIMC_IS_COMPANION_CRC_START_ADDR		(0x6C04)
-#define FIMC_IS_COMPANION_CRC_SIZE_ADDR			(0x6C08)
-#define FIMC_IS_COMPANION_CRC_DATA_ADDR			(0x6C0C)
-#define FIMC_IS_COMPANION_CRC_FINISH_ADDR		(0x6C14)
+#define FIMC_IS_COMPANION_API_SFLASH_CMD_EVT0		(0x0014)
+#define FIMC_IS_COMPANION_API_SFLASH_SRAM_ADD_EVT0	(0x001C)
+#define FIMC_IS_COMPANION_API_SFLASH_SIZE_EVT0		(0x0020)
+#define FIMC_IS_COMPANION_API_SFLASH_CRC32_EVT0		(0x002C)
+#define FIMC_IS_COMPANION_API_SFLASH_CMD_EVT1		(0x0014)
+#define FIMC_IS_COMPANION_API_SFLASH_SRAM_ADD_EVT1	(0x001C)
+#define FIMC_IS_COMPANION_API_SFLASH_SIZE_EVT1		(0x0020)
+#define FIMC_IS_COMPANION_API_SFLASH_CRC32_EVT1		(0x002C)
 
 #if defined(CONFIG_COMPANION_AUTOMATIC_CRC_ON_OPEN) || defined(CONFIG_COMPANION_AUTOMATIC_CRC_ON_CLOSE)
 #define FIMC_IS_COMPANION_FIRMWARE_CRC32_ADDR		(0x00)
-#define FIMC_IS_COMPANION_PDAF_SHAD_CRC32_ADDR		(0x04)
-#define FIMC_IS_COMPANION_LSC_MAIN_GRID_CRC32_ADDR	(0x08)
-#define FIMC_IS_COMPANION_LSC_FRONT_GRID_CRC32_ADDR	(0x0C)
+#define FIMC_IS_COMPANION_PDAF_BPC_CRC32_ADDR		(0x04)
+#define FIMC_IS_COMPANION_PDAF_SHAD_CRC32_ADDR		(0x08)
+#define FIMC_IS_COMPANION_XTALK_CRC32_ADDR		(0x0C)
+#define FIMC_IS_COMPANION_LSC_MAIN_GRID_CRC32_ADDR	(0X10)
+#define FIMC_IS_COMPANION_LSC_FRONT_GRID_CRC32_ADDR	(0x14)
 #define FIMC_IS_COMPANION_SIGNATURE_ADDR		(0x0002)
-#define FIMC_IS_COMPANION_SIGNATURE_1ST_VALUE		(0x00A0)
-#define FIMC_IS_COMPANION_SIGNATURE_2ND_VALUE_EVT0	(0x10A0)
-#define FIMC_IS_COMPANION_SIGNATURE_2ND_VALUE_EVT1	(0x10A1)
+#define FIMC_IS_COMPANION_SIGNATURE_1ST_VALUE		(0x00B0)
+#define FIMC_IS_COMPANION_SIGNATURE_2ND_VALUE		(0x10B0)
 #define FIMC_IS_COMPANION_VALID_CRC			(0x0001)
 #endif
 
@@ -111,12 +115,11 @@ extern bool companion_front_lsc_isvalid;
 extern bool crc32_c1_check;
 extern bool crc32_c1_check_front;
 extern bool is_dumped_c1_fw_loading_needed;
-#ifdef CONFIG_COMPANION_FACTORY_VALIDATION
-extern int comp_fac_i2c_check;
-extern u16 comp_fac_valid_check;
-#endif
 static u16 companion_ver;
 bool pdaf_shad_valid;
+#ifdef C3_CSI_ERROR_RECOVERY
+bool csi_err_detected = false;
+#endif
 
 enum {
         COMPANION_FW = 0,
@@ -380,84 +383,86 @@ int fimc_is_comp_get_crc(struct fimc_is_core *core, u32 addr, int size, char* cr
 	int fail_count = 0;
 	int retry_count = 1000;
 	u16 data[2];
+	u16 sflash_cmd = 0;
+	u16 sflash_sram = 0;
+	u16 sflash_size = 0;
+	u16 sflash_crc32 = 0;
 
 	data[0] = 0xffff;
 	data[1] = 0xffff;
 
-	/* set CRC32 seed */
-	ret = fimc_is_comp_single_write(core, FIMC_IS_COMPANION_CRC_DATA_ADDR, 0x0000);
-	if (ret) {
-		fail_count++;
-		err("CRC_DATA_ADDR write fail");
+	if ((companion_ver & 0x00FF) == FIMC_IS_COMPANION_VERSION_EVT0) {
+		sflash_cmd = FIMC_IS_COMPANION_API_SFLASH_CMD_EVT0;
+		sflash_sram = FIMC_IS_COMPANION_API_SFLASH_SRAM_ADD_EVT0;
+		sflash_size = FIMC_IS_COMPANION_API_SFLASH_SIZE_EVT0;
+		sflash_crc32 = FIMC_IS_COMPANION_API_SFLASH_CRC32_EVT0;
+	} else {
+		sflash_cmd = FIMC_IS_COMPANION_API_SFLASH_CMD_EVT1;
+		sflash_sram = FIMC_IS_COMPANION_API_SFLASH_SRAM_ADD_EVT1;
+		sflash_size = FIMC_IS_COMPANION_API_SFLASH_SIZE_EVT1;
+		sflash_crc32 = FIMC_IS_COMPANION_API_SFLASH_CRC32_EVT1;
 	}
-	ret = fimc_is_comp_single_write(core, FIMC_IS_COMPANION_CRC_DATA_ADDR + 2, 0x0000);
+
+	/* set CRC32 seed */
+	ret = fimc_is_comp_single_write(core, sflash_crc32, 0x0000);
 	if (ret) {
 		fail_count++;
-		err("CRC_DATA_ADDR + 2 write fail");
+		err("API_SFLASH_CRC32 write fail");
+	}
+	ret = fimc_is_comp_single_write(core, sflash_crc32 + 2, 0x0000);
+	if (ret) {
+		fail_count++;
+		err("API_SFLASH_CRC32 + 2 write fail");
 	}
 
 	/* set Start Address of memory */
-	if (addr == FIMC_IS_COMPANION_FW_START_ADDR) {
-		ret = fimc_is_comp_single_write(core, FIMC_IS_COMPANION_CRC_START_ADDR, 0x0000);
-		if (ret) {
-			fail_count++;
-			err("CRC_START_ADDR write fail");
-		}
-		ret = fimc_is_comp_single_write(core, FIMC_IS_COMPANION_CRC_START_ADDR + 2, 0x0000);
-		if (ret) {
-			fail_count++;
-			err("CRC_START_ADDR + 2 write fail");
-		}
-	} else {
-		ret = fimc_is_comp_single_write(core, FIMC_IS_COMPANION_CRC_START_ADDR, (u16) ((addr - 0x80000) & 0x0000FFFF));
-		if (ret) {
-			fail_count++;
-			err("CRC_START_ADDR write fail");
-		}
-		ret = fimc_is_comp_single_write(core, FIMC_IS_COMPANION_CRC_START_ADDR + 2, 
-										(u16) (((addr - 0x80000) & 0xFFFF0000) >> 16));
-		if (ret) {
-			fail_count++;
-			err("CRC_START_ADDR + 2 write fail");
-		}
+	ret = fimc_is_comp_single_write(core, sflash_sram, (u16) ((addr & 0xFFFF0000) >> 16));
+	if (ret) {
+		fail_count++;
+		err("API_SFLASH_SRAM_ADD write fail");
+	}
+	ret = fimc_is_comp_single_write(core, sflash_sram + 2, (u16) (addr & 0x0000FFFF));
+	if (ret) {
+		fail_count++;
+		err("API_SFLASH_SRAM_ADD + 2 write fail");
 	}
 
 	/* set Size in bytes */
-	ret = fimc_is_comp_single_write(core, FIMC_IS_COMPANION_CRC_SIZE_ADDR, (u16) (size & 0x0000FFFF));
+	ret = fimc_is_comp_single_write(core, sflash_size, (u16) ((size & 0xFFFF0000) >> 16));
 	if (ret) {
 		fail_count++;
-		err("CRC_SIZE_ADDR write fail");
+		err("API_SFLASH_SFLASH_SIZE write fail");
 	}
-	ret = fimc_is_comp_single_write(core, FIMC_IS_COMPANION_CRC_SIZE_ADDR + 2, (u16) ((size & 0xFFFF0000) >> 16));
+	ret = fimc_is_comp_single_write(core, sflash_size + 2, (u16) (size & 0x0000FFFF));
 	if (ret) {
 		fail_count++;
-		err("CRC_SIZE_ADDR + 2 write fail");
-	}    
-
-	/* start CRC calculation */
-	ret = fimc_is_comp_single_write(core, FIMC_IS_COMPANION_CRC_ENABLE_ADDR, 0x0001);
-	if (ret) {
-		fail_count++;
-		err("CRC_ENABLE_ADDR write fail");
+		err("API_SFLASH_SFLASH_SIZE + 2 write fail");
 	}
 
-	/* wating CRC finish. Until 0x0001 */
+	/* set CRC32 command */
+	ret = fimc_is_comp_single_write(core, sflash_cmd, 0x000C);
+	if (ret) {
+		fail_count++;
+		err("API_SFLASH_SFLASH_CMD write fail");
+	}
+
+	/* Host command interrupt */
+	ret = fimc_is_comp_single_write(core, FIMC_IS_COMPANION_HOST_INTRP_FLASH_CMD, 0x0001);
+	if (ret) {
+		fail_count++;
+		err("HOST_INTRP_FLASH_CMD write fail");
+	}
+
+	/* wait for it to be cleared to Zero */
 	while (retry_count--) {
-		ret = fimc_is_comp_single_read(core, FIMC_IS_COMPANION_CRC_FINISH_ADDR, &data[0]);
-		if (ret) {
-			err("CRC_FINISH_ADDR read fail %d", retry_count);
-		}
-
-		if (data[0] == 0x0001) {
-			info("%s: CRC calculation finish(%d)!\n", __func__, retry_count);
-
-			/* stop CRC routine */
-			ret = fimc_is_comp_single_write(core, FIMC_IS_COMPANION_CRC_ENABLE_ADDR, 0x0000);
-			if (ret) {
-				fail_count++;
-				err("CRC_ENABLE_ADDR write fail");
-			}
+		ret = fimc_is_comp_single_read(core, sflash_cmd, &data[0]);
+		if (data[0] == 0x0000) {
+			info("%s: API_SFLASH_CMD is cleared(%d)!\n", __func__, retry_count);
 			break;
+		} else {
+			if (ret) {
+				err("API_SFLASH_CMD read fail %d", retry_count);
+			}
 		}
 		usleep_range(1000, 1000);
 	}
@@ -465,20 +470,20 @@ int fimc_is_comp_get_crc(struct fimc_is_core *core, u32 addr, int size, char* cr
 	/* read CRC calculation result */
 	if (retry_count <= 0) {
 		fail_count++;
-		err("CRC calculation is not finished!");
+		err("API_SFLASH_CMD is not cleared!");
 	} else {
-		ret = fimc_is_comp_single_read(core, FIMC_IS_COMPANION_CRC_DATA_ADDR, &data[0]);
+		ret = fimc_is_comp_single_read(core, sflash_crc32, &data[0]);
 		if (ret) {
 			fail_count++;
 			err("API_SFLASH_CRC32 read fail");
 		}
-		ret = fimc_is_comp_single_read(core, FIMC_IS_COMPANION_CRC_DATA_ADDR + 2, &data[1]);
+		ret = fimc_is_comp_single_read(core, sflash_crc32 + 2, &data[1]);
 		if (ret) {
 			fail_count++;
 			err("API_SFLASH_CRC32 + 2 read fail");
 		}
-		memcpy(crc, &data[0], 2);
-		memcpy(crc + 2, &data[1], 2);
+		memcpy(crc, &data[1], 2);
+		memcpy(crc + 2, &data[0], 2);
 	}
 
 	if (fail_count)
@@ -577,7 +582,9 @@ int fimc_is_comp_check_crc_with_signature(struct fimc_is_core *core)
 	char *pcalc_crc;
 	char calc_crc[FIMC_IS_COMPANION_CRC_SIZE * FIMC_IS_COMPANION_CRC_OBJECT];
 	char firmware_crc[FIMC_IS_COMPANION_CRC_SIZE];
+	char pdaf_crc[FIMC_IS_COMPANION_CRC_SIZE];
 	char pdaf_shad_crc[FIMC_IS_COMPANION_CRC_SIZE];
+	char xtalk_crc[FIMC_IS_COMPANION_CRC_SIZE];
 	char lsc_main_grid_crc[FIMC_IS_COMPANION_CRC_SIZE];
 	char lsc_front_grid_crc[FIMC_IS_COMPANION_CRC_SIZE];
 	u16 data[2];
@@ -593,8 +600,8 @@ int fimc_is_comp_check_crc_with_signature(struct fimc_is_core *core)
 	fimc_is_comp_single_write(core, 0x642C, 0x2000);
 	fimc_is_comp_single_write(core, 0x642E, 0xB72C);
 #elif defined(CONFIG_COMPANION_AUTOMATIC_CRC_ON_CLOSE)
-	fimc_is_comp_single_write(core, 0x642C, 0x000C);
-	fimc_is_comp_single_write(core, 0x642E, 0xCBB0);
+	fimc_is_comp_single_write(core, 0x642C, 0x000B);
+	fimc_is_comp_single_write(core, 0x642E, 0xF500);
 	fimc_is_comp_single_read(core, 0x6F12, &data[0]);
 	fimc_is_comp_single_read(core, 0x6F12, &data[1]);
 	memcpy(pcalc_crc, &data[0], 2);
@@ -617,8 +624,14 @@ int fimc_is_comp_check_crc_with_signature(struct fimc_is_core *core)
 	memcpy(firmware_crc,
 		calc_crc + FIMC_IS_COMPANION_FIRMWARE_CRC32_ADDR,
 		FIMC_IS_COMPANION_CRC_SIZE);
+	memcpy(pdaf_crc,
+		calc_crc + FIMC_IS_COMPANION_PDAF_BPC_CRC32_ADDR,
+		FIMC_IS_COMPANION_CRC_SIZE);
 	memcpy(pdaf_shad_crc,
 		calc_crc + FIMC_IS_COMPANION_PDAF_SHAD_CRC32_ADDR,
+		FIMC_IS_COMPANION_CRC_SIZE);
+	memcpy(xtalk_crc,
+		calc_crc + FIMC_IS_COMPANION_XTALK_CRC32_ADDR,
 		FIMC_IS_COMPANION_CRC_SIZE);
 	memcpy(lsc_main_grid_crc,
 		calc_crc + FIMC_IS_COMPANION_LSC_MAIN_GRID_CRC32_ADDR,
@@ -654,11 +667,27 @@ int fimc_is_comp_check_crc_with_signature(struct fimc_is_core *core)
 					return ret;
 				}
 			}
+			if (pdaf_valid) {
+				ret = fimc_is_comp_compare_crc_value(pdaf_crc,
+					&cal_buf[sysfs_finfo->pdaf_crc_addr]);
+				if (ret < 0) {
+					info("PDAF crc is not same!\n");
+					return ret;
+				}
+			}
 			if (pdaf_shad_valid) {
 				ret = fimc_is_comp_compare_crc_value(pdaf_shad_crc,
 					&cal_buf[sysfs_finfo->pdaf_shad_crc_addr]);
 				if (ret < 0) {
 					info("PDAF SHAD crc is not same!\n");
+					return ret;
+				}
+			}
+			if (companion_coef_isvalid) {
+				ret = fimc_is_comp_compare_crc_value(xtalk_crc,
+					&cal_buf[sysfs_finfo->xtalk_coef_crc_addr]);
+				if (ret < 0) {
+					info("XTALK crc is not same!\n");
 					return ret;
 				}
 			}
@@ -758,7 +787,6 @@ static int fimc_is_comp_load_binary(struct fimc_is_core *core, char *name, int b
 
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
-#ifndef CONFIG_SAMSUNG_PRODUCT_SHIP
 	if (bin_type == COMPANION_FW) {
 		snprintf(fw_name, sizeof(fw_name), "%s%s",FIMC_IS_SETFILE_SDCARD_PATH, COMP_FW_SDCARD);
 	} else if (bin_type == COMPANION_MASTER) {
@@ -770,9 +798,7 @@ static int fimc_is_comp_load_binary(struct fimc_is_core *core, char *name, int b
 	}
 
 	fp = filp_open(fw_name, O_RDONLY, 0);
-	if (IS_ERR_OR_NULL(fp))
-#endif
-	{
+	if (IS_ERR_OR_NULL(fp)) {
 		if (is_dumped_c1_fw_loading_needed && bin_type == COMPANION_FW) {
 			snprintf(fw_name, sizeof(fw_name), "%s%s",
 				FIMC_IS_FW_DUMP_PATH, sysfs_finfo->load_c1_fw_name);
@@ -1184,7 +1210,7 @@ int fimc_is_power_binning(void *core_data)
 	struct dcdc_power *dcdc = &specific->companion_dcdc;
 	int ret = 0;
 	int err_check = 0, vout_sel = 0;
-	u16 bin_value = 0x80, wafer_value = 0x80;
+	u16 read_value = 0x80;
 	int vout = 0;
 	char buf[2]={0,};
 	loff_t pos = 0;
@@ -1195,7 +1221,7 @@ int fimc_is_power_binning(void *core_data)
 	}
 
 	ret = read_data_from_file(FIMC_IS_ISP_CV, buf, 1, &pos);
-	if (ret > 0) {
+	if(ret > 0) {
 		if (kstrtoint(buf, 10, &vout_sel))
 			err("convert fail");
 
@@ -1222,53 +1248,34 @@ int fimc_is_power_binning(void *core_data)
 		err("spi_single_write() fail");
 	}
 
-	ret = fimc_is_comp_single_read(core, 0x6F12, &bin_value);
+	ret = fimc_is_comp_single_read(core, 0x6F12, &read_value);
 	if (ret) {
 		err_check = 1;
 		err("fimc_is_comp_single_read() fail");
 	}
 
-	ret = fimc_is_comp_spi_single_write(core->spi1.device, 0x642C, 0x5000);
-	if (ret) {
-		err_check = 1;
-		err("spi_single_write() fail");
-	}
+	info("[%s::%d][BIN_INFO::0x%04x]\n", __FUNCTION__, __LINE__, read_value);
 
-	ret = fimc_is_comp_spi_single_write(core->spi1.device, 0x642E, 0x5018);
-	if (ret) {
-		err_check = 1;
-		err("spi_single_write() fail");
-	}
-
-	ret = fimc_is_comp_single_read(core, 0x6F12, &wafer_value);
-	if (ret) {
-		err_check = 1;
-		err("fimc_is_comp_single_read() fail");
-	}
-
-	info("[%s::%d][BIN_INFO::0x%04x][WAFER_INFO::0x%04x]\n",
-		__FUNCTION__, __LINE__, bin_value, wafer_value);
-
-	if (bin_value & 0x3F) {
-		if (bin_value & (1 << CC_BIN6)) {
-			buf[0] = '6';
-		} else if (bin_value & (1 << CC_BIN5)) {
-			buf[0] = '5';
-		} else if (bin_value & (1 << CC_BIN4)) {
-			buf[0] = '4';
-		} else if (bin_value & (1 << CC_BIN3)) {
-			buf[0] = '3';
-		} else if (bin_value & (1 << CC_BIN2)) {
-			buf[0] = '2';
-		} else if (bin_value & (1 << CC_BIN1)) {
-			buf[0] = '1';
+	if (read_value & 0x3F) {
+		if (read_value & (1 << CC_BIN7)) {
+			buf[0]='7';
+		} else if (read_value & (1 << CC_BIN6)) {
+			buf[0]='6';
+		} else if (read_value & (1 << CC_BIN5)) {
+			buf[0]='5';
+		} else if (read_value & (1 << CC_BIN4)) {
+			buf[0]='4';
+		} else if (read_value & (1 << CC_BIN3)) {
+			buf[0]='3';
+		} else if (read_value & (1 << CC_BIN2)) {
+			buf[0]='2';
+		} else if (read_value & (1 << CC_BIN1)) {
+			buf[0]='1';
 		} else {
-			buf[0] = '0'; /* Default voltage */
+			buf[0]='0'; /* Default voltage */
 		}
-	} else if (((wafer_value & 0x3E0) >> 5) == 0x11) {
-		buf[0] = '6'; /* 0.825V */
 	} else {
-		buf[0] = '0'; /* Default voltage for EVT1 */
+		buf[0]='0'; /* Default voltage */
 		err_check = 1;
 	}
 	if (kstrtoint(buf, 10, &vout_sel))
@@ -1291,9 +1298,8 @@ int fimc_is_power_binning(void *core_data)
 			err("write_data_to_file() fail(%s)", buf);
 	}
 
-	info("[%s::%d][BIN_INFO::0x%04x][WAFER_INFO::0x%04x] buf(%s), write %s. sel %d\n",
-		__FUNCTION__, __LINE__, bin_value, wafer_value, buf,
-		err_check ? "skipped" : FIMC_IS_ISP_CV, vout_sel);
+	info("[%s::%d][BIN_INFO::0x%04x] buf(%s), write %s. sel %d\n",
+		__FUNCTION__, __LINE__, read_value, buf, err_check ? "skipped" : FIMC_IS_ISP_CV, vout_sel);
 
 	return vout_sel;
 }
@@ -1318,30 +1324,6 @@ exit:
 	return ret;
 }
 
-#ifdef CONFIG_COMPANION_FACTORY_VALIDATION
-int fimc_is_comp_is_valid_fac(void *core_data)
-{
-	struct fimc_is_core *core = core_data;
-	int ret = 0;
-	u16 companion_id = 0;
-
-	if (!core->spi1.device) {
-		info("spi1 device is not available\n");
-		goto exit;
-	}
-
-	/* check validation(Read data must be 0x73C3) */
-	ret = fimc_is_comp_i2c_read(core->client0, 0x0, &companion_id);
-	info("Companion validation: 0x%04x ret:%d\n", companion_id, ret);
-
-	comp_fac_i2c_check = ret;
-	comp_fac_valid_check = companion_id;
-
-exit:
-	return ret;
-}
-#endif
-
 int fimc_is_comp_read_ver(void *core_data)
 {
 	struct fimc_is_core *core = core_data;
@@ -1360,23 +1342,6 @@ int fimc_is_comp_read_ver(void *core_data)
 p_err:
 	return ret;
 }
-
-#ifdef CONFIG_COMPANION_FACTORY_VALIDATION
-int fimc_is_comp_fac_valid(void *core_data)
-{
-	struct fimc_is_core *core = core_data;
-	int ret = 0;
-	struct fimc_is_device_preproc *device_preproc;
-	struct fimc_is_vender_specific *specific;
-
-	device_preproc = &core->preproc;
-	specific = core->vender.private_data;
-	ret = fimc_is_preproc_fac_valid_check(device_preproc, specific->rear_sensor_id, 0);
-	info("%s: rear_sensor_id:0x%04x ret:%d\n", __func__, specific->rear_sensor_id, ret);
-
-	return ret;
-}
-#endif
 
 u16 fimc_is_comp_get_ver(void)
 {
@@ -1549,16 +1514,66 @@ p_err:
 #ifdef C3_CSI_ERROR_RECOVERY
 void fimc_is_comp_csi_recovery(void *core_data)
 {
-	int ret = 0;
 	struct fimc_is_core *core = core_data;
+	char buf[3] = {0,};
+	loff_t pos = 0;
+	int ret = 0;
+	int read_value = 0;
+	int divided_value = 0;
+	u16 vih_value = 0x0;
 
-	ret = fimc_is_comp_spi_single_write(core->spi1.device, 0x1450, 0x0804);
-	if (ret) {
-		err("spi_single_write() fail");
+	ret = read_data_from_file(FIMC_IS_C3_CSI_RECOVERY, buf, 2, &pos);
+	if (ret < 0 ) {
+		err("read file fail");
+	} else {
+		if (kstrtoint(buf, 10, &read_value)) {
+			err("convert fail");
+			goto exit;
+		}
 	}
 
-	info("CSI recovery is applied.");
+	info("recovery count = %d", read_value);
 
+	read_value++;
+	divided_value = read_value % 5;
+	switch (divided_value) {
+	case 0:
+		vih_value = 0x0000;
+		break;
+	case 1:
+		vih_value = 0x0810;
+		break;
+	case 2:
+		vih_value = 0x080C;
+		break;
+	case 3:
+		vih_value = 0x081C;
+		break;
+	case 4:
+		vih_value = 0x0804;
+		break;
+	default:
+		break;
+	}
+
+	ret = fimc_is_comp_spi_single_write(core->spi1.device, 0x1450, vih_value);
+	if (ret) {
+		err("spi_single_write() fail");
+		goto exit;
+	}
+
+	pos = 0;
+	sprintf(buf, "%d\n", read_value);
+
+	ret = write_data_to_file(FIMC_IS_C3_CSI_RECOVERY, buf, 2, &pos);
+	if (ret < 0 ) {
+		err("write file fail");
+		goto exit;
+	}
+
+	info("csi error detected. Apply 0x%04x.", vih_value);
+
+exit:
 	return;
 }
 #endif
@@ -1578,7 +1593,7 @@ int fimc_is_comp_retention(void *core_data)
 	mm_segment_t old_fs;
 	struct fimc_is_vender_specific *specific = core->vender.private_data;
 #ifdef C3_CSI_ERROR_RECOVERY
-	struct fimc_is_from_info *sysfs_finfo;
+	u16 error_data = 0x0;
 #endif
 	info("%s: start\n", __func__);
 
@@ -1686,16 +1701,13 @@ int fimc_is_comp_retention(void *core_data)
 #elif defined(CONFIG_COMPANION_AUTOMATIC_CRC_ON_CLOSE)
 	usleep_range(1000, 1000);
 #endif
-	ret = fimc_is_comp_read_ver(core);
+	signature[0] = (FIMC_IS_COMPANION_SIGNATURE_2ND_VALUE & 0x00ff);
+	signature[1] = (FIMC_IS_COMPANION_SIGNATURE_2ND_VALUE & 0xff00) >> 8;
+	ret = fimc_is_comp_check_signature(core,
+			FIMC_IS_COMPANION_SIGNATURE_ADDR,
+			signature);
 	if (ret) {
-		err("fimc_is_comp_read_ver fail");
-	}
-
-	if ((companion_ver != FIMC_IS_COMPANION_SIGNATURE_2ND_VALUE_EVT0) &&
-	    (companion_ver != FIMC_IS_COMPANION_SIGNATURE_2ND_VALUE_EVT1)) {
-	    	err("check 2nd signature fail");
-		ret = -EINVAL;
-		goto p_err;
+		err("check signature fail. (%d)", FIMC_IS_COMPANION_SIGNATURE_2ND_VALUE);
 	}
 
 #if defined(CONFIG_COMPANION_AUTOMATIC_CRC_ON_OPEN)
@@ -1718,9 +1730,15 @@ int fimc_is_comp_retention(void *core_data)
 
 #ifdef C3_CSI_ERROR_RECOVERY
 	if ((companion_ver & 0x00FF) == FIMC_IS_COMPANION_VERSION_EVT0) {
-		fimc_is_sec_get_sysfs_finfo(&sysfs_finfo);
-		if (sysfs_finfo->concord_header_ver[9] == '1') {
-			fimc_is_comp_csi_recovery(core);
+		ret = fimc_is_comp_single_read(core, 0x0048, &error_data);
+		if (ret) {
+			err("csi status data read fail");
+		}
+
+		if (error_data != 0x0000) {
+			csi_err_detected = true;
+		} else {
+			csi_err_detected = false;
 		}
 	}
 #endif
@@ -1778,6 +1796,8 @@ retry:
 		err("Initialization for download write fail");
 	}
 	usleep_range(1000, 1000);
+
+	fimc_is_comp_read_ver(core);
 
 	ret = fimc_is_comp_single_write(core, 0x6428, 0x0008);
 	if (ret) {
@@ -1840,19 +1860,13 @@ retry:
 
 	usleep_range(1000, 1000);
 
-	ret = fimc_is_comp_read_ver(core);
-	if (ret) {
-		err("fimc_is_comp_read_ver fail");
-	}
-
-#ifdef C3_CSI_ERROR_RECOVERY
+	fimc_is_comp_read_ver(core);
 	if ((companion_ver & 0x00FF) == FIMC_IS_COMPANION_VERSION_EVT0) {
-		fimc_is_sec_get_sysfs_finfo(&sysfs_finfo);
-		if (sysfs_finfo->concord_header_ver[9] == '1') {
-			fimc_is_comp_csi_recovery(core);
-		}
+		info("%s: Companion FW loading... Success (companion ver: 0x%04x)\n", __func__, companion_ver);
+	} else {
+		err("Companion FW loading... fail (companion ver: 0x%04x)", companion_ver);
+		goto p_err;
 	}
-#endif
 
 	/* Use M2M Cal Data */
 	if(fimc_is_sec_check_from_ver(core, core->current_position)) {
@@ -1902,6 +1916,18 @@ int fimc_is_comp_loadsetf(void *core_data)
 		goto p_err;
 	}
 
+#ifdef C3_CSI_ERROR_RECOVERY
+	if (csi_err_detected) {
+		fimc_is_comp_csi_recovery(core);
+		csi_err_detected = false;
+	}
+#endif
+
+	/*Stream on concord*/
+	ret = fimc_is_comp_single_write(core, 0x6800, 0x0001);
+	if (ret) {
+		err("fimc_is_comp_i2c_setf_write() fail");
+	}
 p_err:
 	return ret;
 }

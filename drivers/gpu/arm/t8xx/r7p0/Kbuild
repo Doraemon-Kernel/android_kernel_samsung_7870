@@ -15,7 +15,7 @@
 
 
 # Driver version string which is returned to userspace via an ioctl
-MALI_RELEASE_NAME ?= "r7p0-03rel0"
+MALI_RELEASE_NAME ?= "r7p0-00dev0"
 
 # Paths required for build
 KBASE_PATH = $(src)
@@ -34,8 +34,6 @@ MALI_ERROR_INJECT_ON ?= 0
 MALI_MOCK_TEST ?= 0
 MALI_COVERAGE ?= 0
 MALI_INSTRUMENTATION_LEVEL ?= 0
-# MALI_SEC_SECURE_RENDERING
-MALI_SUPPORT_ASP_SECURE ?= 1
 # This workaround is for what seems to be a compiler bug we observed in
 # GCC 4.7 on AOSP 4.3.  The bug caused an intermittent failure compiling
 # the "_Pragma" syntax, where an error message is returned:
@@ -59,11 +57,10 @@ DEFINES = \
 	-DMALI_INSTRUMENTATION_LEVEL=$(MALI_INSTRUMENTATION_LEVEL) \
 	-DMALI_RELEASE_NAME=\"$(MALI_RELEASE_NAME)\" \
 	-DMALI_GCC_WORKAROUND_MIDCOM_4598=$(MALI_GCC_WORKAROUND_MIDCOM_4598) \
+	-DMALI_OLD_UTILIZATION \
 	-DMALI_SEC_CL_BOOST \
 	-DMALI_SEC_FENCE_INTEGRATION \
-	-DMALI_SEC_UTILIZATION \
-	-DKBASE_FENCE_TIMEOUT_FAKE_SIGNAL \
-	-DMALI_SEC_ASP_SECURE_RENDERING=$(MALI_SUPPORT_ASP_SECURE)
+	-DKBASE_FENCE_TIMEOUT_FAKE_SIGNAL
 
 ifeq ($(CONFIG_MALI_GATOR_SUPPORT_TIMELINE),y)
 DEFINES +=-DCONFIG_MALI_GATOR_SUPPORT
@@ -92,10 +89,10 @@ SRC := \
 	mali_kbase_cache_policy.c \
 	mali_kbase_mem.c \
 	mali_kbase_mmu.c \
-	mali_kbase_ipa.c \
 	mali_kbase_jd.c \
 	mali_kbase_jd_debugfs.c \
 	mali_kbase_jm.c \
+	mali_kbase_cpuprops.c \
 	mali_kbase_gpuprops.c \
 	mali_kbase_js.c \
 	mali_kbase_js_ctx_attr.c \
@@ -124,9 +121,7 @@ SRC := \
 	mali_kbase_gator_api.c \
 	mali_kbase_debug_mem_view.c \
 	mali_kbase_debug_job_fault.c \
-	mali_kbase_smc.c \
-	mali_kbase_mem_pool.c \
-	mali_kbase_mem_pool_debugfs.c
+	mali_kbase_smc.c
 
 ifeq ($(CONFIG_MALI_MIPE_ENABLED),y)
 	SRC += mali_kbase_tlstream.c
@@ -138,7 +133,22 @@ endif
 # Job Scheduler Policy: Completely Fair Scheduler
 SRC += mali_kbase_js_policy_cfs.c
 
+ifeq ($(CONFIG_MACH_MANTA),y)
+	SRC += mali_kbase_mem_alloc_carveout.c
+else
+	SRC += mali_kbase_mem_alloc.c
+endif
+
 ccflags-y += -I$(KBASE_PATH)
+
+# in-tree/out-of-tree logic needs to be slightly different to determine if a file is present
+ifeq ($(KBUILD_EXTMOD),)
+# in-tree
+MALI_METRICS_PATH = $(srctree)/drivers/gpu/arm/midgard
+else
+# out-of-tree
+MALI_METRICS_PATH = $(KBUILD_EXTMOD)
+endif
 
 
 ifeq ($(CONFIG_MALI_PLATFORM_THIRDPARTY),y)

@@ -2,4 +2,5 @@
 # Makefile for the vibrator driver ICs with vibrator driver
 #
 
-obj-$(CONFIG_MOTOR_DRV_MAX77854)	+= max77854_haptic.o
+obj-$(CONFIG_SEC_VIB)	+= sec_vib.o
+obj-$(CONFIG_ISA1000)		+= isa1000.o

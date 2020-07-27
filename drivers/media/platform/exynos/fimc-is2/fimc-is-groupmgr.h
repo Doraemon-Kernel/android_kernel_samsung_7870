@@ -47,7 +47,17 @@
 #define FIMC_IS_MAX_GFRAME	(VIDEO_MAX_FRAME * 2) /* max shot buffer of F/W : 32, MAX 2 groups */
 #define MIN_OF_ASYNC_SHOTS	1
 #define MIN_OF_SYNC_SHOTS	2
+#ifdef ENABLE_IS_CORE
 #define MIN_OF_SHOT_RSC		(MIN_OF_ASYNC_SHOTS + MIN_OF_SYNC_SHOTS)
+#define MIN_OF_ASYNC_SHOTS_240FPS	(MIN_OF_ASYNC_SHOTS + 2)
+#else
+#define MIN_OF_SHOT_RSC		(1)
+#define MIN_OF_ASYNC_SHOTS_240FPS	(MIN_OF_ASYNC_SHOTS + 0)
+#endif
+
+#ifdef ENABLE_SYNC_REPROCESSING
+#define REPROCESSING_TICK_COUNT	(7) /* about 200ms */
+#endif
 
 enum fimc_is_group_state {
 	FIMC_IS_GROUP_OPEN,
@@ -61,8 +71,7 @@ enum fimc_is_group_state {
 	FIMC_IS_GROUP_PIPE_INPUT,
 	FIMC_IS_GROUP_PIPE_OUTPUT,
 	FIMC_IS_GROUP_SEMI_PIPE_INPUT,
-	FIMC_IS_GROUP_SEMI_PIPE_OUTPUT,
-	FIMC_IS_GROUP_UNMAP
+	FIMC_IS_GROUP_SEMI_PIPE_OUTPUT
 };
 
 enum fimc_is_group_input_type {
@@ -152,6 +161,9 @@ struct fimc_is_group {
 #endif
 #endif
 	u32				aeflashMode; /* Flash Mode Control */
+#ifdef CONFIG_LEDS_SUPPORT_FRONT_FLASH_AUTO
+	u32				frontFlashMode; /* Auto Flash Mode Control */
+#endif
 };
 
 enum fimc_is_group_task_state {
@@ -166,6 +178,10 @@ struct fimc_is_group_task {
 	struct semaphore		smp_resource;
 	unsigned long			state;
 	atomic_t			refcount;
+
+#ifdef ENABLE_SYNC_REPROCESSING
+	atomic_t			rep_tick; /* Sync reprocessing tick */
+#endif
 };
 
 struct fimc_is_groupmgr {

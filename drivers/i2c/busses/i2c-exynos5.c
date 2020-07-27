@@ -28,7 +28,6 @@
 #include <linux/of_gpio.h>
 #include "../../pinctrl/core.h"
 #include <soc/samsung/exynos-powermode.h>
-#include <linux/smc.h>
 
 #ifdef CONFIG_CPU_IDLE
 #include <soc/samsung/exynos-pm.h>
@@ -314,16 +313,6 @@ static void change_i2c_gpio(struct exynos5_i2c *i2c)
 	}
 }
 
-static void recover_gpio_pins_secure(struct exynos5_i2c *i2c)
-{
-	dev_err(i2c->dev, "Recover GPIO pins in secure\n");
-
-	if (i2c->bus_id == exynos_smc((0x83000045), i2c->bus_id, 0, 0))
-		dev_err(i2c->dev, "SDA line(%d) is recovered in secure!!!\n", i2c->bus_id);
-	else
-		dev_err(i2c->dev, "SDA line(%d) is not recovered in secure!!!\n", i2c->bus_id);
-}
-
 static void recover_gpio_pins(struct exynos5_i2c *i2c)
 {
 	int gpio_sda, gpio_scl;
@@ -443,10 +432,7 @@ static inline void dump_i2c_register(struct exynos5_i2c *i2c)
 #endif
 
 #ifdef CONFIG_GPIOLIB
-	if (i2c->secure_mode) /* this is for secure gpio port recovery (Grace Secure Camera only) */
-		recover_gpio_pins_secure(i2c);
-	else
-		recover_gpio_pins(i2c);
+	recover_gpio_pins(i2c);
 #endif
 }
 
@@ -570,6 +556,8 @@ static int exynos5_i2c_set_timing(struct exynos5_i2c *i2c, int mode)
 
 	if (mode == HSI2C_HIGH_SPD)
 		t_scl_h = ((clk_cycle + 10) / 3) - 5;
+	else if (i2c->scl_extended_low)
+		t_scl_h = clk_cycle / 3;
 	else
 		t_scl_h = clk_cycle / 2;
 
@@ -585,8 +573,12 @@ static int exynos5_i2c_set_timing(struct exynos5_i2c *i2c, int mode)
 
 	if (mode == HSI2C_HIGH_SPD)
 		i2c_timing_s1 = t_start_su << 24 | t_start_hd << 16 | t_stop_su << 8 | t_sda_su;
-	else
-		i2c_timing_s1 = t_start_su << 24 | t_start_hd << 16 | t_stop_su << 8;
+	else {
+		if (i2c->sda_trigger_timing)
+			i2c_timing_s1 = t_start_su << 24 | t_start_hd << 16 | t_stop_su << 8 | i2c->sda_trigger_timing;
+		else
+			i2c_timing_s1 = t_start_su << 24 | t_start_hd << 16 | t_stop_su << 8;
+	}
 
 	i2c_timing_s2 = (0xF << 16) | t_data_su << 24 | t_scl_l << 8 | t_scl_h;
 	i2c_timing_s3 = (div << 16) | t_sr_release;
@@ -728,10 +720,7 @@ static void reset_batcher(struct exynos5_i2c *i2c)
 	u32 i2c_batcher_con = 0x00;
 
 #ifdef CONFIG_GPIOLIB
-	if (i2c->secure_mode) /* this is for secure gpio port recovery (Grace Secure Camera only) */
-		recover_gpio_pins_secure(i2c);
-	else
-		recover_gpio_pins(i2c);
+	recover_gpio_pins(i2c);
 #endif
 
 	i2c_batcher_con |= HSI2C_BATCHER_RESET;
@@ -1607,10 +1596,14 @@ static int exynos5_i2c_probe(struct platform_device *pdev)
 	else
 		i2c->reset_before_trans = 0;
 
-	if (of_get_property(np, "secure-mode", NULL))
-		i2c->secure_mode = 1;
+	ret = of_property_read_u32(np, "samsung.tsda-su-fs", &i2c->sda_trigger_timing);
+	if (ret)
+		dev_warn(&pdev->dev, "SDA trigger timing not needed.\n");
+
+	if (of_get_property(np, "samsung,scl-extended-low-period", NULL))
+		i2c->scl_extended_low = 1;
 	else
-		i2c->secure_mode = 0;
+		i2c->scl_extended_low = 0;
 
 	i2c->idle_ip_index = exynos_get_idle_ip_index(dev_name(&pdev->dev));
 
@@ -1655,6 +1648,7 @@ static int exynos5_i2c_probe(struct platform_device *pdev)
 		if (i2c->regs_mailbox == NULL) {
 			dev_err(&pdev->dev, "cannot map MAILBOX IO\n");
 			ret = PTR_ERR(i2c->regs_mailbox);
+			goto err_clk;
 		}
 
 		if (!i2c->support_hsi2c_batcher && i2c->regs_mailbox){
@@ -1673,6 +1667,7 @@ static int exynos5_i2c_probe(struct platform_device *pdev)
 			if (pmu_batcher == NULL) {
 				dev_err(&pdev->dev, "cannot map PMIC for batcher enable\n");
 				ret = PTR_ERR(pmu_batcher);
+				goto err_clk;
 			}
 			writel(0x3,pmu_batcher);
 		}
@@ -1795,6 +1790,8 @@ static int exynos5_i2c_remove(struct platform_device *pdev)
 
 	i2c_del_adapter(&i2c->adap);
 
+	clk_unprepare(i2c->clk);
+
 	return 0;
 }
 
@@ -1817,13 +1814,15 @@ static int exynos5_i2c_resume_noirq(struct device *dev)
 	struct exynos5_i2c *i2c = platform_get_drvdata(pdev);
 
 	i2c_lock_adapter(&i2c->adap);
-	exynos_update_ip_idle_status(i2c->idle_ip_index, 0);
-	clk_prepare_enable(i2c->clk);
+
 	/* I2C for batcher doesn't need reset */
-	if(!(i2c->support_hsi2c_batcher))
+	if(!(i2c->support_hsi2c_batcher)) {
+		exynos_update_ip_idle_status(i2c->idle_ip_index, 0);
+		clk_prepare_enable(i2c->clk);
 		exynos5_i2c_reset(i2c);
-	clk_disable_unprepare(i2c->clk);
-	exynos_update_ip_idle_status(i2c->idle_ip_index, 1);
+		clk_disable_unprepare(i2c->clk);
+		exynos_update_ip_idle_status(i2c->idle_ip_index, 1);
+	}
 	i2c->suspended = 0;
 	i2c_unlock_adapter(&i2c->adap);
 

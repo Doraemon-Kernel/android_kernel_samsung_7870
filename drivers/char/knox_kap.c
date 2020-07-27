@@ -28,8 +28,15 @@
 #ifdef CONFIG_RKP_CFP_FIX_SMC_BUG
 #include <linux/rkp_cfp.h>
 #endif
-#define SMC_CMD_KAP_CALL                (0x83000009)
-#define SMC_CMD_KAP_STATUS                (0x8300000A)
+
+#ifdef CONFIG_TZDEV //TEEgris
+#define CUSTOM_SMC_FID            (0xB2000202)
+#define SUBFUN_KAP_STATUS         150
+#else
+#define SMC_CMD_KAP_CALL          (0x83000009)
+#define SMC_CMD_KAP_STATUS        (0x8300000A)
+#endif
+
 
 unsigned int kap_on_reboot = 0;  // 1: turn on kap after reboot; 0: no pending ON action
 unsigned int kap_off_reboot = 0; // 1: turn off kap after reboot; 0: no pending OFF action
@@ -70,6 +77,48 @@ static void turn_on_kap(void) {
 	printk(KERN_ERR " %s -> Turn on kap mode\n", __FUNCTION__);
 }
 
+ssize_t knox_kap_write(struct file *file, const char __user *buffer, size_t size, loff_t *offset) {
+
+	unsigned long mode;
+	char *string;
+
+	printk(KERN_ERR " %s\n", __FUNCTION__);
+
+	string = kmalloc(size + sizeof(char), GFP_KERNEL);
+	if (string == NULL) {
+		printk(KERN_ERR "%s failed kmalloc\n", __func__);
+		return size;
+	}
+
+	memcpy(string, buffer, size);
+	string[size] = '\0';
+
+	if(kstrtoul(string, 0, &mode)) {
+		kfree(string);
+		return size;
+	};
+
+	kfree(string);
+
+	printk(KERN_ERR "id: %d\n", (int)mode);
+
+	switch(mode) {
+		case 0:
+			turn_off_kap();
+			break;
+		case 1:
+		  turn_on_kap();
+			break;
+		default:
+			printk(KERN_ERR " %s -> Invalid kap mode operations\n", __FUNCTION__);
+			break;
+	}
+
+	*offset += size;
+
+	return size;
+}
+
 #define KAP_RET_SIZE	5
 #define KAP_MAGIC	0x5afe0000
 #define KAP_MAGIC_MASK	0xffff0000
@@ -83,7 +132,12 @@ static int knox_kap_read(struct seq_file *m, void *v)
 	//clean_dcache_area(&tz_ret, 8);
 	//tima_send_cmd(__pa(&tz_ret), 0x3f850221);
 	//tz_ret = exynos_smc_kap(SMC_CMD_KAP_CALL, 0x50, 0, 0);
+
+#ifdef CONFIG_TZDEV //TEEgris
+	tz_ret =  exynos_smc64(CUSTOM_SMC_FID, SUBFUN_KAP_STATUS, 0, 0);
+#else
 	tz_ret =  exynos_smc64(SMC_CMD_KAP_STATUS, 0, 0, 0);
+#endif
 	//tz_ret = KAP_MAGIC | 1;
 
 	printk(KERN_ERR "KAP Read STATUS val = %lx\n", tz_ret);
@@ -128,7 +182,16 @@ long knox_kap_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			turn_off_kap();
 			break;
 		case 1:
+#if defined(CONFIG_SOC_EXYNOS7580) || defined(CONFIG_SOC_EXYNOS7870)
+			if(arg)
+			{   
+				turn_off_kap();
+			} else {
+				turn_on_kap();
+			} 
+#else
 			turn_on_kap();
+#endif
 			break;
 		default:
 			printk(KERN_ERR " %s -> Invalid kap mode operations\n", __FUNCTION__);
@@ -143,5 +206,6 @@ const struct file_operations knox_kap_fops = {
 	.open	= knox_kap_open,
 	.release	= single_release,
 	.read	= seq_read,
+	.write	= knox_kap_write,
 	.unlocked_ioctl  = knox_kap_ioctl,
 };

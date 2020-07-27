@@ -44,6 +44,7 @@
 #include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/blkdev.h>
+#include <linux/backing-dev.h>
 #include <linux/blkpg.h>
 #include <linux/delay.h>
 #include <linux/mutex.h>
@@ -70,10 +71,6 @@
 #include "sd.h"
 #include "scsi_priv.h"
 #include "scsi_logging.h"
-#if defined(CONFIG_SRPMB)
-#include <linux/smc.h>
-#include "scsi_srpmb.h"
-#endif
 
 MODULE_AUTHOR("Eric Youngdale");
 MODULE_DESCRIPTION("SCSI disk (sd) driver");
@@ -600,7 +597,7 @@ static struct scsi_disk *scsi_disk_get(struct gendisk *disk)
 	return sdkp;
 }
 
-struct scsi_disk *scsi_disk_get_from_dev(struct device *dev)
+static struct scsi_disk *scsi_disk_get_from_dev(struct device *dev)
 {
 	struct scsi_disk *sdkp;
 
@@ -611,9 +608,8 @@ struct scsi_disk *scsi_disk_get_from_dev(struct device *dev)
 	mutex_unlock(&sd_ref_mutex);
 	return sdkp;
 }
-EXPORT_SYMBOL(scsi_disk_get_from_dev);
 
-void scsi_disk_put(struct scsi_disk *sdkp)
+static void scsi_disk_put(struct scsi_disk *sdkp)
 {
 	struct scsi_device *sdev = sdkp->device;
 
@@ -622,7 +618,6 @@ void scsi_disk_put(struct scsi_disk *sdkp)
 	scsi_device_put(sdev);
 	mutex_unlock(&sd_ref_mutex);
 }
-EXPORT_SYMBOL(scsi_disk_put);
 
 
 
@@ -909,11 +904,7 @@ static int sd_setup_flush_cmnd(struct scsi_cmnd *cmd)
 	cmd->transfersize = 0;
 	cmd->allowed = SD_MAX_RETRIES;
 
-	if (cmd->device->host->by_ufs)
-		rq->timeout = SD_UFS_TIMEOUT;
-	else
-		rq->timeout = rq->q->rq_timeout * SD_FLUSH_TIMEOUT_MULTIPLIER;
-
+	rq->timeout = rq->q->rq_timeout * SD_FLUSH_TIMEOUT_MULTIPLIER;
 	return BLKPREP_OK;
 }
 
@@ -1116,24 +1107,6 @@ static int sd_setup_read_write_cmnd(struct scsi_cmnd *SCpnt)
 		SCpnt->cmnd[6] = SCpnt->cmnd[9] = 0;
 		SCpnt->cmnd[7] = (unsigned char) (this_count >> 8) & 0xff;
 		SCpnt->cmnd[8] = (unsigned char) this_count & 0xff;
-
-#ifdef CONFIG_JOURNAL_DATA_TAG
-		if (blk_queue_journal_tag(rq->q) &&
-				(rq->cmd_flags & REQ_META) &&
-				(rq_data_dir(rq) == WRITE)) {
-#ifdef CONFIG_JOURNAL_DATA_TAG_DEBUG
-			static unsigned long log_time = 0;
-			static unsigned long tag_count = 0;
-			tag_count++;
-			if (printk_timed_ratelimit(&log_time, 5000)) {
-				printk("set ufs data tag for %lu meta flagged "
-				       "writes.\n", tag_count);
-				tag_count = 0;
-			}
-#endif
-			SCpnt->cmnd[6] |= (1 << 4);
-		}
-#endif
 	} else {
 		if (unlikely(rq->cmd_flags & REQ_FUA)) {
 			/*
@@ -1509,7 +1482,7 @@ static int sd_sync_cache(struct scsi_disk *sdkp)
 	int retries, res;
 	struct scsi_device *sdp = sdkp->device;
 	const int timeout = sdp->request_queue->rq_timeout
-			* SD_FLUSH_TIMEOUT_MULTIPLIER;
+		* SD_FLUSH_TIMEOUT_MULTIPLIER;
 	struct scsi_sense_hdr sshdr;
 
 	if (!scsi_device_online(sdp))
@@ -1954,10 +1927,8 @@ static int sd_read_protection_type(struct scsi_disk *sdkp, unsigned char *buffer
 	u8 type;
 	int ret = 0;
 
-	if (scsi_device_protection(sdp) == 0 || (buffer[12] & 1) == 0) {
-		sdkp->protection_type = 0;
+	if (scsi_device_protection(sdp) == 0 || (buffer[12] & 1) == 0)
 		return ret;
-	}
 
 	type = ((buffer[12] >> 1) & 7) + 1; /* P_TYPE 0 = Type 1 */
 
@@ -2549,10 +2520,6 @@ sd_read_cache_type(struct scsi_disk *sdkp, unsigned char *buffer)
 		if (sdkp->WCE && sdkp->write_prot)
 			sdkp->WCE = 0;
 
-		/* No cache flush allowed for UFS well-known LU */
-		if (sdkp->WCE && (sdp->bootlunID == 1 || sdp->bootlunID == 2))
-			sdkp->WCE = 0;
-
 		if (sdkp->first_scan || old_wce != sdkp->WCE ||
 		    old_rcd != sdkp->RCD || old_dpofua != sdkp->DPOFUA)
 			sd_printk(KERN_NOTICE, sdkp,
@@ -3120,196 +3087,6 @@ static void sd_probe_async(void *data, async_cookie_t cookie)
 #endif
 }
 
-#if defined(CONFIG_SRPMB)
-#if defined(DEBUG_SRPMB)
-static void dump_packet(u8 *data, int len)
-{
-	u8 s[17];
-	int i, j;
-
-	s[16]='\0';
-	for (i = 0; i < len; i += 16) {
-		printk("%06x :", i);
-		for (j=0; j<16; j++) {
-			printk(" %02x", data[i+j]);
-			s[j] = (data[i+j]<' ' ? '.' : (data[i+j]>'}' ? '.' : data[i+j]));
-		}
-		printk(" |%s|\n",s);
-	}
-	printk("\n");
-}
-#endif
-
-static void swap_packet(u8 *p, u8 *d)
-{
-	int i;
-	for (i = 0; i < RPMB_PACKET_SIZE; i++)
-		d[i] = p[RPMB_PACKET_SIZE - 1 - i];
-}
-
-static void srpmb_worker(struct work_struct *data)
-{
-	int ret;
-	struct rpmb_packet packet;
-	struct rpmb_irq_ctx *rpmb_ctx;
-	struct scsi_device *sdp;
-	Rpmb_Req *req;
-
-	if (!data) {
-		printk("error srpmb_worker: rpmb work_struct data invalid\n");
-		return ;
-	}
-	rpmb_ctx = container_of(data, struct rpmb_irq_ctx, work);
-
-	if (!rpmb_ctx->dev) {
-		printk("error srpmb_worker: rpmb_ctx->dev invalid\n");
-		return ;
-	}
-	sdp = to_scsi_device(rpmb_ctx->dev);
-
-	if (!rpmb_ctx->vir_addr) {
-		sdev_printk(KERN_WARNING, sdp, "rpmb_ctx->vir_addr invalid\n");
-		return ;
-	}
-	req = (Rpmb_Req *)rpmb_ctx->vir_addr;
-
-	switch(req->type) {
-	case GET_WRITE_COUNTER:
-		if (req->data_len != RPMB_PACKET_SIZE) {
-			req->status_flag = WRITE_COUTNER_DATA_LEN_ERROR;
-			sdev_printk(KERN_WARNING, sdp, "data len is invalid\n");
-			break;
-		}
-
-		req->cmd = SCSI_IOCTL_SECURITY_PROTOCOL_OUT;
-		req->outlen = RPMB_PACKET_SIZE;
-
-		ret = srpmb_scsi_ioctl(sdp, req);
-		if (ret < 0) {
-			req->status_flag = WRITE_COUTNER_SECURITY_OUT_ERROR;
-			sdev_printk(KERN_WARNING, sdp,
-				"ioctl read_counter error: %x\n", ret);
-
-			break;
-		}
-
-		memset(req->rpmb_data, 0x0, req->data_len);
-		req->cmd = SCSI_IOCTL_SECURITY_PROTOCOL_IN;
-		req->inlen = req->data_len;
-
-		ret = srpmb_scsi_ioctl(sdp, req);
-		if (ret < 0) {
-			req->status_flag = WRITE_COUTNER_SECURITY_IN_ERROR;
-			sdev_printk(KERN_WARNING, sdp, "ioctl error : %x\n", ret);
-			break;
-		}
-		req->status_flag = PASS_STATUS;
-
-		break;
-	case WRITE_DATA:
-		if (req->data_len < RPMB_PACKET_SIZE ||
-			req->data_len > RPMB_PACKET_SIZE * 64) {
-			req->status_flag = WRITE_DATA_LEN_ERROR;
-			sdev_printk(KERN_WARNING, sdp, "data len is invalid\n");
-			break;
-		}
-
-		req->cmd = SCSI_IOCTL_SECURITY_PROTOCOL_OUT;
-		req->outlen = req->data_len;
-
-		ret = srpmb_scsi_ioctl(sdp, req);
-		if (ret < 0) {
-			req->status_flag = WRITE_DATA_SECURITY_OUT_ERROR;
-			sdev_printk(KERN_WARNING, sdp,
-				"ioctl write data error: %x\n", ret);
-			break;
-		}
-
-		memset(req->rpmb_data, 0x0, req->data_len);
-		memset(&packet, 0x0, RPMB_PACKET_SIZE);
-		packet.request = RESULT_READ_REQ;
-		swap_packet((uint8_t *)&packet, req->rpmb_data);
-		req->cmd = SCSI_IOCTL_SECURITY_PROTOCOL_OUT;
-		req->outlen = RPMB_PACKET_SIZE;
-
-		ret = srpmb_scsi_ioctl(sdp, req);
-		if (ret < 0) {
-			req->status_flag = WRITE_DATA_RESULT_SECURITY_OUT_ERROR;
-			sdev_printk(KERN_WARNING, sdp,
-				"ioctl write_data result error: %x\n", ret);
-			break;
-		}
-
-		memset(req->rpmb_data, 0x0, req->data_len);
-		req->cmd = SCSI_IOCTL_SECURITY_PROTOCOL_IN;
-		req->inlen = RPMB_PACKET_SIZE;
-
-		ret = srpmb_scsi_ioctl(sdp, req);
-		if (ret < 0) {
-			req->status_flag = WRITE_DATA_SECURITY_IN_ERROR;
-			sdev_printk(KERN_WARNING, sdp,
-				"ioctl write_data result error: %x\n", ret);
-			break;
-		}
-
-		swap_packet(req->rpmb_data, (uint8_t *)&packet);
-		if (packet.result == 0) {
-			req->status_flag = PASS_STATUS;
-		} else {
-			req->status_flag = packet.result;
-			sdev_printk(KERN_WARNING, sdp,
-				"packet result error: %x\n", req->status_flag);
-		}
-		break;
-	case READ_DATA:
-		if (req->data_len < RPMB_PACKET_SIZE ||
-			req->data_len > RPMB_PACKET_SIZE * 64) {
-			req->status_flag = READ_LEN_ERROR;
-			sdev_printk(KERN_WARNING, sdp, "data len is invalid\n");
-			break;
-		}
-
-		req->cmd = SCSI_IOCTL_SECURITY_PROTOCOL_OUT;
-		req->outlen = RPMB_PACKET_SIZE;
-
-		ret = srpmb_scsi_ioctl(sdp, req);
-		if (ret < 0) {
-			req->status_flag = READ_DATA_SECURITY_OUT_ERROR;
-			sdev_printk(KERN_WARNING, sdp,
-				"ioctl read data error: %x\n", ret);
-			break;
-		}
-
-		memset(req->rpmb_data, 0x0, req->data_len);
-		req->cmd = SCSI_IOCTL_SECURITY_PROTOCOL_IN;
-		req->inlen = req->data_len;
-
-		ret = srpmb_scsi_ioctl(sdp, req);
-		if (ret < 0) {
-			req->status_flag = READ_DATA_SECURITY_IN_ERROR;
-			sdev_printk(KERN_WARNING, sdp,
-				"ioctl result read data error : %x\n", ret);
-			break;
-		}
-		req->status_flag = PASS_STATUS;
-
-		break;
-	default:
-		sdev_printk(KERN_WARNING, sdp,
-				"invalid requset type : %x\n", req->type);
-	}
-}
-
-static irqreturn_t rpmb_irq_handler(int intr, void *arg)
-{
-	struct rpmb_irq_ctx *rpmb_ctx = (struct rpmb_irq_ctx *)arg;
-
-	queue_work(rpmb_ctx->srpmb_queue, &rpmb_ctx->work);
-
-	return IRQ_HANDLED;
-}
-#endif
-
 /**
  *	sd_probe - called during driver initialization and whenever a
  *	new scsi device is attached to the system. It is called once
@@ -3386,18 +3163,35 @@ static int sd_probe(struct device *dev)
 		else
 			blk_queue_rq_timeout(sdp->request_queue,
 					     SD_MOD_TIMEOUT);
-		if (sdp->host->by_ufs)
-			blk_queue_rq_timeout(sdp->request_queue,
-					     SD_UFS_TIMEOUT);
 	}
-        
-#ifdef CONFIG_LARGE_DIRTY_BUFFER
+
+#ifdef CONFIG_SCSI_UFSHCD
 	if (!sdp->host->by_ufs) {
-		sdp->request_queue->backing_dev_info.max_ratio = 10;
-		sdp->request_queue->backing_dev_info.min_ratio = 10;
-		sdp->request_queue->backing_dev_info.capabilities |= BDI_CAP_STRICTLIMIT;
-	}
+#else
+	if (1) { /* apply to all SCSI devices on non-UFS system */
 #endif
+		struct request_queue *q = sdp->request_queue;
+
+		/* decrease max # of requests to 32. The goal of this tunning is
+		 * reducing the time for draining elevator when elevator_switch
+		 * function is called. It is effective for slow USB memory.
+		 */
+		q->nr_requests = BLKDEV_MAX_RQ / 8;
+		if (q->nr_requests < 32) q->nr_requests = 32;
+#ifdef CONFIG_LARGE_DIRTY_BUFFER
+		/* apply more throttle on non-ufs scsi device */
+		q->backing_dev_info.capabilities |= BDI_CAP_STRICTLIMIT;
+		bdi_set_min_ratio(&q->backing_dev_info, 30);
+		bdi_set_max_ratio(&q->backing_dev_info, 60);
+#endif
+		pr_info("Parameters for SCSI-dev(%s): min/max_ratio: %u/%u "
+			"strictlimit: on nr_requests: %lu read_ahead_kb: %lu\n",
+			gd->disk_name,
+			q->backing_dev_info.min_ratio,
+			q->backing_dev_info.max_ratio,
+			q->nr_requests,
+			q->backing_dev_info.ra_pages * 4);
+	}
 
 	device_initialize(&sdkp->dev);
 	sdkp->dev.parent = dev;
@@ -3426,76 +3220,6 @@ static int sd_probe(struct device *dev)
 	get_device(&sdkp->dev);	/* prevent release before async_schedule */
 	async_schedule_domain(sd_probe_async, sdkp, &scsi_sd_probe_domain);
 
-#if defined(CONFIG_SRPMB)
-	/* rpmb operation for LDFW */
-	if (strcmp(dev_name(dev), IS_INCLUDE_RPMB_DEVICE) == 0)
-	{
-		int ret;
-		struct rpmb_irq_ctx *rpmb_ctx;
-		sdkp->rpmb_ctx = kzalloc(sizeof(struct rpmb_irq_ctx), GFP_KERNEL);
-		if (!sdkp->rpmb_ctx) {
-			goto out_srpmb_ctx_alloc_fail;
-		}
-		rpmb_ctx = sdkp->rpmb_ctx;
-
-		/* buffer init */
-		rpmb_ctx->vir_addr = (uint8_t *)dma_alloc_coherent(dev,
-			RPMB_BUF_MAX_SIZE, &rpmb_ctx->phy_addr, GFP_KERNEL);
-		if (rpmb_ctx->vir_addr && rpmb_ctx->phy_addr) {
-
-			rpmb_ctx->srpmb_pendr = ioremap(GICD_ISPENDR_BASE + 0x1000,
-							SZ_4K);
-			if (!rpmb_ctx->srpmb_pendr)
-				goto out_srpmb_init_fail;
-
-			sdkp->rpmb_ctx->dev = dev;
-			rpmb_ctx->srpmb_queue = alloc_workqueue("srpmb_wq",
-							WQ_MEM_RECLAIM | WQ_UNBOUND, 1);
-			if (!rpmb_ctx->srpmb_queue) {
-				sdev_printk(KERN_WARNING, sdp,
-					"Fail to alloc workqueue for ufs srpmb\n");
-				goto out_srpmb_init_fail;
-			}
-
-			ret = request_irq(RPMB_SPI, rpmb_irq_handler,
-					IRQF_TRIGGER_RISING, "srpmb", rpmb_ctx);
-			if (ret) {
-				sdev_printk(KERN_WARNING, sdp,
-					"rpmb request irq failed: %x\n", ret);
-				goto out_srpmb_init_fail;
-			}
-
-			ret = exynos_smc(SMC_SRPMB_WSM, rpmb_ctx->phy_addr, 0, 0);
-			if (ret) {
-				sdev_printk(KERN_WARNING, sdp,
-					"rpmb wsm smc init failed: %x\n", ret);
-				goto out_srpmb_init_fail;
-			}
-			INIT_WORK(&rpmb_ctx->work, srpmb_worker);
-		} else {
-			sdev_printk(KERN_WARNING, sdp,
-				"rpmb wsm dma alloc failed\n");
-			goto out_srpmb_dma_alloc_fail;
-		}
-	}
-
-	return 0;
-
- out_srpmb_init_fail:
-	if (sdkp->rpmb_ctx->srpmb_queue)
-		destroy_workqueue(sdkp->rpmb_ctx->srpmb_queue);
-
-	dma_free_coherent(dev, RPMB_BUF_MAX_SIZE,
-			sdkp->rpmb_ctx->vir_addr, sdkp->rpmb_ctx->phy_addr);
-
-	if (sdkp->rpmb_ctx->srpmb_pendr)
-		iounmap(sdkp->rpmb_ctx->srpmb_pendr);
-
- out_srpmb_dma_alloc_fail:
-	kfree(sdkp->rpmb_ctx);
-
- out_srpmb_ctx_alloc_fail:
-#endif
 	return 0;
 
  out_free_index:
@@ -3527,6 +3251,17 @@ static int sd_remove(struct device *dev)
 	struct scsi_disk *sdkp;
 	dev_t devt;
 
+#ifdef CONFIG_LARGE_DIRTY_BUFFER
+	struct scsi_device *sdp;
+
+	/* restore bdi min/max ratio before device removal */
+	sdp = to_scsi_device(dev);
+	if (sdp && sdp->request_queue) {
+		bdi_set_min_ratio(&sdp->request_queue->backing_dev_info, 0);
+		bdi_set_max_ratio(&sdp->request_queue->backing_dev_info, 100);
+	}
+#endif
+
 	sdkp = dev_get_drvdata(dev);
 	devt = disk_devt(sdkp->disk);
 	scsi_autopm_get_device(sdkp->device);
@@ -3538,20 +3273,6 @@ static int sd_remove(struct device *dev)
 		wake_up_interruptible(&sdkp->delay_wait);
 		wait_for_completion(&sdkp->scanning_done);
 		sd_printk(KERN_NOTICE, sdkp, "scan thread kill success\n");
-	}
-#endif
-
-#if defined(CONFIG_SRPMB)
-	if (strcmp(dev_name(dev), IS_INCLUDE_RPMB_DEVICE) == 0) {
-		if (sdkp->rpmb_ctx) {
-			if (sdkp->rpmb_ctx->srpmb_queue)
-				destroy_workqueue(sdkp->rpmb_ctx->srpmb_queue);
-
-			dma_free_coherent(dev, RPMB_BUF_MAX_SIZE,
-				sdkp->rpmb_ctx->vir_addr, sdkp->rpmb_ctx->phy_addr);
-
-			kfree(sdkp->rpmb_ctx);
-		}
 	}
 #endif
 
@@ -3665,9 +3386,7 @@ static void sd_shutdown(struct device *dev)
 exit:
 	if (sdp->host->by_ufs) {
 		spin_lock_irqsave(q->queue_lock, flags);
-		queue_flag_set(QUEUE_FLAG_DYING, q);
-		__blk_drain_queue(q, true);
-		queue_flag_set(QUEUE_FLAG_DEAD, q);
+		blk_stop_queue(q);
 		spin_unlock_irqrestore(q->queue_lock, flags);
 	}
 

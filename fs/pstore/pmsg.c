@@ -38,6 +38,7 @@ static ssize_t write_pmsg(struct file *file, const char __user *buf,
 	mutex_lock(&pmsg_lock);
 	ret = psinfo->write_buf_user(PSTORE_TYPE_PMSG, 0, &id, 0, buf, 0, count,
 				     psinfo);
+
 	mutex_unlock(&pmsg_lock);
 	return ret ? ret : count;
 }

@@ -22,48 +22,6 @@
 #include "fimc-is-core.h"
 
 #if defined(CONFIG_I2C) || defined(CONFIG_I2C_MODULE)
-int fimc_is_i2c_s_pin(struct i2c_client *client, int state)
-{
-	int ret = 0;
-	char pin_ctrl[10] = {0, };
-	struct device *i2c_dev = NULL;
-	struct pinctrl *pinctrl_i2c = NULL;
-
-	if (client == NULL) {
-		err("client is NULL.");
-		return ret;
-	}
-
-	switch (state) {
-	case I2C_PIN_STATE_ON:
-		sprintf(pin_ctrl, "on_i2c");
-		break;
-	case I2C_PIN_STATE_OFF:
-		sprintf(pin_ctrl, "off_i2c");
-		break;
-	case I2C_PIN_STATE_HOST:
-		sprintf(pin_ctrl, "i2c_host");
-		break;
-	case I2C_PIN_STATE_FW:
-		sprintf(pin_ctrl, "i2c_fw");
-		break;
-	case I2C_PIN_STATE_DEFAULT:
-	default:
-		sprintf(pin_ctrl, "default");
-		break;
-	}
-
-	i2c_dev = client->dev.parent->parent;
-	pinctrl_i2c = devm_pinctrl_get_select(i2c_dev, pin_ctrl);
-	if (IS_ERR_OR_NULL(pinctrl_i2c)) {
-		printk(KERN_ERR "%s: Failed to configure i2c pin\n", __func__);
-	} else {
-		devm_pinctrl_put(pinctrl_i2c);
-	}
-
-	return ret;
-}
-
 static int fimc_is_i2c0_probe(struct i2c_client *client,
 				  const struct i2c_device_id *id)
 {

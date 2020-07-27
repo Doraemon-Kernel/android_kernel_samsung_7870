@@ -16,7 +16,7 @@
 
 #include <linux/platform_device.h>
 
-#if	defined(CONFIG_ARM_EXYNOS8890_BUS_DEVFREQ)
+#if (defined(CONFIG_ARM_EXYNOS8890_BUS_DEVFREQ) || defined(CONFIG_ARM_EXYNOS7870_BUS_DEVFREQ))
 #define CONFIG_MFC_USE_BUS_DEVFREQ
 #endif
 
@@ -53,6 +53,7 @@ enum mfc_ip_version {
 	IP_VER_MFC_6I_0,
 	IP_VER_MFC_8J_0,
 	IP_VER_MFC_8J_1,
+	IP_VER_MFC_7J_0,
 };
 
 struct s5p_mfc_platdata {

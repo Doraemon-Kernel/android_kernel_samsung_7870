@@ -21,6 +21,9 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  *
  */
+#if defined(CONFIG_IFPMIC_SUPPORT)
+#include <linux/ifpmic/manager/usb_typec_manager_notifier.h>
+#endif
 
 #ifndef __USB_TYPEC_MANAGER_NOTIFIER_H__
 #define __USB_TYPEC_MANAGER_NOTIFIER_H__
@@ -50,7 +53,6 @@ typedef enum {
 	MANAGER_NOTIFY_MUIC_CPUIDLE,
 	MANAGER_NOTIFY_MUIC_CPUFREQ,
 	MANAGER_NOTIFY_MUIC_TIMEOUT_OPEN_DEVICE,
-	MANAGER_NOTIFY_MUIC_POGO_DOCK,
 
 /* CCIC */
 	MANAGER_NOTIFY_CCIC_INITIAL = 20,
@@ -134,25 +136,17 @@ typedef struct _manager_data_t
 	bool usb_enable_state;
 	int pd_con_state;
 	int water_det;
-	int wVbus_det;
+	int run_dry_support; /* if the CC IC driver has the run_dry_support variable, it should be added here as well  */
 	int is_UFPS;
 	void *pd;
-
 	int water_count;
 	int dry_count;
 	int usb210_count;
 	int usb310_count;
 	int waterChg_count;
-	int water_cable_type;
-
 	unsigned long waterDet_duration;
 	unsigned long waterDet_time;
 	unsigned long dryDet_time;
-
-	unsigned long wVbus_duration;
-	unsigned long wVbusHigh_time;
-	unsigned long wVbusLow_time;
-
 	int dp_attach_state;
 	int dp_cable_type;
 	int dp_hpd_state;

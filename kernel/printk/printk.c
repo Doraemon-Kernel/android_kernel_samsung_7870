@@ -46,15 +46,13 @@
 #include <linux/irq_work.h>
 #include <linux/utsname.h>
 #include <linux/ctype.h>
-#if defined(CONFIG_SEC_BSP)
-#include <linux/sec_bsp.h>
-#endif
 
 #ifdef CONFIG_SEC_DEBUG_AUTO_SUMMARY
 #include <linux/sec_debug.h>
 #endif
 
 #include <asm/uaccess.h>
+#include <asm/cputype.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/printk.h>
@@ -299,7 +297,6 @@ static u32 clear_idx_knox;
 #define LOG_ALIGN __alignof__(struct printk_log)
 #endif
 #define __LOG_BUF_LEN (1 << CONFIG_LOG_BUF_SHIFT)
-#define LOG_BUF_LEN_MAX (u32)(1 << 31)
 static char __log_buf[__LOG_BUF_LEN] __aligned(LOG_ALIGN);
 static char *log_buf = __log_buf;
 static u32 log_buf_len = __LOG_BUF_LEN;
@@ -578,7 +575,6 @@ static int log_store(int facility, int level,
 		msg->in_interrupt = in_interrupt() ? 1 : 0;
 	}
 #endif
-
 #ifdef CONFIG_EXYNOS_SNAPSHOT
 	if (func_hook_logbuf) {
 		hook_size = msg_print_text(msg, msg->flags,
@@ -588,7 +584,7 @@ static int log_store(int facility, int level,
 #ifdef CONFIG_SEC_DEBUG_AUTO_SUMMARY
 		if (msg->for_auto_summary && func_hook_auto_comm)
 			func_hook_auto_comm(msg->type_auto_summary, hook_text, hook_size);
-#endif
+#endif		
 	}
 #endif
 	/* insert message */
@@ -694,53 +690,6 @@ static ssize_t devkmsg_write(struct kiocb *iocb, struct iov_iter *from)
 			len -= endp - line;
 			line = endp;
 		}
-
-#if defined(CONFIG_SEC_BSP)
-		if (init_command_debug && 1 == facility && 6 == level) {
-			if ('s' == buf[len + 1] && '.' == buf[len - 2]) {
-				char *s = &buf[len - 3];
-				int time = 0, ssize  = 0, pos = 0;
-				size_t size = len;
-				bool found = false;
-
-				time = simple_strtoul(s, &endp, 10);
-				time *= 100;
-				s = endp + 1;
-				time += simple_strtoul(s, &endp, 10);
-
-				if (time) {
-					s = line;
-
-					while (size--) {
-						if (s[pos] == '\'') {
-							pos++;
-							while (size--) {
-								ssize++;
-								if (s[pos + ssize] == '\'') {
-									found = true;
-									break;
-								}
-							}
-
-							break;
-						}
-						pos++;
-					}
-
-					if (found) {
-						char *name = kmalloc(ssize + 1, GFP_KERNEL);
-
-						if (name != NULL) {
-							name[ssize] = '\0';
-							memcpy(name, &s[pos], ssize);
-							sec_boot_stat_add_init_command(name, time * 10);
-						}
-						kfree(name);
-					}
-				}
-			}
-		}
-#endif
 	}
 
 	printk_emit(facility, level, NULL, 0, "%s", line);
@@ -1012,23 +961,18 @@ void log_buf_kexec_setup(void)
 static unsigned long __initdata new_log_buf_len;
 
 /* we practice scaling the ring buffer by powers of 2 */
-static void __init log_buf_len_update(u64 size)
+static void __init log_buf_len_update(unsigned size)
 {
-	if (size > (u64)LOG_BUF_LEN_MAX) {
-		size = (u64)LOG_BUF_LEN_MAX;
-		pr_err("log_buf over 2G is not supported.\n");
-	}
-
 	if (size)
 		size = roundup_pow_of_two(size);
 	if (size > log_buf_len)
-		new_log_buf_len = (unsigned long)size;
+		new_log_buf_len = size;
 }
 
 /* save requested log_buf_len since it's too early to process it */
 static int __init log_buf_len_setup(char *str)
 {
-	u64 size;
+	unsigned int size;
 
 	if (!str)
 		return -EINVAL;
@@ -1078,7 +1022,7 @@ void __init setup_log_buf(int early)
 {
 	unsigned long flags;
 	char *new_log_buf;
-	unsigned int free;
+	int free;
 
 	if (log_buf != __log_buf)
 		return;
@@ -1089,6 +1033,7 @@ void __init setup_log_buf(int early)
 	if (!new_log_buf_len)
 		return;
 
+	set_memsize_kernel_type(MEMSIZE_KERNEL_LOGBUF);
 	if (early) {
 		new_log_buf =
 			memblock_virt_alloc(new_log_buf_len, LOG_ALIGN);
@@ -1096,9 +1041,10 @@ void __init setup_log_buf(int early)
 		new_log_buf = memblock_virt_alloc_nopanic(new_log_buf_len,
 							  LOG_ALIGN);
 	}
+	set_memsize_kernel_type(MEMSIZE_KERNEL_OTHERS);
 
 	if (unlikely(!new_log_buf)) {
-		pr_err("log_buf_len: %lu bytes not available\n",
+		pr_err("log_buf_len: %ld bytes not available\n",
 			new_log_buf_len);
 		return;
 	}
@@ -1111,8 +1057,8 @@ void __init setup_log_buf(int early)
 	memcpy(log_buf, __log_buf, __LOG_BUF_LEN);
 	raw_spin_unlock_irqrestore(&logbuf_lock, flags);
 
-	pr_info("log_buf_len: %u bytes\n", log_buf_len);
-	pr_info("early log buf free: %u(%u%%)\n",
+	pr_info("log_buf_len: %d bytes\n", log_buf_len);
+	pr_info("early log buf free: %d(%d%%)\n",
 		free, (free * 100) / __LOG_BUF_LEN);
 }
 
@@ -2316,19 +2262,19 @@ void resume_console(void)
 	console_unlock();
 }
 
-/** 
- * console_flush - flush dmesg if console isn't suspended 
- * 
- * console_unlock always flushes the dmesg buffer, so just try to 
- * grab&drop the console lock. If that fails we know that the current 
- * holder will eventually drop the console lock and so flush the dmesg 
- * buffers at the earliest possible time. 
- */ 
-void console_flush(void) 
-{ 
-	if (console_trylock()) 
-		console_unlock(); 
-} 
+/**
+ * console_flush - flush dmesg if console isn't suspended
+ *
+ * console_unlock always flushes the dmesg buffer, so just try to
+ * grab&drop the console lock. If that fails we know that the current
+ * holder will eventually drop the console lock and so flush the dmesg
+ * buffers at the earliest possible time.
+ */
+void console_flush(void)
+{
+	if (console_trylock())
+		console_unlock();
+}
 
 /**
  * console_cpu_notify - print deferred console messages after CPU hotplug
@@ -2349,7 +2295,7 @@ static int console_cpu_notify(struct notifier_block *self,
 	case CPU_DEAD:
 	case CPU_DOWN_FAILED:
 	case CPU_UP_CANCELED:
-		console_flush(); 
+		console_flush();
 	}
 	return NOTIFY_OK;
 }
@@ -3243,7 +3189,7 @@ bool kmsg_dump_get_buffer(struct kmsg_dumper *dumper, bool syslog,
 	seq = dumper->cur_seq;
 	idx = dumper->cur_idx;
 	prev = 0;
-	while (l >= size && seq < dumper->next_seq) {
+	while (l > size && seq < dumper->next_seq) {
 		struct printk_log *msg = log_from_idx(idx);
 
 		l -= msg_print_text(msg, prev, true, NULL, 0);
@@ -3344,12 +3290,22 @@ void __init dump_stack_set_arch_desc(const char *fmt, ...)
  */
 void dump_stack_print_info(const char *log_lvl)
 {
+#ifdef CONFIG_ARM64
+	printk("%sCPU: %d MPIDR: %llx PID: %d Comm: %.20s %s %s %.*s\n",
+	       log_lvl, raw_smp_processor_id(), read_cpuid_mpidr(),
+	       current->pid, current->comm,
+	       print_tainted(), init_utsname()->release,
+	       (int)strcspn(init_utsname()->version, " "),
+	       init_utsname()->version);
+
+#else
 	printk("%sCPU: %d PID: %d Comm: %.20s %s %s %.*s\n",
 	       log_lvl, raw_smp_processor_id(), current->pid, current->comm,
 	       print_tainted(), init_utsname()->release,
 	       (int)strcspn(init_utsname()->version, " "),
 	       init_utsname()->version);
 
+#endif
 	if (dump_stack_arch_desc_str[0] != '\0')
 		printk("%sHardware name: %s\n",
 		       log_lvl, dump_stack_arch_desc_str);

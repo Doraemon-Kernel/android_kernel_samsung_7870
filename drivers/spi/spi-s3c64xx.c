@@ -44,10 +44,6 @@
 
 #include "../pinctrl/core.h"
 
-#ifdef CONFIG_SEC_FACTORY
-#undef CONFIG_ESE_SECURE
-#endif
-
 static LIST_HEAD(drvdata_list);
 
 #define MAX_SPI_PORTS		10
@@ -153,13 +149,6 @@ static LIST_HEAD(drvdata_list);
 #define TXBUSY    (1<<3)
 
 #define SPI_DBG_MODE (0x1 << 0)
-#define SD_INFO_PA		(0x10000004)
-
-u32 fusing_bit;
-
-/* For Oberthur ese, to change spi pins pinctrl  */
-struct pinctrl_state *spi_pin_state[ESE_MAX_GPIO_STATE];
-struct pinctrl *spi_pinctrl;
 
 /**
  * struct s3c64xx_spi_info - SPI Controller hardware info
@@ -261,27 +250,6 @@ static void s3c64xx_spi_dump_reg(struct s3c64xx_spi_driver_data *sdd)
 				readl(regs + S3C64XX_SPI_PACKET_CNT));
 
 }
-
-/* For Oberthur ese, to change spi pins pinctrl  */
-int s3c64xx_spi_change_gpio(enum ese_gpio_state gpio_state)
-{
-	struct pinctrl_state *pins_state;
-	int status = 0;
-
-	pins_state = spi_pin_state[gpio_state];
-
-	if(!IS_ERR(pins_state)) {
-
-		status = pinctrl_select_state(spi_pinctrl, pins_state);
-		if (status) {
-			pr_err("%s could not set spi_pinctrl for ese p3.\n",__func__);
-			return -EFAULT;
-		}
-	}
-
-	return 0;
-}
-
 static void flush_fifo(struct s3c64xx_spi_driver_data *sdd)
 {
 	void __iomem *regs = sdd->regs;
@@ -427,28 +395,18 @@ static int acquire_dma(struct s3c64xx_spi_driver_data *sdd)
 {
 	struct samsung_dma_req req;
 	struct device *dev = &sdd->pdev->dev;
-	struct s3c64xx_spi_info *sci = sdd->cntrlr_info;
 
 	sdd->ops = samsung_dma_get_ops();
 
 	req.cap = DMA_SLAVE;
 	req.client = &s3c64xx_spi_dma_client;
 
-	if ((sci->check_fusing_bit) && (fusing_bit & 0xC0000000)) {
-		if (sdd->rx_dma.ch == NULL)
-			sdd->rx_dma.ch = (void *)sdd->ops->request(sdd->rx_dma.dmach,
-							&req, dev, "rx-s");
-		if (sdd->tx_dma.ch == NULL)
-			sdd->tx_dma.ch = (void *)sdd->ops->request(sdd->tx_dma.dmach,
-							&req, dev, "tx-s");
-	} else {
-		if (sdd->rx_dma.ch == NULL)
-			sdd->rx_dma.ch = (void *)sdd->ops->request(sdd->rx_dma.dmach,
+	if (sdd->rx_dma.ch == NULL)
+		sdd->rx_dma.ch = (void *)sdd->ops->request(sdd->rx_dma.dmach,
 							&req, dev, "rx");
-		if (sdd->tx_dma.ch == NULL)
-			sdd->tx_dma.ch = (void *)sdd->ops->request(sdd->tx_dma.dmach,
+	if (sdd->tx_dma.ch == NULL)
+		sdd->tx_dma.ch = (void *)sdd->ops->request(sdd->tx_dma.dmach,
 							&req, dev, "tx");
-	}
 
 	return 1;
 }
@@ -839,7 +797,7 @@ static void s3c64xx_spi_config(struct s3c64xx_spi_driver_data *sdd)
 	}
 }
 
-#define XFER_DMAADDR_INVALID DMA_BIT_MASK(36)
+#define XFER_DMAADDR_INVALID DMA_BIT_MASK(32)
 
 static int s3c64xx_spi_map_mssg(struct s3c64xx_spi_driver_data *sdd,
 						struct spi_message *msg)
@@ -1176,15 +1134,14 @@ static int s3c64xx_spi_setup(struct spi_device *spi)
 		dev_err(&spi->dev, "No CS for SPI(%d)\n", spi->chip_select);
 		return -ENODEV;
 	}
+
 #ifdef ENABLE_SENSORS_FPRINT_SECURE
 	if (sdd->port_id == CONFIG_SENSORS_FP_SPI_NUMBER)
 		return 0;
 #endif
 #ifdef CONFIG_ESE_SECURE
-	if (sdd->port_id == CONFIG_ESE_SECURE_SPI_PORT) {
-		dev_err(&spi->dev, "%s.....(%d)\n",__func__, sdd->port_id);
+	if (sdd->port_id == CONFIG_ESE_SECURE_SPI_PORT)
 		return 0;
-	}
 #endif
 
 	if (!spi_get_ctldata(spi)) {
@@ -1362,6 +1319,7 @@ static void s3c64xx_spi_hwinit(struct s3c64xx_spi_driver_data *sdd, int channel)
 	if (channel == CONFIG_ESE_SECURE_SPI_PORT)
 		return;
 #endif
+
 	sdd->cur_speed = 0;
 
 	writel(S3C64XX_SPI_SLAVE_SIG_INACT, sdd->regs + S3C64XX_SPI_SLAVE_SEL);
@@ -1423,11 +1381,6 @@ static struct s3c64xx_spi_info *s3c64xx_spi_parse_dt(struct device *dev)
 		sci->secure_mode = SECURE_MODE;
 	else
 		sci->secure_mode = NONSECURE_MODE;
-
-	if (of_get_property(dev->of_node, "check-fusing-bit", NULL))
-		sci->check_fusing_bit = CHECK_FUSING_BIT;
-	else
-		sci->check_fusing_bit = NON_CHECK_FUSING_BIT;
 
 	if (of_property_read_u32(dev->of_node, "samsung,spi-src-clk", &temp)) {
 		dev_warn(dev, "spi bus clock parent not specified, using clock at index 0 as parent\n");
@@ -1507,11 +1460,6 @@ static int s3c64xx_spi_probe(struct platform_device *pdev)
 	int ret, irq;
 	char clk_name[16];
 	int fifosize;
-	u32 __iomem	*fusing_bit_addr;
-
-	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(36));
-	if (ret)
-		return ret;
 
 	if (!sci && pdev->dev.of_node) {
 		sci = s3c64xx_spi_parse_dt(&pdev->dev);
@@ -1574,17 +1522,6 @@ static int s3c64xx_spi_probe(struct platform_device *pdev)
 	}
 
 	sdd->cur_bpw = 8;
-
-	if (sci->check_fusing_bit) {
-		fusing_bit_addr = ioremap(SD_INFO_PA, SZ_4);
-		if (!fusing_bit_addr) {
-			dev_err(&pdev->dev, "failed to ioremap fusing_bit address!!!!\n");
-			return -ENOMEM;
-		} else {
-			fusing_bit = __raw_readl(fusing_bit_addr);
-			dev_err(&pdev->dev, "fusing_bit value is 0x%x\n", fusing_bit);
-		}
-	}
 
 	if (sci->dma_mode == DMA_MODE) {
 		if (!sdd->pdev->dev.of_node) {
@@ -1711,20 +1648,6 @@ static int s3c64xx_spi_probe(struct platform_device *pdev)
 			sdd->port_id, sdd->port_conf->fifo_lvl_mask[sdd->port_id]);
 	}
 
-	/* For Oberthur ese, to change spi pins pinctrl  */
-	if (of_get_property(pdev->dev.of_node, "samsung,ese-oberthur", NULL)) {
-		dev_err(&pdev->dev, "p3 OT!!!\n");
-
-		spi_pinctrl = devm_pinctrl_get(&pdev->dev);
-		if (IS_ERR(spi_pinctrl))
-			dev_err(&pdev->dev, "could not get SPI clock pinctrl of p3\n");
-
-		spi_pin_state[ESE_POWER_OFF] =
-			pinctrl_lookup_state(spi_pinctrl, "ese-pwoff");
-		spi_pin_state[ESE_DEFAULT] =
-			pinctrl_lookup_state(spi_pinctrl, "default");
-	}
-
 	/* Setup Deufult Mode */
 	s3c64xx_spi_hwinit(sdd, sdd->port_id);
 
@@ -1742,12 +1665,12 @@ static int s3c64xx_spi_probe(struct platform_device *pdev)
 
 	if (1
 #ifdef ENABLE_SENSORS_FPRINT_SECURE
-			&& (sdd->port_id != CONFIG_SENSORS_FP_SPI_NUMBER)
+			&& sdd->port_id != CONFIG_SENSORS_FP_SPI_NUMBER
 #endif
 #ifdef CONFIG_ESE_SECURE
-			&& (sdd->port_id != CONFIG_ESE_SECURE_SPI_PORT)
+			&& sdd->port_id != CONFIG_ESE_SECURE_SPI_PORT
 #endif
-	   ) {
+	   ){
 		writel(S3C64XX_SPI_INT_RX_OVERRUN_EN | S3C64XX_SPI_INT_RX_UNDERRUN_EN |
 				S3C64XX_SPI_INT_TX_OVERRUN_EN | S3C64XX_SPI_INT_TX_UNDERRUN_EN,
 				sdd->regs + S3C64XX_SPI_INT_EN);

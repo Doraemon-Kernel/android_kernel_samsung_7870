@@ -41,7 +41,6 @@
 #include "fimc-is-regs.h"
 #include "fimc-is-err.h"
 #include "fimc-is-video.h"
-#include "fimc-is-param.h"
 
 const struct v4l2_file_operations fimc_is_3aa_video_fops;
 const struct v4l2_ioctl_ops fimc_is_3aa_video_ioctl_ops;
@@ -257,7 +256,18 @@ const struct v4l2_file_operations fimc_is_3aa_video_fops = {
 static int fimc_is_3aa_video_querycap(struct file *file, void *fh,
 	struct v4l2_capability *cap)
 {
-	/* Todo : add to query capability code */
+	struct fimc_is_video *video = video_drvdata(file);
+
+	FIMC_BUG(!cap);
+	FIMC_BUG(!video);
+
+	snprintf(cap->driver, sizeof(cap->driver), "%s", video->vd.name);
+	snprintf(cap->card, sizeof(cap->card), "%s", video->vd.name);
+	cap->capabilities |= V4L2_CAP_STREAMING
+			| V4L2_CAP_VIDEO_OUTPUT
+			| V4L2_CAP_VIDEO_OUTPUT_MPLANE;
+	cap->device_caps |= cap->capabilities;
+
 	return 0;
 }
 
@@ -513,6 +523,9 @@ static int fimc_is_3aa_video_s_ctrl(struct file *file, void *priv,
 	int ret = 0;
 	struct fimc_is_video_ctx *vctx = file->private_data;
 	struct fimc_is_device_ischain *device;
+	unsigned int value = 0;
+	unsigned int captureIntent = 0;
+	unsigned int captureCount = 0;
 
 	BUG_ON(!vctx);
 	BUG_ON(!GET_DEVICE(vctx));
@@ -523,6 +536,20 @@ static int fimc_is_3aa_video_s_ctrl(struct file *file, void *priv,
 	device = GET_DEVICE(vctx);
 
 	switch (ctrl->id) {
+	case V4L2_CID_IS_INTENT:
+		value = (unsigned int)ctrl->value;
+		captureIntent = (value >> 16) & 0x0000FFFF;
+		if (captureIntent == AA_CAPTRUE_INTENT_STILL_CAPTURE_OIS_DYNAMIC_SHOT) {
+			captureCount = value & 0x0000FFFF;
+		} else {
+			captureIntent = ctrl->value;
+			captureCount = 0;
+		}
+		device->group_3aa.intent_ctl.captureIntent = captureIntent;
+		device->group_3aa.intent_ctl.vendor_captureCount = captureCount;
+
+		minfo("[3AA:V] s_ctrl intent(%d) count(%d)\n", vctx, captureIntent, captureCount);
+		break;
 	case V4L2_CID_IS_FORCE_DONE:
 		set_bit(FIMC_IS_GROUP_REQUEST_FSTOP, &device->group_3aa.state);
 		break;
@@ -544,81 +571,6 @@ static int fimc_is_3aa_video_g_ctrl(struct file *file, void *priv,
 {
 	/* Todo: add to get control code */
 	return 0;
-}
-
-static int fimc_is_3aa_video_s_ext_ctrl(struct file *file, void *priv,
-	struct v4l2_ext_controls *ctrls)
-{
-	int ret = 0;
-	int i;
-	struct fimc_is_video_ctx *vctx = file->private_data;
-	struct fimc_is_device_ischain *device;
-	struct fimc_is_framemgr *framemgr;
-	struct fimc_is_queue *queue;
-	struct v4l2_ext_control *ext_ctrl;
-	struct v4l2_control ctrl;
-
-	BUG_ON(!vctx);
-	BUG_ON(!GET_DEVICE(vctx));
-	BUG_ON(!ctrls);
-
-	mdbgv_3aa("%s\n", vctx, __func__);
-
-	if (ctrls->ctrl_class != V4L2_CTRL_CLASS_CAMERA) {
-		merr("Invalid control class(%d)", vctx, ctrls->ctrl_class);
-		ret = -EINVAL;
-		goto p_err;
-	}
-
-	device = GET_DEVICE(vctx);
-	queue = GET_QUEUE(vctx);
-	framemgr = &queue->framemgr;
-
-	for (i = 0; i < ctrls->count; i++) {
-		ext_ctrl = (ctrls->controls + i);
-
-		switch (ext_ctrl->id) {
-#ifdef ENABLE_ULTRA_FAST_SHOT
-		case V4L2_CID_IS_FAST_CAPTURE_CONTROL:
-			{
-				struct fast_ctl_capture *fast_capture =
-					(struct fast_ctl_capture *)&device->is_region->fast_ctl.fast_capture;
-				ret = copy_from_user(fast_capture, ext_ctrl->ptr, sizeof(struct fast_ctl_capture));
-				if (ret) {
-					merr("copy_from_user is fail(%d)", vctx, ret);
-					goto p_err;
-				}
-
-				fast_capture->ready = 1;
-				device->fastctlmgr.fast_capture_count = 2;
-
-				vb2_ion_sync_for_device(
-					device->imemory.fw_cookie,
-					(ulong)fast_capture - device->imemory.kvaddr,
-					sizeof(struct fast_ctl_capture),
-					DMA_TO_DEVICE);
-
-				mvinfo("Fast capture control(Intent:%d, count:%d, exposureTime:%d)\n",
-					vctx, vctx->video, fast_capture->capture_intent, fast_capture->capture_count,
-					fast_capture->capture_exposureTime);
-			}
-			break;
-#endif
-		default:
-			ctrl.id = ext_ctrl->id;
-			ctrl.value = ext_ctrl->value;
-
-			ret = fimc_is_video_s_ctrl(file, vctx, &ctrl);
-			if (ret) {
-				merr("fimc_is_video_s_ctrl is fail(%d)", device, ret);
-				goto p_err;
-			}
-			break;
-		}
-	}
-
-p_err:
-	return ret;
 }
 
 static int fimc_is_3aa_video_g_ext_ctrl(struct file *file, void *priv,
@@ -656,7 +608,6 @@ const struct v4l2_ioctl_ops fimc_is_3aa_video_ioctl_ops = {
 
 	.vidioc_s_ctrl			= fimc_is_3aa_video_s_ctrl,
 	.vidioc_g_ctrl			= fimc_is_3aa_video_g_ctrl,
-	.vidioc_s_ext_ctrls		= fimc_is_3aa_video_s_ext_ctrl,
 	.vidioc_g_ext_ctrls		= fimc_is_3aa_video_g_ext_ctrl,
 
 	.vidioc_cropcap			= fimc_is_3aa_video_cropcap,
@@ -812,6 +763,7 @@ static void fimc_is_3aa_buffer_finish(struct vb2_buffer *vb)
 
 const struct vb2_ops fimc_is_3aa_qops = {
 	.queue_setup		= fimc_is_3aa_queue_setup,
+	.buf_init			= fimc_is_buffer_init,
 	.buf_prepare		= fimc_is_3aa_buffer_prepare,
 	.buf_queue		= fimc_is_3aa_buffer_queue,
 	.buf_finish		= fimc_is_3aa_buffer_finish,

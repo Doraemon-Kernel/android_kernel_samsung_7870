@@ -886,6 +886,7 @@ int kbasep_js_kctx_init(struct kbase_context * const kctx)
 	KBASE_DEBUG_ASSERT(js_kctx_info->init_status == JS_KCTX_INIT_NONE);
 
 	js_kctx_info->ctx.nr_jobs = 0;
+	atomic_set(&js_kctx_info->ctx.fault_count, 0);
 	js_kctx_info->ctx.is_scheduled = false;
 	js_kctx_info->ctx.is_dying = false;
 	memset(js_kctx_info->ctx.ctx_attr_ref_count, 0,
@@ -1394,14 +1395,10 @@ bool kbasep_js_add_job(struct kbase_context *kctx,
 	/* Context Attribute Refcounting */
 	kbasep_js_ctx_attr_ctx_retain_atom(kbdev, kctx, atom);
 
-	if (enqueue_required) {
-		if (kbase_js_ctx_pullable(kctx, atom->slot_nr, false))
-			timer_sync = kbase_js_ctx_list_add_pullable(kbdev, kctx,
+	if (enqueue_required)
+		timer_sync = kbase_js_ctx_list_add_pullable(kbdev, kctx,
 								atom->slot_nr);
-		else
-			timer_sync = kbase_js_ctx_list_add_unpullable(kbdev,
-					kctx, atom->slot_nr);
-	}
+
 	/* If this context is active and the atom is the first on its slot,
 	 * kick the job manager to attempt to fast-start the atom */
 	if (enqueue_required && kctx == kbdev->hwaccess.active_kctx)
@@ -1604,7 +1601,7 @@ static kbasep_js_release_result kbasep_js_run_jobs_after_ctx_and_atom_release(
 
 	if (js_devdata->nr_user_contexts_running != 0) {
 		bool retry_submit = false;
-		int retry_jobslot = 0;
+		int retry_jobslot;
 
 		if (katom_retained_state)
 			retry_submit = kbasep_js_get_atom_retry_submit_slot(
@@ -1729,7 +1726,6 @@ static kbasep_js_release_result kbasep_js_runpool_release_ctx_internal(
 		kbase_trace_mali_mmu_as_released(kctx->as_nr);
 #endif
 #if defined(CONFIG_MALI_MIPE_ENABLED)
-		kbase_tlstream_tl_nret_as_ctx(&kbdev->as[kctx->as_nr], kctx);
 		kbase_tlstream_tl_nret_gpu_ctx(kbdev, kctx);
 #endif
 
@@ -1855,6 +1851,40 @@ void kbasep_js_runpool_release_ctx_and_katom_retained_state(
 	mutex_lock(&js_kctx_info->ctx.jsctx_mutex);
 	mutex_lock(&js_devdata->runpool_mutex);
 
+#if 2 == MALI_INSTRUMENTATION_LEVEL
+	/* When any fault is detected, stop the context from submitting more
+	 * and add a refcount to prevent the context from being removed while
+	 * the job core dump is undergoing in the user space. Once the dump
+	 * finish, it will release the refcount of the context and allow it
+	 * to be removed. The test conditions are to ensure this mechanism
+	 * will be triggered only in the cases that cmarp_event_handler
+	 * handles.
+	 *
+	 * Currently, cmar event handler only handles job exceptions and
+	 * assert the cases where the event code of the atom does not
+	 * belong to the MMU exceptions or GPU exceptions class. In order to
+	 * perform dump on error in those cases, changes in cmar event handler
+	 * need to be made.
+	 */
+	if ((BASE_JD_EVENT_NOT_STARTED != event_code) &&
+		(BASE_JD_EVENT_STOPPED != event_code) &&
+		(BASE_JD_EVENT_ACTIVE != event_code) &&
+		(!((event_code >= BASE_JD_EVENT_RANGE_KERNEL_ONLY_START) &&
+		   (event_code <= BASE_JD_EVENT_RANGE_KERNEL_ONLY_END))) &&
+		((event_code & BASE_JD_SW_EVENT) ||
+		 event_code <= BASE_JD_EVENT_UNKNOWN) &&
+		(BASE_JD_EVENT_DONE != event_code)) {
+		unsigned long flags;
+
+		atomic_inc(&js_kctx_info->ctx.fault_count);
+		spin_lock_irqsave(&js_devdata->runpool_irq.lock, flags);
+		kbasep_js_clear_submit_allowed(js_devdata, kctx);
+		spin_unlock_irqrestore(&js_devdata->runpool_irq.lock, flags);
+
+		kbasep_js_runpool_retain_ctx(kbdev, kctx);
+	}
+#endif /* 2 == MALI_INSTRUMENTATION_LEVEL */
+
 	release_result = kbasep_js_runpool_release_ctx_internal(kbdev, kctx,
 			katom_retained_state);
 
@@ -1872,6 +1902,23 @@ void kbasep_js_runpool_release_ctx_and_katom_retained_state(
 	if (release_result & KBASEP_JS_RELEASE_RESULT_SCHED_ALL)
 		kbase_js_sched_all(kbdev);
 }
+
+void kbasep_js_dump_fault_term(struct kbase_device *kbdev,
+		struct kbase_context *kctx)
+{
+	unsigned long flags;
+	struct kbasep_js_device_data *js_devdata;
+
+	js_devdata = &kbdev->js_data;
+
+	spin_lock_irqsave(&js_devdata->runpool_irq.lock, flags);
+	kbasep_js_set_submit_allowed(js_devdata, kctx);
+	spin_unlock_irqrestore(&js_devdata->runpool_irq.lock, flags);
+
+	kbasep_js_runpool_release_ctx(kbdev, kctx);
+	atomic_dec(&kctx->jctx.sched_info.ctx.fault_count);
+}
+
 
 void kbasep_js_runpool_release_ctx(struct kbase_device *kbdev,
 		struct kbase_context *kctx)
@@ -2078,7 +2125,6 @@ static bool kbasep_js_schedule_ctx(struct kbase_device *kbdev,
 #endif
 #if defined(CONFIG_MALI_MIPE_ENABLED)
 	kbase_tlstream_tl_ret_gpu_ctx(kbdev, kctx);
-	kbase_tlstream_tl_ret_as_ctx(&kbdev->as[kctx->as_nr], kctx);
 #endif
 
 	/* Cause any future waiter-on-termination to wait until the context is
@@ -2471,9 +2517,6 @@ static void js_return_worker(struct work_struct *data)
 	bool timer_sync = false;
 	bool context_idle = false;
 	unsigned long flags;
-	base_jd_core_req core_req = katom->core_req;
-	u64 affinity = katom->affinity;
-	enum kbase_atom_coreref_state coreref_state = katom->coreref_state;
 
 	kbase_backend_complete_wq(kbdev, katom);
 
@@ -2540,9 +2583,6 @@ static void js_return_worker(struct work_struct *data)
 							&retained_state);
 
 	kbase_js_sched_all(kbdev);
-
-	kbase_backend_complete_wq_post_sched(kbdev, core_req, affinity,
-			coreref_state);
 }
 
 void kbase_js_unpull(struct kbase_context *kctx, struct kbase_jd_atom *katom)
@@ -2810,7 +2850,6 @@ void kbase_js_complete_atom(struct kbase_jd_atom *katom, ktime_t *end_timestamp)
 			katom,
 			&kbdev->gpu_props.props.raw_props.js_features[
 				katom->slot_nr]);
-	kbase_tlstream_tl_nret_atom_as(katom, &kbdev->as[kctx->as_nr]);
 #endif
 	/* Calculate the job's time used */
 	if (end_timestamp != NULL) {

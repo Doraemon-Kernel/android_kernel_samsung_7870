@@ -74,7 +74,7 @@ static long ratelimit_pages = 32;
 #ifdef CONFIG_LARGE_DIRTY_BUFFER
 int dirty_background_ratio = 5;
 #else
-int dirty_background_ratio = 0;
+int dirty_background_ratio;
 #endif
 
 /*
@@ -82,7 +82,7 @@ int dirty_background_ratio = 0;
  * dirty_background_ratio * the amount of dirtyable memory
  */
 #ifdef CONFIG_LARGE_DIRTY_BUFFER
-unsigned long dirty_background_bytes = 0;
+unsigned long dirty_background_bytes;
 #else
 unsigned long dirty_background_bytes = 25 * 1024 * 1024;
 #endif
@@ -97,9 +97,9 @@ int vm_highmem_is_dirtyable;
  * The generator of dirty data starts writeback at this percentage
  */
 #ifdef CONFIG_LARGE_DIRTY_BUFFER
-int vm_dirty_ratio = 25;
+int vm_dirty_ratio = 20;
 #else
-int vm_dirty_ratio = 0;
+int vm_dirty_ratio;
 #endif
 
 /*
@@ -107,7 +107,7 @@ int vm_dirty_ratio = 0;
  * vm_dirty_ratio * the amount of dirtyable memory
  */
 #ifdef CONFIG_LARGE_DIRTY_BUFFER
-unsigned long vm_dirty_bytes = 0;
+unsigned long vm_dirty_bytes;
 #else
 unsigned long vm_dirty_bytes = 50 * 1024 * 1024;
 #endif
@@ -524,11 +524,7 @@ EXPORT_SYMBOL(bdi_set_max_ratio);
 static unsigned long dirty_freerun_ceiling(unsigned long thresh,
 					   unsigned long bg_thresh)
 {
-#ifdef CONFIG_LARGE_DIRTY_BUFFER
-	return (3 * thresh + bg_thresh) / 4;
-#else
 	return (thresh + bg_thresh) / 2;
-#endif
 }
 
 static unsigned long hard_dirty_limit(unsigned long thresh)
@@ -1359,6 +1355,9 @@ static inline void bdi_dirty_limits(struct backing_dev_info *bdi,
  * If we're over `background_thresh' then the writeback threads are woken to
  * perform some writeout.
  */
+
+SIO_PATCH_VERSION(prevent_infinite_writeback, 1, 0, "");
+
 static void balance_dirty_pages(struct address_space *mapping,
 				unsigned long pages_dirtied)
 {
@@ -1866,13 +1865,6 @@ EXPORT_SYMBOL(tag_pages_for_writeback);
  * not miss some pages (e.g., because some other process has cleared TOWRITE
  * tag we set). The rule we follow is that TOWRITE tag can be cleared only
  * by the process clearing the DIRTY tag (and submitting the page for IO).
- *
- * To avoid deadlocks between range_cyclic writeback and callers that hold
- * pages in PageWriteback to aggregate IO until write_cache_pages() returns,
- * we do not loop back to the start of the file. Doing so causes a page
- * lock/page writeback access order inversion - we should only ever lock
- * multiple pages in ascending page->index order, and looping back to the start
- * of the file violates that rule and causes deadlocks.
  */
 int write_cache_pages(struct address_space *mapping,
 		      struct writeback_control *wbc, writepage_t writepage,
@@ -1886,6 +1878,7 @@ int write_cache_pages(struct address_space *mapping,
 	pgoff_t index;
 	pgoff_t end;		/* Inclusive */
 	pgoff_t done_index;
+	int cycled;
 	int range_whole = 0;
 	int tag;
 
@@ -1893,17 +1886,23 @@ int write_cache_pages(struct address_space *mapping,
 	if (wbc->range_cyclic) {
 		writeback_index = mapping->writeback_index; /* prev offset */
 		index = writeback_index;
+		if (index == 0)
+			cycled = 1;
+		else
+			cycled = 0;
 		end = -1;
 	} else {
 		index = wbc->range_start >> PAGE_CACHE_SHIFT;
 		end = wbc->range_end >> PAGE_CACHE_SHIFT;
 		if (wbc->range_start == 0 && wbc->range_end == LLONG_MAX)
 			range_whole = 1;
+		cycled = 1; /* ignore range_cyclic tests */
 	}
 	if (wbc->sync_mode == WB_SYNC_ALL || wbc->tagged_writepages)
 		tag = PAGECACHE_TAG_TOWRITE;
 	else
 		tag = PAGECACHE_TAG_DIRTY;
+retry:
 	if (wbc->sync_mode == WB_SYNC_ALL || wbc->tagged_writepages)
 		tag_pages_for_writeback(mapping, index, end);
 	done_index = index;
@@ -1989,14 +1988,17 @@ continue_unlock:
 		pagevec_release(&pvec);
 		cond_resched();
 	}
-
-	/*
-	 * If we hit the last page and there is more work to be done: wrap
-	 * back the index back to the start of the file for the next
-	 * time we are called.
-	 */
-	if (wbc->range_cyclic && !done)
-		done_index = 0;
+	if (!cycled && !done) {
+		/*
+		 * range_cyclic:
+		 * We hit the last page and there is more work to be done: wrap
+		 * back to the start of the file
+		 */
+		cycled = 1;
+		index = 0;
+		end = writeback_index - 1;
+		goto retry;
+	}
 	if (wbc->range_cyclic || (range_whole && wbc->nr_to_write > 0))
 		mapping->writeback_index = done_index;
 

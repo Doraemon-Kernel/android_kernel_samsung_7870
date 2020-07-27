@@ -135,6 +135,7 @@ void __cpuidle_profile_start(int cpu, int state, int substate)
 				info = &lpm_info;
 				enter_idle_state(info, LPM_SICD, now);
 				break;
+#if !defined(CONFIG_SOC_EXYNOS7870)
 			case C2_SICD_CPD:
 				info = &cpd_info[to_cluster(cpu)];
 				enter_idle_state(info, 0, now);
@@ -142,10 +143,7 @@ void __cpuidle_profile_start(int cpu, int state, int substate)
 				info = &lpm_info;
 				enter_idle_state(info, LPM_SICD_CPD, now);
 				break;
-			case C2_SICD_AUD:
-				info = &lpm_info;
-				enter_idle_state(info, LPM_SICD_AUD, now);
-				break;
+#endif
 			}
 		} else if (state == PROFILE_LPM)
 			enter_idle_state(&lpm_info, substate, now);
@@ -244,6 +242,25 @@ void cpuidle_profile_collect_idle_ip(int mode, int index,
 static ktime_t profile_start_time;
 static ktime_t profile_finish_time;
 static s64 profile_time;
+
+static char * sys_powerdown_str[NUM_SYS_POWERDOWN] = {
+	"SICD",
+#if !defined(CONFIG_SOC_EXYNOS7870)
+	"SICD_CPD",
+#endif
+	"AFTR",
+	"STOP",
+#if !defined(CONFIG_SOC_EXYNOS7870)
+        "DSTOP",
+#endif
+	"LPD",
+#if !defined(CONFIG_SOC_EXYNOS7870)
+	"ALPA",
+#endif
+	"SLEEP"
+};
+
+#define get_sys_powerdown_str(mode)	sys_powerdown_str[mode]
 
 static int calculate_percent(s64 residency)
 {
@@ -515,7 +532,7 @@ static ssize_t show_sysfs_result(struct kobject *kobj,
 	for_each_cluster(i) {
 		ret += snprintf(buf + ret, PAGE_SIZE - ret,
 			"cl_%s   %5u   %5u   %10lluus    %3u%%\n",
-			i == to_cluster(0) ? "boot   " : "nonboot",
+			i == to_cluster(cpu) ? "boot   " : "nonboot",
 			cpd_info[i].usage->entry_count,
 			cpd_info[i].usage->early_wakeup_count,
 			cpd_info[i].usage->time,

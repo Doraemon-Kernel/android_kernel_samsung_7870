@@ -36,8 +36,7 @@ static u64 demand_get_core_mask(struct kbase_device *kbdev)
 
 static bool demand_get_core_active(struct kbase_device *kbdev)
 {
-	if (0 == kbdev->pm.active_count && !(kbdev->shader_needed_bitmap |
-			kbdev->shader_inuse_bitmap))
+	if (0 == kbdev->pm.active_count)
 		return false;
 
 	return true;

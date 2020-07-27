@@ -70,12 +70,12 @@ struct samsung_clk_reg_dump *samsung_clk_alloc_reg_dump(
 struct samsung_clk_provider *__init samsung_clk_init(struct device_node *np,
 			void __iomem *base, unsigned long nr_clks)
 {
-	struct samsung_clk_provider *ctx = NULL;
+	struct samsung_clk_provider *ctx;
 	struct clk **clk_table;
 	int i;
 
 	if (!np)
-		return ctx;
+		return NULL;
 
 	ctx = kzalloc(sizeof(struct samsung_clk_provider), GFP_KERNEL);
 	if (!ctx)
@@ -778,7 +778,7 @@ void samsung_register_comp_pll(struct samsung_clk_provider *ctx,
 }
 
 /* operation functions for mux clocks */
-static u8 samsung_mux_get_parent(struct clk_hw *hw)
+static int samsung_mux_get_parent(struct clk_hw *hw)
 {
 	struct samsung_composite_mux *mux = to_comp_mux(hw);
 	u32 val;

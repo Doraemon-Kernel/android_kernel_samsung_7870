@@ -152,13 +152,6 @@ enum {
 #define UNIP_DME_PEER_GETSET_RDATA		0x128
 #define UNIP_DME_PEER_GETSET_CONTROL		0x12C
 #define UNIP_DME_PEER_GETSET_RESULT		0x130
-#define UNIP_DME_DIRECT_GETSET_BASE		0x134
-#define UNIP_DME_DIRECT_GETSET_ERR_ADDR		0x138
-#define UNIP_DME_DIRECT_GETSET_ERR_CODE		0x13c
-#define UNIP_DME_INTR_ERROR_CODE		0x140
-#define UNIP_DME_DEEPSTALL_ENTER_REQ		0x144
-#define UNIP_DME_DISCARD_CPORT_ID		0x148
-#define UNIP_DBG_DME_CTRL_STATE			0x14C
 #define UNIP_DBG_FORCE_DME_CTRL_STATE		0x150
 #define UNIP_DBG_AUTO_DME_LINKSTARTUP		0x158
 #define UNIP_DBG_PA_CTRLSTATE			0x15C
@@ -174,17 +167,6 @@ enum {
 #define UFSPRSTAT	0x008
 #define UFSPRSECURITY	0x010
  #define NSSMU		BIT(14)
-#define DESCTYPE(type)		((type & 0x3) << 19)
-#define ARPROTPRDT(type)	((type & 0x3) << 16)
-#define ARPROTDESC(type)	((type & 0x3) << 9)
-#define ARPROTDATA(type)	((type & 0x3) << 6)
-#define AWPROTDESC(type)	((type & 0x3) << 3)
-#define AWPROTDATA(type)	((type & 0x3))
-#define CFG_AXPROT(type)	(ARPROTPRDT(type) | ARPROTDESC(type) | \
-				ARPROTDATA(type) | AWPROTDESC(type) | \
-				AWPROTDATA(type))
-#define SMU_ABORT(type)		((type & 0x2) >> 1)
-
 #define UFSPVERSION	0x01C
 #define UFSPRENCKEY0	0x020
 #define UFSPRENCKEY1	0x024
@@ -410,10 +392,6 @@ struct exynos_ufs_phy {
 	struct exynos_ufs_soc *soc;
 };
 
-struct exynos_ufs_sys {
-	void __iomem *reg_sys;
-};
-
 struct uic_pwr_mode {
 	u8 lane;
 	u8 gear;
@@ -486,13 +464,11 @@ struct exynos_ufs {
 	u32 pclk_avail_min;
 	u32 pclk_avail_max;
 	u32 mclk_rate;
-	u32 pwm_freq;
 
 	int avail_ln_rx;
 	int avail_ln_tx;
 
 	struct exynos_ufs_phy phy;
-	struct exynos_ufs_sys sys;
 	struct notifier_block lpa_nb;
 	struct uic_pwr_mode req_pmd_parm;
 	struct uic_pwr_mode act_pmd_parm;
@@ -501,7 +477,6 @@ struct exynos_ufs {
 	u32 rx_adv_fine_gran_step;
 	u32 rx_min_actv_time_cap;
 	u32 rx_hibern8_time_cap;
-	u32 tx_hibern8_time_cap;
 	u32 rx_adv_min_actv_time_cap;
 	u32 rx_adv_hibern8_time_cap;
 
@@ -514,7 +489,6 @@ struct exynos_ufs {
 	u32 opts;
 #define EXYNOS_UFS_OPTS_SKIP_CONNECTION_ESTAB	BIT(0)
 #define EXYNOS_UFS_OPTS_USE_SEPERATED_PCLK	BIT(1)	/* for CAL */
-#define EXYNOS_UFS_OPTS_SET_LINE_INIT_PREP_LEN	BIT(2)
 
 	/* Performance */
 	struct exynos_ufs_tp_mon_table *tp_mon_tbl;

@@ -61,11 +61,17 @@ obj-$(CONFIG_FB_I810)           += video/fbdev/i810/
 obj-$(CONFIG_FB_INTEL)          += video/fbdev/intelfb/
 
 obj-$(CONFIG_VBUS_NOTIFIER)	+= staging/samsung/sec_notifier/
-obj-$(CONFIG_DEV_RIL_BRIDGE)	+= misc/dev_ril_bridge/
-obj-$(CONFIG_USE_MUIC)      += muic/
+# added by khoonk on 2018.01.02
+ifndef CONFIG_IFPMIC_SUPPORT
+obj-$(CONFIG_USE_MUIC)		+= muic/
+obj-y				+= ccic/
+else
+obj-y				+= ifpmic/
+endif
 
 obj-$(CONFIG_PARPORT)		+= parport/
-obj-y				+= base/ block/ misc/ mfd/ nfc/
+obj-y				+= base/ block/ misc/ mfd/
+obj-$(CONFIG_SAMSUNG_NFC)		+= nfc/
 obj-$(CONFIG_DMA_SHARED_BUFFER) += dma-buf/
 obj-$(CONFIG_NUBUS)		+= nubus/
 obj-y				+= macintosh/
@@ -148,7 +154,6 @@ obj-y				+= clk/
 
 obj-$(CONFIG_MAILBOX)		+= mailbox/
 obj-$(CONFIG_HWSPINLOCK)	+= hwspinlock/
-obj-$(CONFIG_GPS_BCMxxxxx)	+= gps/
 obj-$(CONFIG_IOMMU_SUPPORT)	+= iommu/
 obj-$(CONFIG_REMOTEPROC)	+= remoteproc/
 obj-$(CONFIG_RPMSG)		+= rpmsg/
@@ -158,14 +163,20 @@ obj-$(CONFIG_VIRT_DRIVERS)	+= virt/
 obj-$(CONFIG_HYPERV)		+= hv/
 
 obj-$(CONFIG_PM_DEVFREQ)	+= devfreq/
+# added by khoonk on 2018.01.06
+ifndef CONFIG_IFPMIC_SUPPORT
 ifeq ($(CONFIG_BATTERY_SAMSUNG_V2), y)
   obj-$(CONFIG_BATTERY_SAMSUNG)   += battery_v2/
 else
   obj-$(CONFIG_BATTERY_SAMSUNG)   += battery/
 endif
+endif
 obj-$(CONFIG_EXTCON)		+= extcon/
 obj-$(CONFIG_MEMORY)		+= memory/
 obj-$(CONFIG_IIO)		+= iio/
+
+#Sensor
+obj-$(CONFIG_SENSORS)		+= sensors/
 obj-$(CONFIG_VME_BUS)		+= vme/
 obj-$(CONFIG_IPACK_BUS)		+= ipack/
 obj-$(CONFIG_NTB)		+= ntb/
@@ -175,28 +186,23 @@ obj-$(CONFIG_MCB)		+= mcb/
 obj-$(CONFIG_RAS)		+= ras/
 obj-$(CONFIG_THUNDERBOLT)	+= thunderbolt/
 obj-$(CONFIG_EXYNOS_BTS)	+= bts/
-
+obj-$(CONFIG_MARVELL_DRIVERS)	+= marvell/
 # Mobicore driver
-obj-$(CONFIG_TRUSTONIC_TEE) += gud/
+obj-$(CONFIG_TRUSTONIC_TEE)	+= gud/
 
-# DS5 streamline
-obj-$(CONFIG_GATOR)		+= gator/
+# FIVE TEE driver
+obj-$(CONFIG_FIVE_TEE_DRIVER)	+= five/
+obj-$(CONFIG_ICD)		+= security/samsung/icdrv/
+
+#haptic driver
+obj-$(CONFIG_ANDROID_TIMED_OUTPUT)	+= motor/
+
+#Fingerprint
+obj-$(CONFIG_SENSORS_FINGERPRINT)       += fingerprint/
 
 #Sensorhub
 obj-$(CONFIG_SENSORS_SSP)	+= sensorhub/
 
-# HRM sensor driver
-obj-$(CONFIG_SENSORS_MAX86900)	+= optics/
-obj-$(CONFIG_SENSORS_MAX86902)	+= optics/
-obj-$(CONFIG_SENSORS_ADPD142)	+= optics/
-obj-$(CONFIG_SENSORS_ADPD143)	+= optics/
-obj-$(CONFIG_SENSORS_HRMSENSOR)	+= optics/
-
-# FINGERPRINT
-obj-$(CONFIG_SENSORS_FINGERPRINT)	+= fingerprint/
-
-# Motor
-obj-y                           += motor/
-
-# CCIC
-obj-y	+= ccic/
+#GPS
+obj-$(CONFIG_GPS_BCMxxxxx)	+= gps/
+obj-$(CONFIG_GPS_BCM4752)	+= gps/

@@ -88,7 +88,6 @@ void panic(const char *fmt, ...)
 	 * after the panic_lock is acquired) from invoking panic again.
 	 */
 	local_irq_disable();
-	preempt_disable_notrace();
 
 	/*
 	 * It's possible to come here directly from a panic-assertion and
@@ -100,10 +99,8 @@ void panic(const char *fmt, ...)
 	 * stop themself or will wait until they are stopped by the 1st CPU
 	 * with smp_send_stop().
 	 */
-	if (!spin_trylock(&panic_lock)) {
-		exynos_ss_hook_hardlockup_exit();
+	if (!spin_trylock(&panic_lock))
 		panic_smp_self_stop();
-	}
 
 	console_verbose();
 	bust_spinlocks(1);
@@ -118,14 +115,6 @@ void panic(const char *fmt, ...)
 
 	pr_auto(ASL5, "Kernel panic - not syncing: %s\n", buf);
 
-#ifdef CONFIG_RELOCATABLE_KERNEL 
-	{	
-		extern u64 *__boot_kernel_offset; 
-		u64 *kernel_addr = (u64 *) &__boot_kernel_offset;
-		pr_emerg("Kernel loaded at: 0x%llx, offset from compile-time address %llx\n", kernel_addr[1]+kernel_addr[0], kernel_addr[1]- kernel_addr[2] );
-	}
-#endif 
-
 	exynos_ss_prepare_panic();
 	exynos_ss_dump_panic(buf, (size_t)strnlen(buf, sizeof(buf)));
 #ifdef CONFIG_DEBUG_BUGVERBOSE
@@ -135,7 +124,6 @@ void panic(const char *fmt, ...)
 	if (!test_taint(TAINT_DIE) && oops_in_progress <= 1)
 		dump_stack();
 #endif
-
 	sysrq_sched_debug_show();
 	/*
 	 * If we have crashed and we have a crash kernel loaded let it handle
@@ -462,10 +450,11 @@ static void warn_slowpath_common(const char *file, int line, void *caller,
 				 unsigned taint, struct slowpath_args *args)
 {
 	disable_trace_on_warning();
-
-	pr_warn("------------[ cut here ]------------\n");
-	pr_warn("WARNING: CPU: %d PID: %d at %s:%d %pS()\n",
-		raw_smp_processor_id(), current->pid, file, line, caller);
+#if defined(CONFIG_SEC_BAT_AUT) && !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
+	printk(BAT_AUTOMAION_TEST_PREFIX_WARN "KERNEL WARN START\n");
+#endif
+	printk(KERN_WARNING "------------[ cut here ]------------\n");
+	printk(KERN_WARNING "WARNING: at %s:%d %pS()\n", file, line, caller);
 
 	if (args)
 		vprintk(args->fmt, args->args);
@@ -475,6 +464,9 @@ static void warn_slowpath_common(const char *file, int line, void *caller,
 	print_oops_end_marker();
 	/* Just a warning, don't kill lockdep. */
 	add_taint(taint, LOCKDEP_STILL_OK);
+#if defined(CONFIG_SEC_BAT_AUT) && !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
+	printk(BAT_AUTOMAION_TEST_PREFIX_WARN "KERNEL WARN END\n");
+#endif
 }
 
 void warn_slowpath_fmt(const char *file, int line, const char *fmt, ...)

@@ -26,16 +26,6 @@ config IRQ_WORK
 config BUILDTIME_EXTABLE_SORT
 	bool
 
-config THREAD_INFO_IN_TASK
-	bool
-	help
-	  Select this to move thread_info off the stack into task_struct.  To
-	  make this work, an arch will need to remove all thread_info fields
-	  except flags and fix any runtime bugs.
-
-	  One subtle change that will be needed is to use try_get_task_stack()
-	  and put_task_stack() in save_thread_stack_tsk() and get_wchan().
-
 menu "General setup"
 
 config BROKEN
@@ -295,7 +285,6 @@ config FHANDLE
 
 config USELIB
 	bool "uselib syscall"
-	default y
 	help
 	  This option enables the uselib syscall, a system call used in the
 	  dynamic linker from libc5 and earlier.  glibc does not use this
@@ -818,6 +807,7 @@ config BUILD_BIN2C
 
 config IKCONFIG
 	tristate "Kernel .config support"
+	default y if ANDROID_MAJOR_VERSION = "o" || ANDROID_MAJOR_VERSION = "p" || ANDROID_MAJOR_VERSION = "q"
 	select BUILD_BIN2C
 	---help---
 	  This option enables the complete Linux kernel ".config" file
@@ -832,6 +822,7 @@ config IKCONFIG
 config IKCONFIG_PROC
 	bool "Enable access to .config through /proc/config.gz"
 	depends on IKCONFIG && PROC_FS
+	default y
 	---help---
 	  This option enables access to the kernel configuration file
 	  through /proc/config.gz.
@@ -1095,7 +1086,11 @@ config MEMCG_KMEM
 	  are plenty of kmem available for reclaim. That makes this option
 	  unusable in real life so DO NOT SELECT IT unless for development
 	  purposes.
-
+config MEMCG_HIGHER_SWAPPINESS
+	int "Allow swappiness to be increased up to 200"
+	default 0
+	help
+	  Increase swappiness for all the memcg
 config CGROUP_HUGETLB
 	bool "HugeTLB Resource Controller for Control Groups"
 	depends on RESOURCE_COUNTERS && HUGETLB_PAGE
@@ -1727,21 +1722,6 @@ config SLUB_DEBUG
 	  SLUB sysfs support. /sys/slab will not exist and there will be
 	  no support for cache validation etc.
 
-config SLUB_DEBUG_LIGHT
-	default n
-	bool "Enable SLUB debugging support (light-weight version)" if !SLUB_DEBUG
-	depends on SLUB
-	help
-	  SLUB DEBUG light-weight version for tracking caller addr of kmalloc/kfree
-	  only in kmalloc-128.
-
-config PTRACK_DEBUG
-	default n
-	bool "Enable Ptrack debugging support"
-	help
-	  PTRACK tracks page allocation.
-	  This option affects on booting time & running time.
-
 config COMPAT_BRK
 	bool "Disable heap randomization"
 	default y
@@ -1834,12 +1814,6 @@ config SYSTEM_TRUSTED_KEYRING
 
 	  Keys in this keyring are used by module signature checking.
 
-config DEFERRED_INITCALLS
-	bool "Deferred initcalls support"
-	default n
-	help
-	  Say 'y' here to include support for deferred initcalls
-
 config PROFILING
 	bool "Profiling support"
 	help
@@ -1878,7 +1852,6 @@ config BASE_SMALL
 menuconfig MODULES
 	bool "Enable loadable module support"
 	option modules
-	select TIMA_LKMAUTH
 	help
 	  Kernel modules are small pieces of compiled code which can
 	  be inserted in the running kernel, rather than being

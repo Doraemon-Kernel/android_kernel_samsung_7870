@@ -15,7 +15,7 @@
 
 #define NUM_PINS(x)			(x + 2)
 
-#define MAX_TUNING_RETRIES	6
+#define MAX_TUNING_RETRIES	7
 #define MAX_TUNING_LOOP		(MAX_TUNING_RETRIES * 8 * 2)
 
 
@@ -49,8 +49,7 @@ struct dw_mci_exynos_priv_data {
 	struct pinctrl_state	*clk_drive_base;
 	struct pinctrl_state	*clk_drive_str[6];
 	int			cd_gpio;
-	int			vmmc_gpio;
-	u32 			sec_sd_slot_type;
+	int			sec_sd_slot_type;
 #define SEC_NO_DET_SD_SLOT	0 /* No detect GPIO SD slot case */
 #define SEC_HOTPLUG_SD_SLOT	1 /* detect GPIO SD slot without Tray */
 #define SEC_HYBRID_SD_SLOT	2 /* detect GPIO SD slot with Tray */
@@ -58,7 +57,9 @@ struct dw_mci_exynos_priv_data {
 	u32			ctrl_flag;
 	u32			ctrl_windows;
 	u32			ignore_phase;
+	u32			selclk_drv;
 	u32			voltage_int_extra;
+	int			xbootldo_gpio;		
 
 #define DW_MMC_EXYNOS_USE_FINE_TUNING		BIT(0)
 #define DW_MMC_EXYNOS_BYPASS_FOR_ALL_PASS	BIT(1)
@@ -234,7 +235,7 @@ extern void dw_mci_reg_dump(struct dw_mci *host);
 #define DW_MMC_BYPASS_SECTOR_END		0xFFFFFFFF
 #define DW_MMC_ENCRYPTION_SECTOR_BEGIN		0
 #define DW_MMC_ENCRYPTION_SECTOR_END		0x7FFFFFFF
-#elif defined(CONFIG_SOC_EXYNOS7420) || defined(CONFIG_SOC_EXYNOS8890)
+#elif defined(CONFIG_SOC_EXYNOS7420) || defined(CONFIG_SOC_EXYNOS8890) || defined(CONFIG_SOC_EXYNOS7870)
 #define DW_MMC_BYPASS_SECTOR_BEGIN		0x0
 #define DW_MMC_ENCRYPTION_SECTOR_BEGIN		0x0000FFFF
 #define DW_MMC_FILE_ENCRYPTION_SECTOR_BEGIN	0xFFFF0000

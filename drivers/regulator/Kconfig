@@ -422,15 +422,6 @@ config REGULATOR_MAX77838
 	  via I2C bus. The provided regulator is suitable for
 	  Exynos-7 chips to control DISP & TSP voltages.
 
-config REGULATOR_MAX77854
-	tristate "Maxim 77854 regulator"
-	depends on MFD_MAX77854
-	help
-	  This driver controls a Maxim 77843 regulator
-	  via I2C bus. The provided regulator is suitable for
-	  Exynos-5 chips to control VCC_CORE and
-	  VCC_USIM voltages.
-
 config REGULATOR_MC13XXX_CORE
 	tristate
 
@@ -583,6 +574,14 @@ config REGULATOR_S2MPU03
 	help
 	 This driver supports a Samsung S2MPU03 voltage output regulator
 	 via I2C bus. S2MPU03 is comprised of high efficient Buck converters
+	 including Dual-Phase Buck converter, Buck-Boost converter, various LDOs.
+
+config REGULATOR_S2MPU05
+	tristate "Samsung S2MPU05 voltage regulator"
+	depends on MFD_SEC_CORE
+	help
+	 This driver supports a Samsung S2MPU05 voltage output regulator
+	 via I2C bus. S2MPU05 is comprised of high efficient Buck converters
 	 including Dual-Phase Buck converter, Buck-Boost converter, various LDOs.
 
 config REGULATOR_S2MPB01
@@ -793,6 +792,15 @@ config REGULATOR_WM8994
 	help
 	  This driver provides support for the voltage regulators on the
 	  WM8994 CODEC.
+
+config REGULATOR_SM5703
+	tristate "SM5703 regulator"
+	depends on MFD_SM5703
+	help
+	  This driver controls a SM5703 regulator
+	  via I2C bus. The provided regulator is suitable for
+	  Exynos-5 chips to control VCC_CORE and
+	  VCC_USIM voltages.
 
 endif
 

@@ -91,6 +91,10 @@ int fimc_is_ois_self_test_impl(struct fimc_is_core *core)
 		val = -EIO;
 	}
 
+	if (specific->use_ois_hsi2c) {
+	    fimc_is_ois_i2c_config(core->client1, false);
+	}
+
 	/* Gyro selfTest result */
 	fimc_is_ois_i2c_read(core->client1, 0x00EC, &reg_val);
 	x = reg_val;
@@ -101,10 +105,6 @@ int fimc_is_ois_self_test_impl(struct fimc_is_core *core)
 	y = reg_val;
 	fimc_is_ois_i2c_read(core->client1, 0x00EF, &reg_val);
 	y_gyro_log = (reg_val << 8) | y;
-
-	if (specific->use_ois_hsi2c) {
-	    fimc_is_ois_i2c_config(core->client1, false);
-	}
 
 	info("%s(GSTLOG0=%d, GSTLOG1=%d)\n", __FUNCTION__, x_gyro_log, y_gyro_log);
 
@@ -325,202 +325,6 @@ bool fimc_is_ois_diff_test_impl(struct fimc_is_core *core, int *x_diff, int *y_d
 	}
 }
 
-bool fimc_is_ois_sine_wavecheck(struct fimc_is_core *core,
-		              int threshold, int *sinx, int *siny, int *result)
-{
-	u8 buf = 0, val = 0;
-	int ret = 0, retries = 10;
-	int sinx_count = 0, siny_count = 0;
-	u8 u8_sinx_count[2] = {0, }, u8_siny_count[2] = {0, };
-	u8 u8_sinx[2] = {0, }, u8_siny[2] = {0, };
-	struct fimc_is_vender_specific *specific = core->vender.private_data;
-
-	if (specific->use_ois_hsi2c) {
-	    fimc_is_ois_i2c_config(core->client1, true);
-	}
-
-	ret = fimc_is_ois_i2c_write(core->client1, 0x0052, (u8)threshold); /* error threshold level. */
-	ret |= fimc_is_ois_i2c_write(core->client1, 0x0053, 0x0); /* count value for error judgement level. */
-	ret |= fimc_is_ois_i2c_write(core->client1, 0x0054, 0x05); /* frequency level for measurement. */
-	ret |= fimc_is_ois_i2c_write(core->client1, 0x0055, 0x3A); /* amplitude level for measurement. */
-	ret |= fimc_is_ois_i2c_write(core->client1, 0x0057, 0x02); /* vyvle level for measurement. */
-	ret |= fimc_is_ois_i2c_write(core->client1, 0x0050, 0x01); /* start sine wave check operation */
-	if (ret) {
-		err("i2c write fail\n");
-		goto exit;
-	}
-
-	retries = 10;
-	do {
-		ret = fimc_is_ois_i2c_read(core->client1, 0x0050, &val);
-		if (ret) {
-			err("i2c read fail\n");
-			goto exit;
-		}
-
-		msleep(100);
-
-		if (--retries < 0) {
-			err("sine wave operation fail.\n");
-			break;
-		}
-	} while (val);
-
-	ret = fimc_is_ois_i2c_read(core->client1, 0x0051, &buf);
-	if (ret) {
-		err("i2c read fail\n");
-		goto exit;
-	}
-
-	*result = (int)buf;
-
-	ret = fimc_is_ois_i2c_read_multi(core->client1, 0x00E4, u8_sinx_count, 2);
-	sinx_count = (u8_sinx_count[1] << 8) | u8_sinx_count[0];
-	if (sinx_count > 0x7FFF) {
-		sinx_count = -((sinx_count ^ 0xFFFF) + 1);
-	}
-	ret |= fimc_is_ois_i2c_read_multi(core->client1, 0x00E6, u8_siny_count, 2);
-	siny_count = (u8_siny_count[1] << 8) | u8_siny_count[0];
-	if (siny_count > 0x7FFF) {
-		siny_count = -((siny_count ^ 0xFFFF) + 1);
-	}
-	ret |= fimc_is_ois_i2c_read_multi(core->client1, 0x00E8, u8_sinx, 2);
-	*sinx = (u8_sinx[1] << 8) | u8_sinx[0];
-	if (*sinx > 0x7FFF) {
-		*sinx = -((*sinx ^ 0xFFFF) + 1);
-	}
-	ret |= fimc_is_ois_i2c_read_multi(core->client1, 0x00EA, u8_siny, 2);
-	*siny = (u8_siny[1] << 8) | u8_siny[0];
-	if (*siny > 0x7FFF) {
-		*siny = -((*siny ^ 0xFFFF) + 1);
-	}
-	if (ret) {
-		err("i2c read fail\n");
-		goto exit;
-	}
-
-	if (specific->use_ois_hsi2c) {
-		fimc_is_ois_i2c_config(core->client1, false);
-	}
-
-	info("threshold = %d, sinx = %d, siny = %d, sinx_count = %d, syny_count = %d\n",
-		threshold, *sinx, *siny, sinx_count, siny_count);
-
-	if (buf == 0x0) {
-		return true;
-	} else {
-		return false;
-	}
-
-exit:
-	if (specific->use_ois_hsi2c) {
-		fimc_is_ois_i2c_config(core->client1, false);
-	}
-
-	*sinx = -1;
-	*siny = -1;
-
-	return false;
-}
-
-bool fimc_is_ois_auto_test_impl(struct fimc_is_core *core,
-		            int threshold, bool *x_result, bool *y_result, int *sin_x, int *sin_y)
-{
-	int result = 0;
-	bool value = false;
-
-#ifdef CONFIG_AF_HOST_CONTROL
-	fimc_is_af_move_lens(core);
-	msleep(100);
-#endif
-
-	value = fimc_is_ois_sine_wavecheck(core, threshold, sin_x, sin_y, &result);
-	if (*sin_x == -1 && *sin_y == -1) {
-		err("OIS device is not prepared.");
-		*x_result = false;
-		*y_result = false;
-		*sin_x = 0;
-		*sin_y = 0;
-
-		return false;
-	}
-
-	if (value == true) {
-		*x_result = true;
-		*y_result = true;
-
-		return true;
-	} else {
-		if ((result & 0x03) == 0x01) {
-			*x_result = false;
-			*y_result = true;
-		} else if ((result & 0x03) == 0x02) {
-			*x_result = true;
-			*y_result = false;
-		} else {
-			*x_result = false;
-			*y_result = false;
-		}
-
-		return false;
-	}
-}
-
-int fimc_is_ois_read_manual_cal(struct fimc_is_core *core)
-{
-	int ret = 0;
-	u8 version[20] = {0, };
-	u8 read_ver[3] = {0, };
-	struct fimc_is_vender_specific *specific = core->vender.private_data;
-
-	if (specific->use_ois_hsi2c) {
-	    fimc_is_ois_i2c_config(core->client1, true);
-	}
-
-	version[0] = 0x21;
-	version[1] = 0x43;
-	version[2] = 0x65;
-	version[3] = 0x87;
-	version[4] = 0x23;
-	version[5] = 0x01;
-	version[6] = 0xEF;
-	version[7] = 0xCD;
-	version[8] = 0x00;
-	version[9] = 0x74;
-	version[10] = 0x00;
-	version[11] = 0x00;
-	version[12] = 0x04;
-	version[13] = 0x00;
-	version[14] = 0x00;
-	version[15] = 0x00;
-	version[16] = 0x01;
-	version[17] = 0x00;
-	version[18] = 0x00;
-	version[19] = 0x00;
-
-	ret = fimc_is_ois_i2c_write_multi(core->client1, 0x0100, version, 0x16);
-	msleep(5);
-	ret |= fimc_is_ois_i2c_read(core->client1, 0x0118, &read_ver[0]);
-	ret |= fimc_is_ois_i2c_read(core->client1, 0x0119, &read_ver[1]);
-	ret |= fimc_is_ois_i2c_read(core->client1, 0x011A, &read_ver[2]);
-	if (ret) {
-		err("i2c cmd fail\n");
-		ret = -EINVAL;
-		goto exit;
-	}
-
-	ois_minfo.header_ver[FW_CORE_VERSION] = read_ver[0];
-	ois_minfo.header_ver[FW_GYRO_SENSOR] = read_ver[1];
-	ois_minfo.header_ver[FW_DRIVER_IC] = read_ver[2];
-
-exit:
-	if (specific->use_ois_hsi2c) {
-	    fimc_is_ois_i2c_config(core->client1, false);
-	}
-
-	return ret;
-}
-
 bool fimc_is_ois_fw_version(struct fimc_is_core *core)
 {
 	int ret = 0;
@@ -607,11 +411,10 @@ bool fimc_is_ois_read_userdata(struct fimc_is_core *core)
 {
 	u8 SendData[2];
 	u8 Read_data[73] = {0, };
+	u8 Shift_data[57] = {0, };
 	int retries = 0;
 	int ret = 0;
 	u8 val = 0;
-	u8 ois_shift_info = 0;
-	int i = 0;
 
 	struct i2c_client *client = core->client1;
 	struct fimc_is_vender_specific *specific = core->vender.private_data;
@@ -658,10 +461,6 @@ bool fimc_is_ois_read_userdata(struct fimc_is_core *core)
 	fimc_is_ois_i2c_read_multi(client, 0x0100, Read_data, USER_FW_SIZE);
 	memcpy(ois_uinfo.header_ver, Read_data, 7);
 	info("Read register uinfo, data = %s\n", Read_data);
-	for (i = 0; i < 72; i = i + 4) {
-		info("OIS[user data::0x%02x%02x%02x%02x]\n",
-			Read_data[i], Read_data[i + 1], Read_data[i + 2], Read_data[i + 3]);
-	}
 
 	/* User Data Area & Address Setting step2 */
 	fimc_is_ois_i2c_write(client ,0x000F, 0x0E);
@@ -677,59 +476,13 @@ bool fimc_is_ois_read_userdata(struct fimc_is_core *core)
 			break;
 		}
 		msleep(10);
-
 		if (--retries < 0) {
 			err("Read register failed!!!!, data = 0x%02x\n", val);
 			break;
 		}
 	} while (val != 0x14);
 
-	fimc_is_ois_i2c_read(client, 0x0100, &ois_shift_info);
-	info("OIS Shift Info : 0x%x\n", ois_shift_info);
-
-	if (ois_shift_info == 0x11) {
-		u16 ois_shift_checksum = 0;
-		u16 ois_shift_x_diff = 0;
-		u16 ois_shift_y_diff = 0;
-		s16 ois_shift_x_cal = 0;
-		s16 ois_shift_y_cal = 0;
-		u8 calData[2];
-
-		/* OIS Shift CheckSum */
-		calData[0] = 0;
-		calData[1] = 0;
-		fimc_is_ois_i2c_read_multi(client, 0x0102, calData, 2);
-		ois_shift_checksum = (calData[1] << 8) | (calData[0]);
-		info("OIS Shift CheckSum = 0x%x\n", ois_shift_checksum);
-
-		/* OIS Shift X Diff */
-		calData[0] = 0;
-		calData[1] = 0;
-		fimc_is_ois_i2c_read_multi(client, 0x0104, calData, 2);
-		ois_shift_x_diff = (calData[1] << 8) | (calData[0]);
-		info("OIS Shift X Diff = 0x%x\n", ois_shift_x_diff);
-
-		/* OIS Shift Y Diff */
-		calData[0] = 0;
-		calData[1] = 0;
-		fimc_is_ois_i2c_read_multi(client, 0x0106, calData, 2);
-		ois_shift_y_diff = (calData[1] << 8) | (calData[0]);
-		info("OIS Shift Y Diff = 0x%x\n", ois_shift_y_diff);
-
-		/* OIS Shift CAL DATA */
-		for (i = 0; i < 9; i++) {
-			calData[0] = 0;
-			calData[1] = 0;
-			fimc_is_ois_i2c_read_multi(client, 0x0108 + i*2, calData, 2);
-			ois_shift_x_cal = (calData[1] << 8) | (calData[0]);
-
-			calData[0] = 0;
-			calData[1] = 0;
-			fimc_is_ois_i2c_read_multi(client, 0x0120 + i*2, calData, 2);
-			ois_shift_y_cal = (calData[1] << 8) | (calData[0]);
-			info("OIS CAL[%d]:X[%d], Y[%d]\n", i, ois_shift_x_cal, ois_shift_y_cal);
-		}
-	}
+	fimc_is_ois_i2c_read_multi(client, 0x0100, Shift_data, USER_SHIFT_SIZE);
 
 	if (specific->use_ois_hsi2c) {
 		fimc_is_ois_i2c_config(core->client1, false);
@@ -868,14 +621,10 @@ bool fimc_is_ois_check_fw_impl(struct fimc_is_core *core)
 	fimc_is_ois_read_userdata(core);
 
 	if (ois_minfo.header_ver[FW_CORE_VERSION] == 'A' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'C' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'M' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'O') {
+		ois_minfo.header_ver[FW_CORE_VERSION] == 'C') {
 		ret = fimc_is_ois_open_fw(core, FIMC_OIS_FW_NAME_DOM, &buf);
 	} else if (ois_minfo.header_ver[FW_CORE_VERSION] == 'B' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'D' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'N' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'P') {
+		ois_minfo.header_ver[FW_CORE_VERSION] == 'D') {
 		ret |= fimc_is_ois_open_fw(core, FIMC_OIS_FW_NAME_SEC, &buf);
 	}
 
@@ -925,7 +674,6 @@ void fimc_is_ois_check_extclk(struct fimc_is_core *core)
 	ret = fimc_is_ois_i2c_read_multi(core->client1, 0x03F0, cur_clk, 4);
 	if (ret) {
 		err("i2c read fail\n");
-		goto exit;
 	}
 
 	cur_clk_32 = (cur_clk[3] << 24)  | (cur_clk[2]  << 16) |
@@ -968,29 +716,24 @@ void fimc_is_ois_check_extclk(struct fimc_is_core *core)
 		ret = fimc_is_ois_i2c_write_multi(core->client1, 0x03F0, new_clk, 6);
 		if (ret) {
 			err("i2c write fail\n");
-			goto exit;
 		}
 
 		/* write PLLMULTIPLE */
 		ret = fimc_is_ois_i2c_write(core->client1, 0x03F4, pll_multi);
 		if (ret) {
 			err("i2c write fail\n");
-			goto exit;
 		}
 
 		/* write PLLDIVIDE */
 		ret = fimc_is_ois_i2c_write(core->client1, 0x03F5, pll_divide);
 		if (ret) {
 			err("i2c write fail\n");
-			goto exit;
 		}
 
 		/* FLASH TO OIS MODULE */
 		ret = fimc_is_ois_i2c_write(core->client1, 0x0003, 0x01);
 		if (ret) {
 			err("i2c write fail\n");
-			msleep(200);
-			goto exit;
 		}
 		msleep(200);
 
@@ -999,8 +742,6 @@ void fimc_is_ois_check_extclk(struct fimc_is_core *core)
 		ret |= fimc_is_ois_i2c_write(core->client1 ,0x000E, 0x06);
 		if (ret) {
 			err("i2c write fail\n");
-			msleep(50);
-			goto exit;
 		}
 		msleep(50);
 
@@ -1034,6 +775,11 @@ void fimc_is_ois_fw_update_impl(struct fimc_is_core *core)
 	struct i2c_client *client = core->client1;
 	struct fimc_is_vender_specific *specific = core->vender.private_data;
 
+#ifdef CAMERA_USE_OIS_EXT_CLK
+	/* Check EXTCLK value */
+	fimc_is_ois_check_extclk(core);
+#endif
+
 	/* OIS Status Check */
 	if (specific->use_ois_hsi2c) {
 	    fimc_is_ois_i2c_config(core->client1, true);
@@ -1042,7 +788,6 @@ void fimc_is_ois_fw_update_impl(struct fimc_is_core *core)
 	ret = fimc_is_ois_i2c_read_multi(core->client1, 0x00FC, ois_status, 4);
 	if (ret) {
 		err("i2c read fail\n");
-		goto p_err;
 	}
 
 	if (specific->use_ois_hsi2c) {
@@ -1054,32 +799,20 @@ void fimc_is_ois_fw_update_impl(struct fimc_is_core *core)
 
 	if (ois_status_32 == OIS_FW_UPDATE_ERROR_STATUS) {
 		forced_update = true;
-		fimc_is_ois_read_manual_cal(core);
-	} else {
-#ifdef CAMERA_USE_OIS_EXT_CLK
-		/* Check EXTCLK value */
-		fimc_is_ois_check_extclk(core);
-#endif
 	}
 
-	if (!forced_update) {
-		ret = fimc_is_ois_fw_version(core);
-		if (!ret) {
-			err("Failed to read ois fw version.");
-			return;
-		}		
-		fimc_is_ois_read_userdata(core);
+	ret = fimc_is_ois_fw_version(core);
+	if (!ret) {
+		err("Failed to read ois fw version.");
+		return;
 	}
-	
+	fimc_is_ois_read_userdata(core);
+
 	if (ois_minfo.header_ver[FW_CORE_VERSION] == 'A' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'C' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'M' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'O') {
+		ois_minfo.header_ver[FW_CORE_VERSION] == 'C') {
 		ret = fimc_is_ois_open_fw(core, FIMC_OIS_FW_NAME_DOM, &buf);
 	} else if (ois_minfo.header_ver[FW_CORE_VERSION] == 'B' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'D' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'N' ||
-		ois_minfo.header_ver[FW_CORE_VERSION] == 'P') {
+		ois_minfo.header_ver[FW_CORE_VERSION] == 'D') {
 		ret |= fimc_is_ois_open_fw(core, FIMC_OIS_FW_NAME_SEC, &buf);
 	}
 
@@ -1209,8 +942,8 @@ retry:
 	msleep(50);
 
 	/* Param init - Flash to Rumba */
-	fimc_is_ois_i2c_write(client ,0x0036, 0x03);
-	msleep(200);
+	fimc_is_ois_i2c_write(client ,0x0036, 0x81);
+	msleep(30);
 	info("%s: OISLOG OIS param init done.\n", __func__);
 
 	if (specific->use_ois_hsi2c) {

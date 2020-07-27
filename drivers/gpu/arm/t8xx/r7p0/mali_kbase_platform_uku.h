@@ -50,11 +50,9 @@ struct kbase_uk_vsync_skip {
 };
 
 struct kbase_uk_custom_command {
-	union uk_header header;
-	u32       enabled;
-	u32       padding;
-	/* MALI_SEC_SECURE_RENDERING */
-	u64       flags;
+        union uk_header header;
+        u32       enabled;
+        u32       padding;
 };
 
 #endif

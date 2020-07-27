@@ -566,6 +566,7 @@ int fimc_is_debug_probe(void)
 		probe_info("%s is created\n", DEBUG_FS_IMGFILE_NAME);
 #endif
 #endif
+	clear_bit(FIMC_IS_DEBUG_OPEN, &fimc_is_debug.state);
 
 	return 0;
 }
@@ -576,7 +577,7 @@ int fimc_is_debug_open(struct fimc_is_minfo *minfo)
 	 * debug control should be reset on camera entrance
 	 * because firmware doesn't update this area after reset
 	 */
-	*((int *)(minfo->kvaddr + FIMC_IS_DEBUGCTL_OFFSET)) = 0;
+	*((int *)(minfo->kvaddr_debug_cnt)) = 0;
 	fimc_is_debug.read_vptr = 0;
 	fimc_is_debug.minfo = minfo;
 
@@ -600,6 +601,7 @@ static int isfw_debug_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
+#ifdef ENABLE_IS_CORE
 static ssize_t isfw_debug_read(struct file *file, char __user *user_buf,
 	size_t buf_len, loff_t *ppos)
 {
@@ -615,25 +617,26 @@ static ssize_t isfw_debug_read(struct file *file, char __user *user_buf,
 	minfo = fimc_is_debug.minfo;
 
 retry:
-	vb2_ion_sync_for_device(minfo->fw_cookie, FIMC_IS_DEBUG_OFFSET, FIMC_IS_DEBUG_SIZE, DMA_FROM_DEVICE);
+	CALL_BUFOP(minfo->pb_fw, sync_for_cpu, minfo->pb_fw,
+		DEBUG_REGION_OFFSET, DEBUG_REGION_SIZE, DMA_FROM_DEVICE);
 
-	write_vptr = *((int *)(minfo->kvaddr + FIMC_IS_DEBUGCTL_OFFSET)) - FIMC_IS_DEBUG_OFFSET;
+	write_vptr = *((int *)(minfo->kvaddr + DEBUGCTL_OFFSET)) - DEBUG_REGION_OFFSET;
 	read_vptr = fimc_is_debug.read_vptr;
 	buf_vptr = buf_len;
 
-	if (write_vptr < 0 || write_vptr > FIMC_IS_DEBUG_SIZE)
-		write_vptr = (read_vptr + FIMC_IS_DEBUG_SIZE) % (FIMC_IS_DEBUG_SIZE + 1);
+	if (write_vptr < 0 || write_vptr > DEBUG_REGION_SIZE)
+		write_vptr = (read_vptr + DEBUG_REGION_SIZE) % (DEBUG_REGION_SIZE + 1);
 
 	if (write_vptr >= read_vptr) {
 		read_cnt1 = write_vptr - read_vptr;
 		read_cnt2 = 0;
 	} else {
-		read_cnt1 = FIMC_IS_DEBUG_SIZE - read_vptr;
+		read_cnt1 = DEBUG_REGION_SIZE - read_vptr;
 		read_cnt2 = write_vptr;
 	}
 
 	if (buf_vptr && read_cnt1) {
-		read_ptr = (void *)(minfo->kvaddr + FIMC_IS_DEBUG_OFFSET + fimc_is_debug.read_vptr);
+		read_ptr = (void *)(minfo->kvaddr + DEBUG_REGION_OFFSET + fimc_is_debug.read_vptr);
 
 		if (read_cnt1 > buf_vptr)
 			read_cnt1 = buf_vptr;
@@ -647,14 +650,90 @@ retry:
 		buf_vptr -= read_cnt1;
 	}
 
-	if (fimc_is_debug.read_vptr >= FIMC_IS_DEBUG_SIZE) {
-		if (fimc_is_debug.read_vptr > FIMC_IS_DEBUG_SIZE)
+	if (fimc_is_debug.read_vptr >= DEBUG_REGION_SIZE) {
+		if (fimc_is_debug.read_vptr > DEBUG_REGION_SIZE)
 			err("[DBG] read_vptr(%zd) is invalid", fimc_is_debug.read_vptr);
 		fimc_is_debug.read_vptr = 0;
 	}
 
 	if (buf_vptr && read_cnt2) {
-		read_ptr = (void *)(minfo->kvaddr + FIMC_IS_DEBUG_OFFSET + fimc_is_debug.read_vptr);
+		read_ptr = (void *)(minfo->kvaddr + DEBUG_REGION_OFFSET + fimc_is_debug.read_vptr);
+
+		if (read_cnt2 > buf_vptr)
+			read_cnt2 = buf_vptr;
+
+		ret = copy_to_user(user_buf, read_ptr, read_cnt2);
+		if (ret) {
+			err("[DBG] failed copying %d bytes of debug log\n", ret);
+			return ret;
+		}
+		fimc_is_debug.read_vptr += read_cnt2;
+		buf_vptr -= read_cnt2;
+	}
+
+	read_cnt = buf_len - buf_vptr;
+
+	/* info("[DBG] FW_READ : read_vptr(%zd), write_vptr(%zd) - dump(%zd)\n", read_vptr, write_vptr, read_cnt); */
+
+	if (read_cnt == 0) {
+		msleep(500);
+		goto retry;
+	}
+
+	return read_cnt;
+}
+#else
+static ssize_t isfw_debug_read(struct file *file, char __user *user_buf,
+	size_t buf_len, loff_t *ppos)
+{
+	int ret = 0;
+	void *read_ptr;
+	size_t write_vptr, read_vptr, buf_vptr;
+	size_t read_cnt, read_cnt1, read_cnt2;
+	struct fimc_is_minfo *minfo;
+
+	while (!test_bit(FIMC_IS_DEBUG_OPEN, &fimc_is_debug.state))
+		msleep(500);
+
+	minfo = fimc_is_debug.minfo;
+
+retry:
+
+	write_vptr = *((int *)(minfo->kvaddr_debug_cnt));
+	read_vptr = fimc_is_debug.read_vptr;
+	buf_vptr = buf_len;
+
+	if (write_vptr >= read_vptr) {
+		read_cnt1 = write_vptr - read_vptr;
+		read_cnt2 = 0;
+	} else {
+		read_cnt1 = DEBUG_REGION_SIZE - read_vptr;
+		read_cnt2 = write_vptr;
+	}
+
+	if (buf_vptr && read_cnt1) {
+		read_ptr = (void *)(minfo->kvaddr_debug + fimc_is_debug.read_vptr);
+
+		if (read_cnt1 > buf_vptr)
+			read_cnt1 = buf_vptr;
+
+		ret = copy_to_user(user_buf, read_ptr, read_cnt1);
+		if (ret) {
+			err("[DBG] failed copying %d bytes of debug log\n", ret);
+			return ret;
+		}
+		fimc_is_debug.read_vptr += read_cnt1;
+		buf_vptr -= read_cnt1;
+	}
+
+	if (fimc_is_debug.read_vptr >= DEBUG_REGION_SIZE) {
+		if (fimc_is_debug.read_vptr > DEBUG_REGION_SIZE)
+			err("[DBG] read_vptr(%zd) is invalid", fimc_is_debug.read_vptr);
+		fimc_is_debug.read_vptr = 0;
+	}
+
+	if (buf_vptr && read_cnt2) {
+		read_ptr = (void *)(minfo->kvaddr_debug + fimc_is_debug.read_vptr);
 
 		if (read_cnt2 > buf_vptr)
 			read_cnt2 = buf_vptr;
@@ -680,6 +759,8 @@ retry:
 	return read_cnt;
 }
 
+#endif
+
 int imgdump_request(ulong cookie, ulong kvaddr, size_t size)
 {
 	if (fimc_is_debug.dump_count && (fimc_is_debug.size == 0) && (fimc_is_debug.img_kvaddr == 0)) {
@@ -704,7 +785,6 @@ static ssize_t imgdump_debug_read(struct file *file, char __user *user_buf,
 	size_t buf_len, loff_t *ppos)
 {
 	size_t size = 0;
-	int ret = 0;
 
 	if (buf_len <= fimc_is_debug.size)
 		size = buf_len;
@@ -713,11 +793,7 @@ static ssize_t imgdump_debug_read(struct file *file, char __user *user_buf,
 
 	if (size) {
 		vb2_ion_sync_for_device((void *)fimc_is_debug.img_cookie, 0, size, DMA_FROM_DEVICE);
-		ret = copy_to_user(user_buf, (void *)fimc_is_debug.img_kvaddr, size);
-		if (ret) {
-			err("[DBG] failed copying %d bytes of debug log\n", ret);
-			return ret;
-		}
+		memcpy(user_buf, (void *)fimc_is_debug.img_kvaddr, size);
 		info("DUMP : %p, SIZE : %zd\n", (void *)fimc_is_debug.img_kvaddr, size);
 	}
 

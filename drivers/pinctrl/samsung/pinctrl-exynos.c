@@ -33,10 +33,6 @@
 #include "pinctrl-samsung.h"
 #include "pinctrl-exynos.h"
 
-#ifdef CONFIG_SEC_FACTORY
-#undef CONFIG_ESE_SECURE
-#endif
-
 struct exynos_irq_chip {
 	struct irq_chip chip;
 
@@ -548,10 +544,6 @@ static int exynos_eint_wkup_init(struct samsung_pinctrl_drv_data *d)
 	for (i = 0; i < d->ctrl->nr_banks; ++i, ++bank) {
 		if (bank->eint_type != EINT_TYPE_WKUP)
 			continue;
-
-		/* Setting Digital Filter */
-		exynos_eint_flt_config(EXYNOS_EINT_FLTCON_EN,
-					EXYNOS_EINT_FLTCON_SEL, 0, d, bank);
 
 		/* Setting Digital Filter */
 		exynos_eint_flt_config(EXYNOS_EINT_FLTCON_EN,
@@ -1357,21 +1349,17 @@ struct samsung_pin_ctrl exynos8890_pin_ctrl[] = {
 		/* pin-controller instance 3 ESE data */
 		.pin_banks	= exynos8890_pin_banks3,
 		.nr_banks	= ARRAY_SIZE(exynos8890_pin_banks3),
-#ifndef ENABLE_SENSORS_FPRINT_SECURE
 		.eint_gpio_init = exynos_eint_gpio_init,
 		.suspend	= exynos_pinctrl_suspend,
 		.resume		= exynos_pinctrl_resume,
-#endif
 		.label		= "exynos8890-gpio-ctrl3",
 	}, {
 		/* pin-controller instance 4 FP data */
 		.pin_banks	= exynos8890_pin_banks4,
 		.nr_banks	= ARRAY_SIZE(exynos8890_pin_banks4),
-#ifndef CONFIG_ESE_SECURE
 		.eint_gpio_init = exynos_eint_gpio_init,
 		.suspend	= exynos_pinctrl_suspend,
 		.resume		= exynos_pinctrl_resume,
-#endif
 		.label		= "exynos8890-gpio-ctrl4",
 	}, {
 		/* pin-controller instance 5 FSYS0 data */
@@ -1393,11 +1381,9 @@ struct samsung_pin_ctrl exynos8890_pin_ctrl[] = {
 		/* pin-controller instance 7 NFC data */
 		.pin_banks	= exynos8890_pin_banks7,
 		.nr_banks	= ARRAY_SIZE(exynos8890_pin_banks7),
-#ifndef CONFIG_MST_SECURE_GPIO
 		.eint_gpio_init = exynos_eint_gpio_init,
 		.suspend	= exynos_pinctrl_suspend,
 		.resume		= exynos_pinctrl_resume,
-#endif
 		.label		= "exynos8890-gpio-ctrl7",
 	}, {
 		/* pin-controller instance 8 PERIC0 data */
@@ -1426,20 +1412,172 @@ struct samsung_pin_ctrl exynos8890_pin_ctrl[] = {
 	},
 };
 
+/* pin banks of exynos7870 pin-controller 0 (ALIVE) */
+static struct samsung_pin_bank exynos7870_pin_banks0[] = {
+	EXYNOS_PIN_BANK_EINTN(bank_type_5, 6, 0x000, "etc0"),
+	EXYNOS_PIN_BANK_EINTN(bank_type_5, 3, 0x020, "etc1"),
+	EXYNOS_PIN_BANK_EINTW(bank_type_5, 8, 0x040, "gpa0", 0x00),
+	EXYNOS_PIN_BANK_EINTW(bank_type_5, 8, 0x060, "gpa1", 0x04),
+	EXYNOS_PIN_BANK_EINTW(bank_type_5, 8, 0x080, "gpa2", 0x08),
+	EXYNOS_PIN_BANK_EINTN(bank_type_5, 2, 0x0c0, "gpq0"),
+};
+
+/* pin banks of exynos7870 pin-controller 1 (DISPAUD) */
+static struct samsung_pin_bank exynos7870_pin_banks1[] = {
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 4, 0x000, "gpz0", 0x00),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 6, 0x020, "gpz1", 0x04),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 4, 0x040, "gpz2", 0x08),
+};
+
+/* pin banks of exynos7870 pin-controller 2 (EsE) */
+static struct samsung_pin_bank exynos7870_pin_banks2[] = {
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 5, 0x000, "gpc7", 0x00),
+};
+
+/* pin banks of exynos7870 pin-controller 3 (FSYS) */
+static struct samsung_pin_bank exynos7870_pin_banks3[] = {
+         EXYNOS_PIN_BANK_EINTG(bank_type_4, 3, 0x000, "gpr0", 0x00),
+         EXYNOS_PIN_BANK_EINTG(bank_type_4, 8, 0x020, "gpr1", 0x04),
+         EXYNOS_PIN_BANK_EINTG(bank_type_4, 2, 0x040, "gpr2", 0x08),
+         EXYNOS_PIN_BANK_EINTG(bank_type_4, 4, 0x060, "gpr3", 0x0c),
+         EXYNOS_PIN_BANK_EINTG(bank_type_4, 6, 0x080, "gpr4", 0x10),
+};
+
+/* pin banks of exynos7870 pin-controller 4 (MIF) */
+static struct samsung_pin_bank exynos7870_pin_banks4[] = {
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 2, 0x000, "gpm0", 0x00),
+};
+
+/* pin banks of exynos7870 pin-controller 5 (NFC) */
+static struct samsung_pin_bank exynos7870_pin_banks5[] = {
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 4, 0x000, "gpc2", 0x00),
+};
+
+/* pin banks of exynos7870 pin-controller 6 (TOP) */
+static struct samsung_pin_bank exynos7870_pin_banks6[] = {
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 4, 0x000, "gpb0", 0x00),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 3, 0x020, "gpc0", 0x04),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 4, 0x040, "gpc1", 0x08),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 4, 0x060, "gpc4", 0x0c),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 2, 0x080, "gpc5", 0x10),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 4, 0x0a0, "gpc6", 0x14),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 2, 0x0c0, "gpc8", 0x18),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 2, 0x0e0, "gpc9", 0x1c),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 7, 0x100, "gpd1", 0x20),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 6, 0x120, "gpd2", 0x24),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 8, 0x140, "gpd3", 0x28),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 7, 0x160, "gpd4", 0x2c),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 3, 0x1a0, "gpe0", 0x34),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 4, 0x1c0, "gpf0", 0x38),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 2, 0x1e0, "gpf1", 0x3c),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 2, 0x200, "gpf2", 0x40),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 4, 0x220, "gpf3", 0x44),
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 5, 0x240, "gpf4", 0x48),
+};
+
+/* pin banks of exynos7870 pin-controller 10 (TOUCH) */
+static struct samsung_pin_bank exynos7870_pin_banks7[] = {
+	EXYNOS_PIN_BANK_EINTG(bank_type_4, 3, 0x000, "gpc3", 0x00),
+};
+
+struct samsung_pin_ctrl exynos7870_pin_ctrl[] = {
+	{
+		/* pin-controller instance 0 Alive data */
+		.pin_banks	= exynos7870_pin_banks0,
+		.nr_banks	= ARRAY_SIZE(exynos7870_pin_banks0),
+		.eint_gpio_init = exynos_eint_gpio_init,
+		.eint_wkup_init = exynos_eint_wkup_init,
+		.suspend	= exynos_pinctrl_suspend,
+		.resume		= exynos_pinctrl_resume,
+		.label		= "exynos7870-gpio-ctrl0",
+	}, {
+		/* pin-controller instance 1 DISPAUD data */
+		.pin_banks	= exynos7870_pin_banks1,
+		.nr_banks	= ARRAY_SIZE(exynos7870_pin_banks1),
+		.label		= "exynos7870-gpio-ctrl1",
+	}, {
+		/* pin-controller instance 2 ESE  data */
+		.pin_banks	= exynos7870_pin_banks2,
+		.nr_banks	= ARRAY_SIZE(exynos7870_pin_banks2),
+#ifndef ENABLE_SENSORS_FPRINT_SECURE
+		.eint_gpio_init = exynos_eint_gpio_init,
+		.suspend	= exynos_pinctrl_suspend,
+		.resume		= exynos_pinctrl_resume,
+#endif
+		.label		= "exynos7870-gpio-ctrl2",
+	}, {
+		/* pin-controller instance 3 FSYS data */
+		.pin_banks	= exynos7870_pin_banks3,
+		.nr_banks	= ARRAY_SIZE(exynos7870_pin_banks3),
+		.eint_gpio_init = exynos_eint_gpio_init,
+		.suspend	= exynos_pinctrl_suspend,
+		.resume		= exynos_pinctrl_resume,
+		.label		= "exynos7870-gpio-ctrl3",
+	}, {
+		/* pin-controller instance 4 MIF data */
+		.pin_banks	= exynos7870_pin_banks4,
+		.nr_banks	= ARRAY_SIZE(exynos7870_pin_banks4),
+		.eint_gpio_init = exynos_eint_gpio_init,
+		.suspend	= exynos_pinctrl_suspend,
+		.resume		= exynos_pinctrl_resume,
+		.label		= "exynos7870-gpio-ctrl4",
+	}, {
+		/* pin-controller instance 5 NFC data */
+		.pin_banks	= exynos7870_pin_banks5,
+		.nr_banks	= ARRAY_SIZE(exynos7870_pin_banks5),
+		.eint_gpio_init = exynos_eint_gpio_init,
+		.suspend	= exynos_pinctrl_suspend,
+		.resume		= exynos_pinctrl_resume,
+		.label		= "exynos7870-gpio-ctrl5",
+	}, {
+		/* pin-controller instance 6 TOP data */
+		.pin_banks	= exynos7870_pin_banks6,
+		.nr_banks	= ARRAY_SIZE(exynos7870_pin_banks6),
+		.eint_gpio_init = exynos_eint_gpio_init,
+		.suspend	= exynos_pinctrl_suspend,
+		.resume		= exynos_pinctrl_resume,
+		.label		= "exynos7870-gpio-ctrl6",
+	}, {
+		/* pin-controller instance 7 TOUCH data */
+		.pin_banks	= exynos7870_pin_banks7,
+		.nr_banks	= ARRAY_SIZE(exynos7870_pin_banks7),
+#ifndef CONFIG_MST_SECURE_GPIO
+		.eint_gpio_init = exynos_eint_gpio_init,
+		.suspend	= exynos_pinctrl_suspend,
+		.resume		= exynos_pinctrl_resume,
+#endif
+		.label		= "exynos7870-gpio-ctrl7",
+	},
+};
+
 #ifdef CONFIG_SEC_GPIO_DVS
-int exynos8890_secgpio_get_nr_gpio(void)
+int exynos7870_secgpio_get_nr_gpio(void)
 {
 	int i, j;
 	int nr_gpio = 0;
 
-	for (i = 0; i < ARRAY_SIZE(exynos8890_pin_ctrl); i++) {
-		for(j = 0; j < exynos8890_pin_ctrl[i].nr_banks; j++)
-			nr_gpio += exynos8890_pin_ctrl[i].pin_banks[j].nr_pins;
+	for (i = 0; i < ARRAY_SIZE(exynos7870_pin_ctrl); i++) {
+		for(j = 0; j < exynos7870_pin_ctrl[i].nr_banks; j++)
+			nr_gpio += exynos7870_pin_ctrl[i].pin_banks[j].nr_pins;
 	}
 
 	return nr_gpio;
 }
 #endif
+#if defined(CONFIG_SOC_EXYNOS7870)
+u32 exynos_eint_to_pin_num(int eint)
+{
+	int i;
+	int etc_offset = 0;
+
+	for(i = 0; i < exynos7870_pin_ctrl[0].nr_banks &&
+		strncmp(exynos7870_pin_ctrl[0].pin_banks[i].name, "gpa", 3); i++)
+		etc_offset += exynos7870_pin_ctrl[0].pin_banks[i].nr_pins;
+
+        return exynos7870_pin_ctrl[0].base + eint + etc_offset;
+}
+#endif
+
 #if defined(CONFIG_SOC_EXYNOS8890)
 u32 exynos_eint_to_pin_num(int eint)
 {

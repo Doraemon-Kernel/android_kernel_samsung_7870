@@ -27,8 +27,8 @@
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
-#include <exynos-fimc-is-sensor.h>
 
+#include <exynos-fimc-is-sensor.h>
 #include "fimc-is-hw.h"
 #include "fimc-is-core.h"
 #include "fimc-is-device-sensor.h"
@@ -45,8 +45,10 @@ static struct fimc_is_sensor_cfg config_module_4h5[] = {
 	FIMC_IS_SENSOR_CFG(3280, 1846, 30, 29, 1, CSI_DATA_LANES_4),
 	/* 1640x924_60fps */
 	FIMC_IS_SENSOR_CFG(1640, 924, 60, 36, 2, CSI_DATA_LANES_4),
+	/* 816x604_120fps */
+	FIMC_IS_SENSOR_CFG(816, 604, 120, 29, 3, CSI_DATA_LANES_4),
 	/* 816x460_120fps */
-	FIMC_IS_SENSOR_CFG(816, 460, 120, 29, 3, CSI_DATA_LANES_4),
+	FIMC_IS_SENSOR_CFG(816, 460, 120, 29, 4, CSI_DATA_LANES_4),
 };
 
 static struct fimc_is_vci vci_module_4h5[] = {
@@ -175,7 +177,7 @@ int sensor_module_4h5_probe(struct platform_device *pdev)
 
 	core = (struct fimc_is_core *)dev_get_drvdata(fimc_is_dev);
 	if (!core) {
-		probe_err("core device is not yet probed");
+		probe_info("core device is not yet probed");
 		return -EPROBE_DEFER;
 	}
 
@@ -204,6 +206,10 @@ int sensor_module_4h5_probe(struct platform_device *pdev)
 	module->client = NULL;
 	module->active_width = 3264 + 16;
 	module->active_height = 2448 + 10;
+	module->margin_left = 0;
+	module->margin_right = 0;
+	module->margin_top = 0;
+	module->margin_bottom = 0;
 	module->pixel_width = module->active_width;
 	module->pixel_height = module->active_height;
 	module->max_framerate = 120;

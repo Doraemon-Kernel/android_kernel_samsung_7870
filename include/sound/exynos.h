@@ -21,12 +21,19 @@ enum {
 	LPASS_IP_PCM,
 	LPASS_IP_UART,
 	LPASS_IP_SLIMBUS,
-	LPASS_IP_CA5
+	LPASS_IP_CA5,
+	LPASS_IP_MIXER,
+	LPASS_IP_AMP
 };
 
 enum {
 	LPASS_OP_RESET = 0,
 	LPASS_OP_NORMAL,
+};
+
+enum {
+	LPASS_RESET_BIT_UNSET = 0,
+	LPASS_RESET_BIT_SET,
 };
 
 /* Availability of power mode */
@@ -38,7 +45,6 @@ enum {
 	AUD_PWR_AFTR,
 };
 
-#ifdef CONFIG_SCHED_HMP
 #define USE_EXYNOS_AUD_SCHED
 enum {
 	AUD_MODE_DEFAULT = 0,
@@ -47,7 +53,6 @@ enum {
 };
 
 extern void lpass_set_sched(pid_t pid, int mode);
-#endif
 
 #if defined(CONFIG_SCHED_HMP) && defined(CONFIG_EXYNOS5_DYNAMIC_CPU_HOTPLUG)
 #define USE_EXYNOS_AUD_CPU_HOTPLUG
@@ -75,5 +80,10 @@ extern void lpass_dma_enable(bool on);
 
 extern void lpass_reset(int ip, int op);
 extern void lpass_reset_toggle(int ip);
+
+extern void lpass_set_ip_idle(bool value);
+extern void lpass_set_fm_bt_mux(int is_fm);
+
+
 
 #endif /* __SOUND_EXYNOS_H */

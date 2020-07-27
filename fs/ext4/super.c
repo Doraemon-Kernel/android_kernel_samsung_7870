@@ -651,8 +651,7 @@ void __ext4_abort(struct super_block *sb, const char *function,
 		if (EXT4_SB(sb)->s_journal &&
 		  !(EXT4_SB(sb)->s_journal->j_flags & JBD2_REC_ERR))
 			return;
-		printk("EXT4-fs panic from previous error\n");
-		BUG_ON(1);
+		panic("EXT4-fs panic from previous error\n");
 	}
 }
 
@@ -835,10 +834,6 @@ static void dump_orphan_list(struct super_block *sb, struct ext4_sb_info *sbi)
 		       inode->i_mode, inode->i_nlink,
 		       NEXT_ORPHAN(inode));
 	}
-#ifdef CONFIG_EXT4_FS_ENCRYPTION
-	if (EXT4_I(inode)->i_crypt_info)
-		ext4_free_encryption_info(inode, EXT4_I(inode)->i_crypt_info);
-#endif
 }
 
 static void ext4_put_super(struct super_block *sb)
@@ -1242,7 +1237,6 @@ enum {
 	Opt_dioread_nolock, Opt_dioread_lock,
 	Opt_discard, Opt_nodiscard, Opt_init_itable, Opt_noinit_itable,
 	Opt_max_dir_size_kb,
-	Opt_debug_bdinfo,
 };
 
 static const match_table_t tokens = {
@@ -1324,7 +1318,6 @@ static const match_table_t tokens = {
 	{Opt_removed, "reservation"},	/* mount option from ext2/3 */
 	{Opt_removed, "noreservation"}, /* mount option from ext2/3 */
 	{Opt_removed, "journal=%u"},	/* mount option from ext2/3 */
-	{Opt_debug_bdinfo, "debug_bdinfo"},
 	{Opt_err, NULL},
 };
 
@@ -1519,7 +1512,6 @@ static const struct mount_opts {
 	{Opt_jqfmt_vfsv1, QFMT_VFS_V1, MOPT_QFMT},
 	{Opt_max_dir_size_kb, 0, MOPT_GTE0},
 	{Opt_test_dummy_encryption, 0, MOPT_GTE0},
-	{Opt_debug_bdinfo, EXT4_MOUNT_DEBUG_BDINFO, MOPT_SET},
 	{Opt_err, 0, 0}
 };
 
@@ -3620,40 +3612,6 @@ int ext4_calculate_overhead(struct super_block *sb)
 	return 0;
 }
 
-static void ext4_clamp_want_extra_isize(struct super_block *sb)
-{
-	struct ext4_sb_info *sbi = EXT4_SB(sb);
-	struct ext4_super_block *es = sbi->s_es;
-	unsigned def_extra_isize = sizeof(struct ext4_inode) -
-						EXT4_GOOD_OLD_INODE_SIZE;
-
-	if (sbi->s_inode_size == EXT4_GOOD_OLD_INODE_SIZE) {
-		sbi->s_want_extra_isize = 0;
-		return;
-	}
-	if (sbi->s_want_extra_isize < 4) {
-		sbi->s_want_extra_isize = def_extra_isize;
-		if (EXT4_HAS_RO_COMPAT_FEATURE(sb,
-					EXT4_FEATURE_RO_COMPAT_EXTRA_ISIZE)) {
-			if (sbi->s_want_extra_isize <
-			    le16_to_cpu(es->s_want_extra_isize))
-				sbi->s_want_extra_isize =
-					le16_to_cpu(es->s_want_extra_isize);
-			if (sbi->s_want_extra_isize <
-			    le16_to_cpu(es->s_min_extra_isize))
-				sbi->s_want_extra_isize =
-					le16_to_cpu(es->s_min_extra_isize);
-		}
-	}
-	/* Check if enough inode space is available */
-	if ((sbi->s_want_extra_isize > sbi->s_inode_size) ||
-	    (EXT4_GOOD_OLD_INODE_SIZE + sbi->s_want_extra_isize >
-							sbi->s_inode_size)) {
-		sbi->s_want_extra_isize = def_extra_isize;
-		ext4_msg(sb, KERN_INFO,
-			 "required extra inode space not available");
-	}
-}
 
 static ext4_fsblk_t ext4_calculate_resv_clusters(struct super_block *sb)
 {
@@ -3910,6 +3868,10 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
 		(test_opt(sb, POSIX_ACL) ? MS_POSIXACL : 0);
 
+#ifdef CONFIG_FIVE
+	sb->s_flags |= MS_I_VERSION;
+#endif
+
 	if (le32_to_cpu(es->s_rev_level) == EXT4_GOOD_OLD_REV &&
 	    (EXT4_HAS_COMPAT_FEATURE(sb, ~0U) ||
 	     EXT4_HAS_RO_COMPAT_FEATURE(sb, ~0U) ||
@@ -3992,13 +3954,6 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 		ext4_msg(sb, KERN_ERR,
 			 "Number of reserved GDT blocks insanely large: %d",
 			 le16_to_cpu(sbi->s_es->s_reserved_gdt_blocks));
-		goto failed_mount;
-	}
-
-	if (EXT4_HAS_INCOMPAT_FEATURE(sb, EXT4_FEATURE_INCOMPAT_ENCRYPT) &&
-	    es->s_encryption_level) {
-		ext4_msg(sb, KERN_ERR, "Unsupported encryption level %d",
-			 es->s_encryption_level);
 		goto failed_mount;
 	}
 
@@ -4250,10 +4205,6 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 		goto failed_mount;
 	}
 
-	if (test_opt(sb, DEBUG_BDINFO))
-		ext4_msg(sb, KERN_INFO,
-				"Mount option debug_bdinfo is deprecated");
-
 	if (ext4_proc_root)
 		sbi->s_proc = proc_mkdir(sb->s_id, ext4_proc_root);
 
@@ -4468,17 +4419,39 @@ no_journal:
 	if (ext4_setup_super(sb, es, sb->s_flags & MS_RDONLY))
 		sb->s_flags |= MS_RDONLY;
 
-	ext4_clamp_want_extra_isize(sb);
+	/* determine the minimum size of new large inodes, if present */
+	if (sbi->s_inode_size > EXT4_GOOD_OLD_INODE_SIZE) {
+		sbi->s_want_extra_isize = sizeof(struct ext4_inode) -
+						     EXT4_GOOD_OLD_INODE_SIZE;
+		if (EXT4_HAS_RO_COMPAT_FEATURE(sb,
+				       EXT4_FEATURE_RO_COMPAT_EXTRA_ISIZE)) {
+			if (sbi->s_want_extra_isize <
+			    le16_to_cpu(es->s_want_extra_isize))
+				sbi->s_want_extra_isize =
+					le16_to_cpu(es->s_want_extra_isize);
+			if (sbi->s_want_extra_isize <
+			    le16_to_cpu(es->s_min_extra_isize))
+				sbi->s_want_extra_isize =
+					le16_to_cpu(es->s_min_extra_isize);
+		}
+	}
+	/* Check if enough inode space is available */
+	if (EXT4_GOOD_OLD_INODE_SIZE + sbi->s_want_extra_isize >
+							sbi->s_inode_size) {
+		sbi->s_want_extra_isize = sizeof(struct ext4_inode) -
+						       EXT4_GOOD_OLD_INODE_SIZE;
+		ext4_msg(sb, KERN_INFO, "required extra inode space not"
+			 "available");
+	}
 
 #if ANDROID_VERSION < 80000
 	atomic64_set(&sbi->s_r_blocks_count, ext4_r_blocks_count(es));
 #else
 #define ANDROID_M_R_BLOCKS_COUNT	(1280)
 	if (le32_to_cpu(sbi->s_es->s_sec_magic) == EXT4_SEC_DATA_MAGIC ||
-			strncmp(es->s_volume_name, "data", 4) == 0) {
+			strncmp(es->s_volume_name, "data", 4) == 0)
 		atomic64_set(&sbi->s_r_blocks_count, ext4_r_blocks_count(es) ? :
 				ANDROID_M_R_BLOCKS_COUNT);
-	}
 #endif
 	if (atomic64_read(&sbi->s_r_blocks_count))
 		ext4_msg(sb, KERN_INFO, "Root reserved blocks %ld",
@@ -4617,8 +4590,10 @@ cantfind_ext4:
 	/* for debugging, sangwoo2.lee */
 	/* If you wanna use the flag 'MS_SILENT', call */
 	/* 'print_bh' function within below 'if'. */
-	printk(KERN_ERR "printing data of superblock-bh\n");
-	print_bh(sb, bh, 0, EXT4_BLOCK_SIZE(sb));
+	if (!silent) {
+		printk(KERN_ERR "printing data of superblock-bh\n");
+		print_bh(sb, bh, 0, EXT4_BLOCK_SIZE(sb));
+	}
 	/* for debugging */
 
 	if (!silent)
@@ -4695,6 +4670,7 @@ static void ext4_init_journal_params(struct super_block *sb, journal_t *journal)
 {
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
 #ifdef CONFIG_JOURNAL_DATA_TAG
+	struct ext4_super_block *es = EXT4_SB(sb)->s_es;
 	struct hd_struct *part;
 #endif
 
@@ -4714,15 +4690,9 @@ static void ext4_init_journal_params(struct super_block *sb, journal_t *journal)
 
 #ifdef CONFIG_JOURNAL_DATA_TAG
 	part = sb->s_bdev->bd_part;
-	if (part->info && !strncmp(part->info->volname, "USERDATA", 8)) {
+	if (le32_to_cpu(es->s_sec_magic) == EXT4_SEC_DATA_MAGIC) {
 		journal->j_flags |= JBD2_JOURNAL_TAG;
-		printk("Setting journal tag on volname[%s]\n", 
-			part->info->volname);
-	} else if (!part->info && journal->j_maxlen >= 32768) {
-		/* maybe dm device &&  journal size > 128MB */
-		journal->j_flags |= JBD2_JOURNAL_TAG;
-		printk("Setting journal tag on volname[(null)] "
-		       "journal size %u MB\n", journal->j_maxlen * 4 / 1024);
+		printk("Setting journal tag on volname[%s]\n", part->info->volname);
 	}
 	else
 		journal->j_flags &= ~JBD2_JOURNAL_TAG;
@@ -5019,7 +4989,6 @@ static int ext4_commit_super(struct super_block *sb, int sync)
 		es->s_free_inodes_count =
 			cpu_to_le32(percpu_counter_sum_positive(
 				&EXT4_SB(sb)->s_freeinodes_counter));
-
 	BUFFER_TRACE(sbh, "marking dirty");
 	ext4_superblock_csum_set(sb);
 	mark_buffer_dirty(sbh);
@@ -5289,8 +5258,6 @@ static int ext4_remount(struct super_block *sb, int *flags, char *data)
 		err = -EINVAL;
 		goto restore_opts;
 	}
-
-	ext4_clamp_want_extra_isize(sb);
 
 	if ((old_opts.s_mount_opt & EXT4_MOUNT_JOURNAL_CHECKSUM) ^
 	    test_opt(sb, JOURNAL_CHECKSUM)) {

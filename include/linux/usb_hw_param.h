@@ -47,6 +47,7 @@ enum usb_hw_param {
 	USB_CCIC_DEX_USE_COUNT,
 	USB_CCIC_WATER_TIME_DURATION,
 	USB_CCIC_WATER_VBUS_COUNT,
+	USB_CCIC_VBUS_CC_SHORT_COUNT,
 	USB_CCIC_VERSION,
 	USB_CCIC_HW_PARAM_MAX,
 };
@@ -59,4 +60,7 @@ int get_usb210_count(void);
 unsigned long get_waterDet_duration(void);
 int get_waterChg_count(void);
 unsigned long long show_ccic_version(void);
+#else
+int microusb_get_usb310_count(void);
+int microusb_get_usb210_count(void);
 #endif

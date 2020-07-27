@@ -69,7 +69,6 @@ struct rlimit64 {
  * and other sensitive information are never written to disk.
  */
 //#define MLOCK_LIMIT	((PAGE_SIZE > 64*1024) ? PAGE_SIZE : 64*1024)
-
 /*
  * Secure Storage wants 64MB of mlocked memory, to make sure
  * the authentication of an application using Secure Storage.

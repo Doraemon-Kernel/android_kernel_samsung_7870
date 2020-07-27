@@ -31,7 +31,11 @@
 
 #include <soc/samsung/exynos-pmu.h>
 
+#include <linux/reboot.h>
+
 #ifdef CONFIG_SEC_DEBUG
+
+extern void (*mach_restart)(int reboot_mode, const char *cmd);
 
 /* enable/disable sec_debug feature
  * level = 0 when enable = 0 && enable_user = 0
@@ -49,6 +53,16 @@ union sec_debug_level_t {
 module_param_named(enable, sec_debug_level.en.kernel_fault, ushort, 0644);
 module_param_named(enable_user, sec_debug_level.en.user_fault, ushort, 0644);
 module_param_named(level, sec_debug_level.uint_val, uint, 0644);
+
+#ifdef CONFIG_SEC_DEBUG_MDM_SEPERATE_CRASH
+static unsigned int enable_cp_debug = 1;
+module_param_named(enable_cp_debug, enable_cp_debug, uint, 0644);
+
+int sec_debug_is_enabled_for_ssr(void)
+{
+	return enable_cp_debug;
+}
+#endif
 
 int sec_debug_get_debug_level(void)
 {
@@ -153,7 +167,7 @@ static struct kmsg_dumper sec_dumper = {
 	.dump = sec_debug_kmsg_dump,
 };
 
-static int sec_debug_reserved(phys_addr_t base, phys_addr_t size)
+static int __init sec_debug_reserved(phys_addr_t base, phys_addr_t size)
 {
 #ifdef CONFIG_NO_BOOTMEM
 	return (memblock_is_region_reserved(base, size) ||
@@ -163,7 +177,7 @@ static int sec_debug_reserved(phys_addr_t base, phys_addr_t size)
 #endif
 }
 
-int __init sec_debug_init(void)
+int __init sec_debug_setup(void)
 {
 	phys_addr_t size = SZ_4K;
 	phys_addr_t base = 0;
@@ -320,17 +334,17 @@ static void sec_debug_dump_cpu_stat(void)
 		guest_nice = kcpustat_cpu(i).cpustat[CPUTIME_GUEST_NICE];
 
 		pr_info("cpu%d  user:%llu \tnice:%llu \tsystem:%llu \tidle:%llu \tiowait:%llu \tirq:%llu \tsoftirq:%llu \t %llu %llu %llu\n",
-			i,
-			(unsigned long long)cputime64_to_clock_t(user),
-			(unsigned long long)cputime64_to_clock_t(nice),
-			(unsigned long long)cputime64_to_clock_t(system),
-			(unsigned long long)cputime64_to_clock_t(idle),
-			(unsigned long long)cputime64_to_clock_t(iowait),
-			(unsigned long long)cputime64_to_clock_t(irq),
-			(unsigned long long)cputime64_to_clock_t(softirq),
-			(unsigned long long)cputime64_to_clock_t(steal),
-			(unsigned long long)cputime64_to_clock_t(guest),
-			(unsigned long long)cputime64_to_clock_t(guest_nice));
+				i,
+				(unsigned long long)cputime64_to_clock_t(user),
+				(unsigned long long)cputime64_to_clock_t(nice),
+				(unsigned long long)cputime64_to_clock_t(system),
+				(unsigned long long)cputime64_to_clock_t(idle),
+				(unsigned long long)cputime64_to_clock_t(iowait),
+				(unsigned long long)cputime64_to_clock_t(irq),
+				(unsigned long long)cputime64_to_clock_t(softirq),
+				(unsigned long long)cputime64_to_clock_t(steal),
+				(unsigned long long)cputime64_to_clock_t(guest),
+				(unsigned long long)cputime64_to_clock_t(guest_nice));
 	}
 	pr_info("-------------------------------------------------------------------------------------------------------------\n");
 	pr_info("\n");
@@ -396,14 +410,16 @@ void sec_debug_panic_handler(void *buf, bool dump)
 		sec_debug_dump_cpu_stat();
 		debug_show_all_locks();
 	}
+}
 
-	/* hw reset */
+void sec_debug_post_panic_handler(void)
+{
+	/* reset */
 	pr_emerg("sec_debug: %s\n", linux_banner);
 	pr_emerg("sec_debug: rebooting...\n");
 
 	flush_cache_all();
 }
-
 
 #ifdef CONFIG_SEC_DEBUG_FILE_LEAK
 int sec_debug_print_file_list(void)
@@ -528,102 +544,24 @@ out:
 }
 __setup("sec_debug.base=", sec_debug_base_setup);
 
-#ifdef CONFIG_SEC_UPLOAD
-extern void check_crash_keys_in_user(unsigned int code, int onoff);
-#endif
-
-void sec_debug_check_crash_key(unsigned int code, int value)
+#ifdef CONFIG_SEC_HW_REV
+int board_id;
+EXPORT_SYMBOL(board_id);
+static int board_id_setup(char *str)
 {
-	static bool volup_p;
-	static bool voldown_p;
-	static int loopcount;
+	int n;
 
-	static const unsigned int VOLUME_UP = KEY_VOLUMEUP;
-	static const unsigned int VOLUME_DOWN = KEY_VOLUMEDOWN;
+	if (!get_option(&str, &n))
+		return 0;
 
-	hard_reset_hook(code, value);
-	
-	if (!sec_debug_level.en.kernel_fault) {
-#ifdef CONFIG_SEC_UPLOAD
-		check_crash_keys_in_user(code, value);
-#endif
-		return;
-	}
+	board_id = n;
 
-	if (code == KEY_POWER)
-		pr_info("%s: POWER-KEY(%d)\n", __FILE__, value);
+	printk("hw_rev is %d\n", board_id);
 
-	/* Enter Forced Upload
-	 *  Hold volume down key first
-	 *  and then press power key twice
-	 *  and volume up key should not be pressed
-	 */
-	if (value) {
-		if (code == VOLUME_UP)
-			volup_p = true;
-		if (code == VOLUME_DOWN)
-			voldown_p = true;
-		if (!volup_p && voldown_p) {
-			if (code == KEY_POWER) {
-				pr_info("%s: Forced Upload Count: %d\n",
-					__FILE__, ++loopcount);
-				if (loopcount == 2)
-					panic("Crash Key");
-			}
-		}
-
-#if defined(CONFIG_SEC_DEBUG_TSP_LOG) && (defined(CONFIG_TOUCHSCREEN_FTS) || defined(CONFIG_TOUCHSCREEN_SEC_TS))
-		/* dump TSP rawdata
-		 *	Hold volume up key first
-		 *	and then press home key twice
-		 *	and volume down key should not be pressed
-		 */
-		if (volup_p && !voldown_p) {
-			if (code == KEY_HOMEPAGE) {
-				pr_info("%s: count to dump tsp rawdata : %d\n",
-					 __func__, ++loopcount);
-				if (loopcount == 2) {
-#if defined(CONFIG_TOUCHSCREEN_FTS)
-					tsp_dump();
-#elif defined(CONFIG_TOUCHSCREEN_SEC_TS)
-					tsp_dump_sec();
-#endif
-					loopcount = 0;
-				}
-			}
-		}
-#endif
-	} else {
-		if (code == VOLUME_UP)
-			volup_p = false;
-		if (code == VOLUME_DOWN) {
-			loopcount = 0;
-			voldown_p = false;
-		}
-	}
+	return 1;
 }
-
-#if defined(CONFIG_BOOTING_VALIDATION)
-static bool sec_debug_valid_boot(void)
-{
-	unsigned int v;
-
-	exynos_pmu_read(EXYNOS_PMU_INFORM2, &v);
-
-	if (v == 0xF00DCAFE)
-		return true;
-	else
-		return false;
-}
-
-int sec_debug_valid_boot_init(void)
-{
-	if (!sec_debug_valid_boot())
-		BUG();
-
-	return 0;
-}
-late_initcall(sec_debug_valid_boot_init);
-#endif	/* CONFIG_BOOTING_VALIDATION */
+__setup("androidboot.revision=", board_id_setup);
+#endif
 
 #endif /* CONFIG_SEC_DEBUG */
+

@@ -92,9 +92,18 @@ void fimc_is_sensor_ctl_get_ae_index(struct fimc_is_device_sensor *device,
 	/* Below setting are different for each sensor */
 	if (module->sensor_id == SENSOR_NAME_S5K2P2 ||
 		module->sensor_id == SENSOR_NAME_S5K2P3 ||
+		module->sensor_id == SENSOR_NAME_S5K2P6 ||
 		module->sensor_id == SENSOR_NAME_S5K2P8 ||
+		module->sensor_id == SENSOR_NAME_S5K3P3 ||
+		module->sensor_id == SENSOR_NAME_S5K3P8 ||
+		module->sensor_id == SENSOR_NAME_S5K3L2 ||
+		module->sensor_id == SENSOR_NAME_S5K3M3 ||
 		module->sensor_id == SENSOR_NAME_IMX220 ||
-		module->sensor_id == SENSOR_NAME_IMX240) {
+		module->sensor_id == SENSOR_NAME_IMX240 ||
+		module->sensor_id == SENSOR_NAME_IMX258 ||
+		module->sensor_id == SENSOR_NAME_S5K5E9 ||
+		module->sensor_id == SENSOR_NAME_GC5035 ||
+		module->sensor_id == SENSOR_NAME_SR259) {
 		*expo_index = NEXT_FRAME;
 		*again_index = NEXT_FRAME;
 		*dgain_index = NEXT_FRAME;
@@ -509,6 +518,17 @@ void fimc_is_sensor_ctl_frame_evt(struct fimc_is_device_sensor *device)
 		memset(&applied_ae_setting, 0, sizeof(ae_setting));
 		fimc_is_sensor_ctl_adjust_ae_setting(device, &applied_ae_setting, cis_data);
 
+		/* set frame rate : Limit of max frame duration */
+		if (sensor_ctrl->frameDuration != 0 && module_ctl->valid_sensor_ctrl == true)
+			frame_duration = fimc_is_sensor_convert_ns_to_us(sensor_ctrl->frameDuration);
+		else
+			frame_duration = fimc_is_sensor_convert_ns_to_us(sensor_uctrl->frameDuration);
+
+		ret = fimc_is_sensor_ctl_set_frame_rate(device, frame_duration, 0);
+		if (ret < 0) {
+			err("[%s] frame number(%d) set frame duration fail\n", __func__, applied_frame_number);
+		}
+
 		/* Set exposureTime */
 		/* TODO: WDR mode */
 		if (sensor_ctrl->exposureTime != 0 && module_ctl->valid_sensor_ctrl == true) {
@@ -526,15 +546,10 @@ void fimc_is_sensor_ctl_frame_evt(struct fimc_is_device_sensor *device)
 		if (ret < 0) {
 			err("err!!! ret(%d)", ret);
 		}
+
 		sensor_uctrl->dynamicFrameDuration = fimc_is_sensor_convert_us_to_ns(ctrl.value);
 
-		/* set frame rate */
-		if (sensor_ctrl->frameDuration != 0 && module_ctl->valid_sensor_ctrl == true)
-			frame_duration = fimc_is_sensor_convert_ns_to_us(sensor_ctrl->frameDuration);
-		else
-			frame_duration = fimc_is_sensor_convert_ns_to_us(sensor_uctrl->frameDuration);
-
-		ret = fimc_is_sensor_ctl_set_frame_rate(device, frame_duration,
+		ret = fimc_is_sensor_ctl_set_frame_rate(device, 0,
 						fimc_is_sensor_convert_ns_to_us(sensor_uctrl->dynamicFrameDuration));
 		if (ret < 0) {
 			err("[%s] frame number(%d) set frame duration fail\n", __func__, applied_frame_number);
@@ -576,16 +591,22 @@ void fimc_is_sensor_ctl_frame_evt(struct fimc_is_device_sensor *device)
 		}
 
 	} else {
-		if (module_ctl->sensor_frame_number == applied_frame_number) {
-			err("[%s] frame number(%d) Shot process of AE is too slow, alg_reset_flag (%d)\n", __func__, applied_frame_number, module_ctl->alg_reset_flag);
+		if (module_ctl->alg_reset_flag == false) {
+			dbg_sensor("[%s] frame number(%d)  alg_reset_flag (%d)\n", __func__,
+					applied_frame_number, module_ctl->alg_reset_flag);
+		} else if (module_ctl->sensor_frame_number == applied_frame_number) {
+			err("[%s] frame number(%d) Shot process of AE is too slow, alg_reset_flag (%d)\n", __func__,
+					applied_frame_number, module_ctl->alg_reset_flag);
 		} else {
 			info("module->sen_framenum(%d), applied_frame_num(%d), alg_reset_flag (%d)\n",
 					module_ctl->sensor_frame_number, applied_frame_number, module_ctl->alg_reset_flag);
 		}
 	}
 
-	/* Pre-Flash on, Torch on/off */
-	ret = fimc_is_sensor_peri_pre_flash_fire(device->subdev_module, &vsync_count);
+	if (sensor_peri->subdev_flash != NULL) {
+		/* Pre-Flash on, Torch on/off */
+		ret = fimc_is_sensor_peri_pre_flash_fire(device->subdev_module, &vsync_count);
+	}
 
 	/* TODO */
 	/* FuncCompanionChangeConfig */

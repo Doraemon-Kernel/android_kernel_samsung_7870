@@ -43,12 +43,6 @@
 #include <linux/bit_spinlock.h>
 #include <trace/events/block.h>
 
-#ifdef CONFIG_PROC_STLOG
-#include <linux/fslog.h>
-#else
-#define ST_LOG(fmt,...)
-#endif
-
 static int fsync_buffers_list(spinlock_t *lock, struct list_head *list);
 
 #define BH_ENTRY(list) list_entry((list), struct buffer_head, b_assoc_buffers)
@@ -138,25 +132,11 @@ static void buffer_io_error(struct buffer_head *bh, char *msg)
 {
 	char b[BDEVNAME_SIZE];
 
-	if (!test_bit(BH_Quiet, &bh->b_state)) {
+	if (!test_bit(BH_Quiet, &bh->b_state))
 		printk_ratelimited(KERN_ERR
-			"Buffer I/O error on dev %s[%d:%d],"
-			"logical block %llu%s\n",
+			"Buffer I/O error on dev %s, logical block %llu%s\n",
 			bdevname(bh->b_bdev, b),
-			MAJOR(bh->b_bdev->bd_dev),
-			MINOR(bh->b_bdev->bd_dev),
 			(unsigned long long)bh->b_blocknr, msg);
-	
-		if (bh->b_bdev->bd_super &&
-			(bh->b_bdev->bd_super->s_magic == EXT4_SUPER_MAGIC)) {	
-			ST_LOG("Buffer I/O error on dev %s[%d:%d],"
-				"logical block %llu%s\n",
-				bdevname(bh->b_bdev, b),
-				MAJOR(bh->b_bdev->bd_dev),
-				MINOR(bh->b_bdev->bd_dev),
-				(unsigned long long)bh->b_blocknr, msg);
-		}
-	}
 }
 
 /*
@@ -3107,6 +3087,7 @@ int _submit_bh(int rw, struct buffer_head *bh, unsigned long bio_flags)
 		rw |= REQ_SYNC;
 		clear_buffer_sync_flush(bh);
 	}
+
 #ifdef CONFIG_JOURNAL_DATA_TAG
 	if(buffer_journal(bh)) {
 		set_bit(BIO_JOURNAL, &bio->bi_flags);

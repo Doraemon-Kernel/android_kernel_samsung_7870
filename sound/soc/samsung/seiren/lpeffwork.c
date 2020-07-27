@@ -42,7 +42,6 @@
 #define lpeff_prerr(s, ...)	pr_err( LPEFF_DEBUG_HEADER s, ##__VA_ARGS__ )
 
 extern struct mutex esa_mutex;
-extern int check_esa_compr_state(void);
 
 struct lpeff_workstruct {
 	struct task_struct *g_th_id;
@@ -55,15 +54,10 @@ struct lpeff_workstruct {
 };
 static struct lpeff_workstruct g_worker_data;
 
-void __iomem *g_effect_addr = NULL;
+void __iomem *g_effect_addr;
 char *lpeff_fw_lib_entry = NULL;
 
 static struct seiren_info g_si;
-
-void lpeff_set_effect_addr(void __iomem *effect_ram)
-{
-	g_effect_addr = effect_ram;
-}
 
 int lpeff_log(char *str)
 {
@@ -90,31 +84,23 @@ static ssize_t lpeff_show(struct device *dev,
 	u32 arg0, arg1, arg2, arg3, arg4, arg5, arg6;
 	u32 arg7, arg8, arg9, arg10, arg11, arg12;
 
-	if (!check_esa_compr_state())
-		return 1;
-
 	mutex_lock(&esa_mutex);
-	if (pm_runtime_get_sync(&g_si.pdev->dev) < 0) {
-		mutex_unlock(&esa_mutex);
-		return 1;
-	}
+	pm_runtime_get_sync(&g_si.pdev->dev);
 
-	if (g_effect_addr) {
-		elpe_cmd = readl(g_effect_addr + ELPE_BASE + ELPE_CMD);
-		arg0 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG0);
-		arg1 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG1);
-		arg2 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG2);
-		arg3 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG3);
-		arg4 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG4);
-		arg5 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG5);
-		arg6 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG6);
-		arg7 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG7);
-		arg8 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG8);
-		arg9 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG9);
-		arg10 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG10);
-		arg11 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG11);
-		arg12 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG12);
-	}
+	elpe_cmd = readl(g_effect_addr + ELPE_BASE + ELPE_CMD);
+	arg0 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG0);
+	arg1 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG1);
+	arg2 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG2);
+	arg3 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG3);
+	arg4 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG4);
+	arg5 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG5);
+	arg6 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG6);
+	arg7 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG7);
+	arg8 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG8);
+	arg9 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG9);
+	arg10 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG10);
+	arg11 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG11);
+	arg12 = readl(g_effect_addr + ELPE_BASE + ELPE_ARG12);
 
 	/* change src, dst address to offset value */
 #if 0
@@ -135,15 +121,14 @@ static ssize_t lpeff_show(struct device *dev,
 
 static DEVICE_ATTR(lpeff, S_IRUGO, lpeff_show, NULL);
 
-int lpeff_init(struct seiren_info *si)
+int lpeff_init(struct seiren_info si)
 {
 	int ret = 0;
 
-	memcpy(&g_si, si, sizeof(struct seiren_info));
-#ifndef CONFIG_SOC_EXYNOS8890
-	g_effect_addr = si->effect_ram;
+	memcpy(&g_si, &si, sizeof(struct seiren_info));
+	g_effect_addr = si.effect_ram;
+
 	printk("g_effect_addr = 0x%p \n", g_effect_addr);
-#endif
 
 	ret = device_create_file(&g_si.pdev->dev, &dev_attr_lpeff);
 	if (ret) {

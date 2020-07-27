@@ -26,7 +26,6 @@
 #include <sound/tlv.h>
 
 #include "compr.h"
-#include "lpass.h"
 #include "./seiren/seiren.h"
 #ifdef CONFIG_SND_ESA_SA_EFFECT
 #include "esa_sa_effect.h"
@@ -439,20 +438,10 @@ static int compr_open(struct snd_compr_stream *cstream)
 #ifdef AUDIO_PERF
 	prtd->start_time[OPEN_T] = sched_clock();
 #endif
-	ret = esa_compr_open();
-	if (ret) {
-		pr_err("%s: could not open audio firmware(%d)\n", __func__, ret);
-		goto compr_audio_firmware_open_err;
-	}
-
+	esa_compr_open();
 	return 0;
 
-compr_audio_firmware_open_err:
-	if (substream->runtime)
-		kfree(substream->runtime->hw_constraints.rules);
-	kfree(substream->runtime);
 compr_audio_processor_alloc_err:
-	kfree(prtd->ap);
 	kfree(prtd);
 	esa_compr_set_state(false);
 	return ret;
@@ -742,9 +731,10 @@ static int compr_trigger(struct snd_compr_stream *cstream, int cmd)
 		pr_info("%s: SND_COMPR_TRIGGER_NEXT_TRACK\n", __func__);
 		break;
 	case SND_COMPR_TRIGGER_PARTIAL_DRAIN:
+		pr_info("%s: SND_COMPR_TRIGGER_PARTIAL_DRAIN\n", __func__);
 	case SND_COMPR_TRIGGER_DRAIN:
-		pr_info("%s: %s\n", __func__, (SND_COMPR_TRIGGER_PARTIAL_DRAIN == cmd) ? "SND_COMPR_TRIGGER_PARTIAL_DRAIN" : "SND_COMPR_TRIGGER_DRAIN");
-
+		if (SND_COMPR_TRIGGER_DRAIN == cmd)
+			pr_info("%s: SND_COMPR_TRIGGER_DRAIN\n", __func__);
 		/* Make sure all the data is sent to F/W before sending EOS */
 		spin_lock_irqsave(&prtd->lock, flags);
 #ifdef AUDIO_PERF

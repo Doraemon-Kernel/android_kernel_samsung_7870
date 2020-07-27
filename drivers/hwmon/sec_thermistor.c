@@ -32,7 +32,7 @@
 #include <linux/platform_data/sec_thermistor.h>
 #include <linux/sec_sysfs.h>
 
-#define ADC_SAMPLING_CNT	5
+#define ADC_SAMPLING_CNT	7
 
 struct sec_therm_info {
 	struct device *dev;
@@ -47,6 +47,8 @@ enum sec_thermistor_type {
 	TYPE_SEC_THREM_AP,	/* Close to AP */
 	TYPE_SEC_THREM_PA,	/* Close to PA */
 	TYPE_SEC_THREM_CAM_FLASH,	/* Close to CAM_FLASH */
+	TYPE_SEC_THREM_WIFI,	/* Wifi thermistor */
+	TYPE_SEC_THREM_BLANKET,	/* Blanket thermistor for Tablets */
 	NR_TYPE_SEC_TERM
 };
 
@@ -54,6 +56,8 @@ static const struct platform_device_id sec_thermistor_id[] = {
 	{ "sec-ap-thermistor", TYPE_SEC_THREM_AP },
 	{ "sec-pa-thermistor", TYPE_SEC_THREM_PA },
 	{ "sec-cf-thermistor", TYPE_SEC_THREM_CAM_FLASH },
+	{ "sec-wf-thermistor", TYPE_SEC_THREM_WIFI },
+	{ "sec-bk-thermistor", TYPE_SEC_THREM_BLANKET },
 	{ },
 };
 
@@ -64,6 +68,10 @@ static const struct of_device_id sec_therm_match[] = {
 		.data = &sec_thermistor_id[TYPE_SEC_THREM_PA] },
 	{ .compatible = "samsung,sec-cf-thermistor",
 		.data = &sec_thermistor_id[TYPE_SEC_THREM_CAM_FLASH] },
+	{ .compatible = "samsung,sec-wf-thermistor",
+		.data = &sec_thermistor_id[TYPE_SEC_THREM_WIFI] },
+	{ .compatible = "samsung,sec-bk-thermistor",
+		.data = &sec_thermistor_id[TYPE_SEC_THREM_BLANKET] },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, sec_therm_match);
@@ -154,6 +162,7 @@ static int convert_adc_to_temper(struct sec_therm_info *info, unsigned int adc)
 {
 	int low = 0;
 	int high = 0;
+	int mid = 0;
 	int temp = 0;
 	int temp2 = 0;
 
@@ -170,7 +179,6 @@ static int convert_adc_to_temper(struct sec_therm_info *info, unsigned int adc)
 		return info->pdata->adc_table[high].temperature;
 
 	while (low <= high) {
-		int mid = 0;
 		mid = (low + high) / 2;
 		if (info->pdata->adc_table[mid].adc > adc)
 			high = mid - 1;
@@ -308,6 +316,8 @@ static int sec_therm_probe(struct platform_device *pdev)
 	case TYPE_SEC_THREM_AP:
 	case TYPE_SEC_THREM_PA:
 	case TYPE_SEC_THREM_CAM_FLASH:
+	case TYPE_SEC_THREM_WIFI:
+	case TYPE_SEC_THREM_BLANKET:
 		/* Allow only a single device instance for each device type */
 		if (sec_therm_single_inst[pdev_id->driver_data])
 			return -EPERM;

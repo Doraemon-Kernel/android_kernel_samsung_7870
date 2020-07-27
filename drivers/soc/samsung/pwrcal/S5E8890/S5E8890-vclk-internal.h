@@ -298,7 +298,6 @@ M1D1G1_EXTERN(sclk_decon1_eclk1_local)
 P1_EXTERN(p1_disp_pll)
 P1_EXTERN(p1_aud_pll)
 P1_EXTERN(p1_mfc_pll)
-P1_EXTERN(p1_bus3_pll)
 
 D1_EXTERN(d1_sclk_i2s_local)
 D1_EXTERN(d1_sclk_pcm_local)
@@ -402,7 +401,7 @@ DFS_EXTERN(dvfs_mif)
 DFS_EXTERN(dvfs_int)
 DFS_EXTERN(dvfs_cam)
 DFS_EXTERN(dvfs_disp)
-DFS_EXTERN(dvs_g3dm)
+
 
 
 #endif

@@ -33,7 +33,7 @@ struct fimc_is_device_ischain;
 #define CSIS_NOTIFY_FSTART	2
 #define CSIS_NOTIFY_FEND	3
 
-#define SENSOR_MAX_ENUM			20
+#define SENSOR_MAX_ENUM			SENSOR_NAME_END
 #define SENSOR_DEFAULT_FRAMERATE	30
 
 #define SENSOR_MODE_MASK		0xFFFF0000
@@ -88,6 +88,31 @@ struct fimc_is_device_ischain;
 	.mipi_speed	= 0,			\
 }
 
+#define FIMC_IS_SENSOR_CFG_SOC(w, h, f, s, m) {	\
+	.width		= w,			\
+	.height		= h,			\
+	.framerate	= f,			\
+	.settle		= s,			\
+	.mode		= m,			\
+	.lanes		= 0,			\
+	.mipi_speed	= 0,			\
+}
+
+#if defined(CONFIG_SECURE_CAMERA_USE_SMC)
+#define MC_SECURE_CAMERA_SYSREG_PROT    ((uint32_t)(0x82002132))
+#define MC_SECURE_CAMERA_INIT           ((uint32_t)(0x83000041))
+#define MC_SECURE_CAMERA_CFW_ENABLE     ((uint32_t)(0x83000042))
+#define MC_SECURE_CAMERA_PREPARE        ((uint32_t)(0x83000043))
+#define MC_SECURE_CAMERA_UNPREPARE      ((uint32_t)(0x83000044))
+
+enum fimc_is_sensor_smc_state {
+	FIMC_IS_SENSOR_SMC_INIT = 0,
+	FIMC_IS_SENSOR_SMC_CFW_ENABLE,
+	FIMC_IS_SENSOR_SMC_PREPARE,
+	FIMC_IS_SENSOR_SMC_UNPREPARE,
+};
+#endif
+
 enum fimc_is_sensor_output_entity {
 	FIMC_IS_SENSOR_OUTPUT_NONE = 0,
 	FIMC_IS_SENSOR_OUTPUT_FRONT,
@@ -96,7 +121,8 @@ enum fimc_is_sensor_output_entity {
 enum fimc_is_sensor_force_stop {
 	FIMC_IS_BAD_FRAME_STOP = 0,
 	FIMC_IS_MIF_THROTTLING_STOP = 1,
-	FIMC_IS_FLITE_OVERFLOW_STOP = 2
+	FIMC_IS_FLITE_OVERFLOW_STOP = 2,
+	FIMC_IS_3AA_STOP = 3,
 };
 
 enum fimc_is_module_state {
@@ -147,6 +173,10 @@ struct fimc_is_module_enum {
 	u32						pixel_height;
 	u32						active_width;
 	u32						active_height;
+	u32						margin_left;
+	u32						margin_right;
+	u32						margin_top;
+	u32						margin_bottom;
 	u32						max_framerate;
 	u32						position;
 	u32						mode;
@@ -161,7 +191,10 @@ struct fimc_is_module_enum {
 	struct fimc_is_sensor_ops			*ops;
 	char						*sensor_maker;
 	char						*sensor_name;
+	char						*sensor_vendorid;
 	char						*setfile_name;
+	struct hrtimer					vsync_timer;
+	struct work_struct				vsync_work;
 	void						*private_data;
 	struct exynos_platform_fimc_is_module		*pdata;
 	struct device					*dev;
@@ -215,8 +248,8 @@ struct fimc_is_device_sensor {
 	struct work_struct				instant_work;
 	unsigned long					state;
 	spinlock_t					slock_state;
-#if defined(CONFIG_SECURE_CAMERA_USE)
-        enum fimc_is_sensor_smc_state                smc_state;
+#if defined(CONFIG_SECURE_CAMERA_USE_SMC)
+	enum fimc_is_sensor_smc_state			smc_state;
 #endif
 
 	/* hardware configuration */
@@ -245,6 +278,11 @@ struct fimc_is_device_sensor {
 	int						exposure_time;
 	u64						frame_duration;
 
+#ifdef CONFIG_OIS_USE
+	/* for set ois mode on DICO*/
+	int						ois_mode;
+#endif
+
 	/* ENABLE_DTP */
 	bool						dtp_check;
 	struct timer_list				dtp_timer;
@@ -256,6 +294,14 @@ struct fimc_is_device_sensor {
 
 	struct exynos_platform_fimc_is_sensor		*pdata;
 	void						*private_data;
+
+#ifdef ENABLE_INIT_AWB
+	/* backup AWB gains for use initial gain */
+	float					init_wb[WB_GAIN_COUNT];
+	float					last_wb[WB_GAIN_COUNT];
+	float					chk_wb[WB_GAIN_COUNT];
+	u32 					init_wb_cnt;
+#endif
 };
 
 int fimc_is_sensor_open(struct fimc_is_device_sensor *device,
@@ -288,9 +334,9 @@ int fimc_is_sensor_s_frame_duration(struct fimc_is_device_sensor *device,
 	u32 frame_duration);
 int fimc_is_sensor_s_exposure_time(struct fimc_is_device_sensor *device,
 	u32 exposure_time);
-int fimc_is_sensor_s_fcount(struct fimc_is_device_sensor *device);
 int fimc_is_sensor_s_again(struct fimc_is_device_sensor *device, u32 gain);
 int fimc_is_sensor_s_shutterspeed(struct fimc_is_device_sensor *device, u32 shutterspeed);
+int fimc_is_sensor_s_fcount(struct fimc_is_device_sensor *device);
 
 struct fimc_is_sensor_cfg * fimc_is_sensor_g_mode(struct fimc_is_device_sensor *device);
 int fimc_is_sensor_mclk_on(struct fimc_is_device_sensor *device, u32 scenario, u32 channel);
@@ -316,9 +362,15 @@ int fimc_is_sensor_deinit_module(struct fimc_is_module_enum *module);
 int fimc_is_sensor_g_position(struct fimc_is_device_sensor *device);
 int fimc_is_search_sensor_module(struct fimc_is_device_sensor *device,
 	u32 sensor_id, struct fimc_is_module_enum **module);
+int fimc_is_search_sensor_module_with_position(struct fimc_is_device_sensor *device,
+	u32 sensor_id, u32 position, struct fimc_is_module_enum **module);
 int fimc_is_sensor_tag(struct fimc_is_device_sensor *device,
 	struct fimc_is_frame *frame);
-
+#ifdef CONFIG_OIS_USE
+int fimc_is_sensor_g_ois_mode(struct fimc_is_device_ischain *device,
+	struct fimc_is_queue *queue, u32 index);
+int fimc_is_sensor_ois_shift(struct fimc_is_device_sensor *device, u32 position);
+#endif
 extern const struct fimc_is_queue_ops fimc_is_sensor_ops;
 extern const struct fimc_is_queue_ops fimc_is_sensor_subdev_ops;
 

@@ -31,7 +31,6 @@
 #include <linux/power_supply.h>
 #include <linux/slab.h>
 #include <linux/device.h>
-#include <linux/wakelock.h>
 
 /* definitions */
 #define	SEC_SIZEOF_POWER_SUPPLY_TYPE	POWER_SUPPLY_TYPE_WIRELESS_REMOVE
@@ -347,8 +346,8 @@ enum sec_battery_temp_check {
 
 struct sec_bat_adc_table_data {
 #ifdef CONFIG_OF
-	unsigned int adc;
-	unsigned int data;
+	int adc;
+	int data;
 #else
 	int adc;
 	int data;
@@ -588,6 +587,20 @@ static inline struct power_supply *get_power_supply_by_name(char *name)
 #define psy_do_property(name, function, property, value) \
 {	\
 	struct power_supply *psy;	\
+	int ret;	\
+	psy = get_power_supply_by_name((name));	\
+	if (!psy) {	\
+		value.intval = 0;	\
+	} else {	\
+		ret = psy->function##_property(psy, (property), &(value)); \
+		if (ret < 0) {	\
+			value.intval = 0;	\
+		}	\
+	}	\
+}
+
+#define psy_do_property_dup(name, function, property, value) \
+{	\
 	int ret;	\
 	psy = get_power_supply_by_name((name));	\
 	if (!psy) {	\

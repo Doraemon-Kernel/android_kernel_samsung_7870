@@ -13,7 +13,7 @@
 #ifndef __EXYNOS_MODEM_CTRL_H
 #define __EXYNOS_MODEM_CTRL_H
 
-#ifdef CONFIG_SOC_EXYNOS8890
+#if defined(CONFIG_SOC_EXYNOS8890) || defined(CONFIG_SOC_EXYNOS7870)
 extern int ss310ap_force_crash_exit_ext(void);
 #endif
 

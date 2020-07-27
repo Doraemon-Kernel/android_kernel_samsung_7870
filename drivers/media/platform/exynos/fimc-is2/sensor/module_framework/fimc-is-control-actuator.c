@@ -34,6 +34,14 @@ int fimc_is_actuator_ctl_set_position(struct fimc_is_device_sensor *device,
 		goto p_err;
 	}
 
+#ifdef CONFIG_OIS_USE
+	ret = fimc_is_sensor_ois_shift(device, position);
+	if (ret < 0) {
+		err("OIS Shift compansation fail\n");
+		goto p_err;
+	}
+#endif
+
 p_err:
 	return ret;
 }
@@ -161,8 +169,8 @@ int fimc_is_actuator_notify_m2m_actuator(struct v4l2_subdev *subdev)
 	module = (struct fimc_is_module_enum *)v4l2_get_subdevdata(subdev);
 	if (unlikely(!module)) {
 		err("%s, module in is NULL", __func__);
-		return -EINVAL;
-	}
+ 		return -EINVAL;
+ 	}
 
 	sensor_peri = (struct fimc_is_device_sensor_peri *)module->private_data;
 	BUG_ON(!sensor_peri);

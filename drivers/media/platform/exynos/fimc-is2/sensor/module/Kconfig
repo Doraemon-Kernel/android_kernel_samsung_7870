@@ -61,6 +61,18 @@ config CAMERA_SENSOR_5E3_OBJ
         default n
         help
           Use to build 5E3 camera sensor.
+config CAMERA_SENSOR_5E6_OBJ
+        bool "Use 5E6 camera sensor"
+        depends on CAMERA_MODULE_SELECT
+        default n
+        help
+          Use to build 5E6 camera sensor.
+config CAMERA_SENSOR_5F1_OBJ
+        bool "Use 5F1 camera sensor"
+        depends on CAMERA_MODULE_SELECT
+        default n
+        help
+          Use to build 5F1 camera sensor.
 config CAMERA_SENSOR_IMX135_OBJ
         bool "Use IMX135 camera sensor"
         depends on CAMERA_MODULE_SELECT
@@ -115,12 +127,6 @@ config CAMERA_SENSOR_2P3_OBJ
         default n
         help
           Use to build 2P3 camera sensor.
-config CAMERA_SENSOR_2L1_OBJ
-        bool "Use 2L1 camera sensor"
-        depends on CAMERA_MODULE_SELECT
-        default n
-        help
-          Use to build 2L1 camera sensor.
 config CAMERA_SENSOR_3H5_OBJ
         bool "Use 3H5 camera sensor"
         depends on CAMERA_MODULE_SELECT
@@ -175,18 +181,24 @@ config CAMERA_SENSOR_4H5_OBJ
         default n
         help
           Use to build 4H5 camera sensor.
-config CAMERA_SENSOR_4H5YC_OBJ
-        bool "Use 4H5YC camera sensor"
-        depends on CAMERA_MODULE_SELECT
-        default n
-        help
-          Use to build 4H5YC camera sensor.
 config CAMERA_SENSOR_SR261_OBJ
         bool "Use SR261 camera sensor"
         depends on CAMERA_MODULE_SELECT
         default n
         help
           Use to build SR261 camera sensor.
+config CAMERA_SENSOR_SR352_OBJ
+        bool "Use SR352 camera sensor"
+        depends on CAMERA_MODULE_SELECT
+        default n
+        help
+          Use to build SR352 camera sensor.
+config CAMERA_SENSOR_SR130PC20_OBJ
+        bool "Use SR130PC20 camera sensor"
+        depends on CAMERA_MODULE_SELECT
+        default n
+        help
+          Use to build SR130PC20 camera sensor.
 config CAMERA_SENSOR_4E6_OBJ
         bool "Use 4E6 camera sensor"
         depends on CAMERA_MODULE_SELECT
@@ -211,15 +223,9 @@ config CAMERA_SENSOR_5E2_OBJ
         default n
         help
           Use to build 5E2 camera sensor.
-config CAMERA_SENSOR_3P3_OBJ
-        bool "Use 3P3 camera sensor"
+config CAMERA_USE_SOC_SENSOR
+        bool "Use soc camera sensor"
         depends on CAMERA_MODULE_SELECT
         default n
         help
-          Use to build 3P3 camera sensor.
- config CAMERA_SENSOR_5E6_OBJ
-        bool "Use 5E6 camera sensor"
-        depends on CAMERA_MODULE_SELECT
-        default n
-        help
-          Use to build 5E6 camera sensor.
+          Use to build SOC(SR352,SR130PC20) camera sensor.

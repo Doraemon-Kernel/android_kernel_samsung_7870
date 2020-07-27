@@ -18,11 +18,6 @@
 #include <linux/io.h>
 #include <linux/interrupt.h>
 #include <linux/exynos-busmon.h>
-#include <linux/exynos-modem-ctrl.h>
-
-#ifdef CONFIG_SEC_DEBUG
-#include <linux/sec_debug.h>
-#endif
 
 /* S-NODE, M-NODE Common */
 #define OFFSET_TIMEOUT_REG		(0x2000)
@@ -41,8 +36,8 @@
 
 #define REG_DBG_CTL			(0x10)
 #define REG_TIMEOUT_INIT_VAL		(0x14)
-#define REG_R_TIMEOUT_MO		(0x20)
-#define REG_W_TIMEOUT_MO		(0x30)
+#define REG_R_TIMEOUT_MO		(0x18)
+#define REG_W_TIMEOUT_MO		(0x1C)
 
 #define BIT_ERR_CODE(x)			(((x) & (0xF << 28)) >> 28)
 #define BIT_ERR_OCCURRED(x)		(((x) & (0x1 << 27)) >> 27)
@@ -80,7 +75,6 @@ struct busmon_rpathinfo {
 	unsigned int id;
 	char *port_name;
 	char *dest_name;
-	unsigned int bits;
 };
 
 struct busmon_masterinfo {
@@ -115,13 +109,21 @@ static char *busmon_errcode[] = {
 	"Invalid errorcode",
 };
 
+/* Error Code Description */
+static char *busmon_sfr_errmaster[] = {
+	"CPU(Access from either CPU clusters)",
+	"TREX_CCORE(The PERI S-node from the data backbone)",
+	"G3D(SFR accesses from G3D)",
+	"CP(SFR accesses from CP)",
+	"CPU(IMEM access only)",
+	"CPU(IMEM access only)",
+};
+
 struct busmon_nodegroup {
 	int irq;
 	char *name;
 	struct busmon_nodeinfo *nodeinfo;
 	unsigned int nodesize;
-	unsigned int irq_occurred;
-	bool panic_delayed;
 };
 
 struct busmon_platdata {
@@ -131,79 +133,79 @@ struct busmon_platdata {
 };
 
 static struct busmon_rpathinfo rpathinfo[] = {
-	{0,	"G3D1",		"MEMS_0",	0x7F},
-	{65,	"CAM0",		"MEMS_0",	0x7F},
-	{81,	"CAM1",		"MEMS_0",	0x7F},
-	{1,	"DISP0_0",	"MEMS_0",	0x7F},
-	{17,	"DISP0_1",	"MEMS_0",	0x7F},
-	{33,	"DISP1_0",	"MEMS_0",	0x7F},
-	{49,	"DISP1_1",	"MEMS_0",	0x7F},
-	{97,	"ISP0",		"MEMS_0",	0x7F},
-	{66,	"CAM0",		"MEMS_0",	0x7F},
-	{82,	"CAM1",		"MEMS_0",	0x7F},
-	{2,	"DISP0_0",	"MEMS_0",	0x7F},
-	{18,	"DISP0_1",	"MEMS_0",	0x7F},
-	{34,	"DISP1_0",	"MEMS_0",	0x7F},
-	{50,	"DISP1_1",	"MEMS_0",	0x7F},
-	{98,	"ISP0",		"MEMS_0",	0x7F},
-	{3,	"IMEM",		"MEMS_0",	0x7F},
-	{35,	"AUD",		"MEMS_0",	0x7F},
-	{67,	"CORESIGHT",	"MEMS_0",	0x7F},
-	{11,	"CAM1",		"MEMS_0",	0x7F},
-	{75,	"FSYS1",	"MEMS_0",	0x7F},
-	{43,	"ISP0",		"MEMS_0",	0x7F},
-	{19,	"CP",		"MEMS_0",	0x7F},
-	{4,	"FSYS0",	"MEMS_0",	0x7F},
-	{52,	"MFC0",		"MEMS_0",	0x7F},
-	{68,	"MFC1",		"MEMS_0",	0x7F},
-	{20,	"MSCL0",	"MEMS_0",	0x7F},
-	{36,	"MSCL1",	"MEMS_0",	0x7F},
+	{0,	"G3D1",		"MEMS_0"},
+	{65,	"CAM0",		"MEMS_0"},
+	{81,	"CAM1",		"MEMS_0"},
+	{1,	"DISP0_0",	"MEMS_0"},
+	{17,	"DISP0_1",	"MEMS_0"},
+	{33,	"DISP1_0",	"MEMS_0"},
+	{49,	"DISP1_1",	"MEMS_0"},
+	{97,	"ISP0",		"MEMS_0"},
+	{66,	"CAM0",		"MEMS_0"},
+	{82,	"CAM1",		"MEMS_0"},
+	{2,	"DISP0_0",	"MEMS_0"},
+	{18,	"DISP0_1",	"MEMS_0"},
+	{34,	"DISP1_0",	"MEMS_0"},
+	{50,	"DISP1_1",	"MEMS_0"},
+	{98,	"ISP0",		"MEMS_0"},
+	{3,	"IMEM",		"MEMS_0"},
+	{35,	"AUD",		"MEMS_0"},
+	{67,	"CORESIGHT",	"MEMS_0"},
+	{11,	"CAM1",		"MEMS_0"},
+	{75,	"FSYS1",	"MEMS_0"},
+	{43,	"ISP0",		"MEMS_0"},
+	{19,	"CP",		"MEMS_0"},
+	{4,	"FSYS0",	"MEMS_0"},
+	{52,	"MFC0",		"MEMS_0"},
+	{68,	"MFC1",		"MEMS_0"},
+	{20,	"MSCL0",	"MEMS_0"},
+	{36,	"MSCL1",	"MEMS_0"},
 
-	{0,	"G3D1",		"MEMS_1",	0x7F},
-	{65,	"CAM0",		"MEMS_1",	0x7F},
-	{81,	"CAM1",		"MEMS_1",	0x7F},
-	{1,	"DISP0_0",	"MEMS_1",	0x7F},
-	{17,	"DISP0_1",	"MEMS_1",	0x7F},
-	{33,	"DISP1_0",	"MEMS_1",	0x7F},
-	{49,	"DISP1_1",	"MEMS_1",	0x7F},
-	{97,	"ISP0",		"MEMS_1",	0x7F},
-	{66,	"CAM0",		"MEMS_1",	0x7F},
-	{82,	"CAM1",		"MEMS_1",	0x7F},
-	{2,	"DISP0_0",	"MEMS_1",	0x7F},
-	{18,	"DISP0_1",	"MEMS_1",	0x7F},
-	{34,	"DISP1_0",	"MEMS_1",	0x7F},
-	{50,	"DISP1_1",	"MEMS_1",	0x7F},
-	{98,	"ISP0",		"MEMS_1",	0x7F},
-	{3,	"IMEM",		"MEMS_1",	0x7F},
-	{35,	"AUD",		"MEMS_1",	0x7F},
-	{67,	"CORESIGHT",	"MEMS_1",	0x7F},
-	{11,	"CAM1",		"MEMS_1",	0x7F},
-	{75,	"FSYS1",	"MEMS_1",	0x7F},
-	{43,	"ISP0",		"MEMS_1",	0x7F},
-	{19,	"CP",		"MEMS_1",	0x7F},
-	{4,	"FSYS0",	"MEMS_1",	0x7F},
-	{52,	"MFC0",		"MEMS_1",	0x7F},
-	{68,	"MFC1",		"MEMS_1",	0x7F},
-	{20,	"MSCL0",	"MEMS_1",	0x7F},
-	{36,	"MSCL1",	"MEMS_1",	0x7F},
+	{0,	"G3D1",		"MEMS_1"},
+	{65,	"CAM0",		"MEMS_1"},
+	{81,	"CAM1",		"MEMS_1"},
+	{1,	"DISP0_0",	"MEMS_1"},
+	{17,	"DISP0_1",	"MEMS_1"},
+	{33,	"DISP1_0",	"MEMS_1"},
+	{49,	"DISP1_1",	"MEMS_1"},
+	{97,	"ISP0",		"MEMS_1"},
+	{66,	"CAM0",		"MEMS_1"},
+	{82,	"CAM1",		"MEMS_1"},
+	{2,	"DISP0_0",	"MEMS_1"},
+	{18,	"DISP0_1",	"MEMS_1"},
+	{34,	"DISP1_0",	"MEMS_1"},
+	{50,	"DISP1_1",	"MEMS_1"},
+	{98,	"ISP0",		"MEMS_1"},
+	{3,	"IMEM",		"MEMS_1"},
+	{35,	"AUD",		"MEMS_1"},
+	{67,	"CORESIGHT",	"MEMS_1"},
+	{11,	"CAM1",		"MEMS_1"},
+	{75,	"FSYS1",	"MEMS_1"},
+	{43,	"ISP0",		"MEMS_1"},
+	{19,	"CP",		"MEMS_1"},
+	{4,	"FSYS0",	"MEMS_1"},
+	{52,	"MFC0",		"MEMS_1"},
+	{68,	"MFC1",		"MEMS_1"},
+	{20,	"MSCL0",	"MEMS_1"},
+	{36,	"MSCL1",	"MEMS_1"},
 
-	{0,	"IMEM",		"PERI",		0x1F},
-	{8,	"AUD",		"PERI",		0x1F},
-	{16,	"CORESIGHT",	"PERI",		0x1F},
-	{1,	"FSYS0",	"PERI",		0x1F},
-	{13,	"MFC0",		"PERI",		0x1F},
-	{17,	"MFC1",		"PERI",		0x1F},
-	{5,	"MSCL0",	"PERI",		0x1F},
-	{9,	"MSCL1",	"PERI",		0x1F},
-	{2,	"CAM1",		"PERI",		0x1F},
-	{18,	"FSYS1",	"PERI",		0x1F},
-	{10,	"ISP0",		"PERI",		0x1F},
+	{0,	"IMEM",		"PERI"},
+	{8,	"AUD",		"PERI"},
+	{16,	"CORESIGHT",	"PERI"},
+	{1,	"FSYS0",	"PERI"},
+	{13,	"MFC0",		"PERI"},
+	{17,	"MFC1",		"PERI"},
+	{5,	"MSCL0",	"PERI"},
+	{9,	"MSCL1",	"PERI"},
+	{2,	"CAM1",		"PERI"},
+	{18,	"FSYS1",	"PERI"},
+	{10,	"ISP0",		"PERI"},
 };
 
 static struct busmon_masterinfo masterinfo[] = {
 	/* DISP0_0 */
 	{"DISP0_0", 1 << 0, "sysmmu",	0x1},
-	{"DISP0_0", 0 << 0, "S-IDMA0",	0x3},
+	{"DISP0_0", 1 << 0, "S-IDMA0",	0x3},
 	{"DISP0_0", 1 << 1, "IDMA3",	0x3},
 
 	/* DISP0_1 */
@@ -304,17 +306,6 @@ static struct busmon_masterinfo masterinfo[] = {
 	{"CP", 1 << 3 | 1 << 4, "CSXAP",		0x1F},
 	{"CP", 1 << 0 | 1 << 3 | 1 << 4, "LMAC",	0x1F},
 	{"CP", 1 << 1 | 1 << 3 | 1 << 4, "HMtoL2",	0x1F},
-};
-
-static struct busmon_masterinfo masterinfo_sfr[] = {
-	{"CPU",		0, "Access from either CPU clusters",		0},
-	{"TREX_CCORE",	0, "The PERI S-node from the data backbone",	0},
-	{"G3D",		0, "SFR accesses from G3D",			0},
-	{"CP",		0, "SFR accesses from CP",			0},
-	{"CPU",		0, "IMEM access only",				0},
-	{"CPU",		0, "IMEM access only",				0},
-	{"Unknown",	0, "Unknown",					0},
-	{"Unknown",	0, "Unknown",					0},
 };
 
 static struct busmon_nodeinfo ccore_datapath[] = {
@@ -449,7 +440,7 @@ static struct busmon_rpathinfo* busmon_get_rpathinfo
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(rpathinfo); i++) {
-		if (pdata->rpathinfo[i].id == (id & pdata->rpathinfo[i].bits)) {
+		if (pdata->rpathinfo[i].id == id) {
 			if (dest_name && !strncmp(pdata->rpathinfo[i].dest_name,
 					dest_name, strlen(pdata->rpathinfo[i].dest_name))) {
 				rpath = &pdata->rpathinfo[i];
@@ -482,97 +473,45 @@ static struct busmon_masterinfo* busmon_get_masterinfo
 	return master;
 }
 
-static void busmon_init(struct busmon_dev *busmon, bool enabled)
+static void busmon_report_ext_info(struct busmon_dev *busmon,
+				   struct busmon_nodeinfo *node,
+				   unsigned int offset)
 {
-	struct busmon_platdata *pdata = busmon->pdata;
-	struct busmon_nodeinfo *node;
-	unsigned int offset;
-	int i, j;
+	unsigned int info_int, info0, info1, info2;
 
-	for (i = 0; i < ARRAY_SIZE(pdata->nodegroup); i++) {
-		node = pdata->nodegroup[i].nodeinfo;
-		for (j = 0; j < pdata->nodegroup[i].nodesize; j++) {
-			if (node[j].type == S_NODE && node[j].timeout_enabled) {
-				offset = OFFSET_TIMEOUT_REG;
-				/* Enable Timeout setting */
-				__raw_writel(enabled, node[j].regs + offset + REG_DBG_CTL);
-				/* set timeout interval value */
-				__raw_writel(node[j].time_val,
-					node[j].regs + offset + REG_TIMEOUT_INIT_VAL);
-				pr_debug("Exynos BUS Monitor irq:%u - %s timeout %sabled\n",
-					node[j].irq, node[j].name, enabled ? "en" : "dis");
-			}
-			if (node[j].err_rpt_enabled) {
-				/* clear previous interrupt of req_read */
-				offset = OFFSET_REQ_R;
-				__raw_writel(1, node[j].regs + offset + REG_INT_CLR);
-				/* enable interrupt */
-				__raw_writel(enabled, node[j].regs + offset + REG_INT_MASK);
+	info_int = __raw_readl(node->regs + offset + REG_INT_INFO);
+	info0 = __raw_readl(node->regs + offset + REG_EXT_INFO_0);
+	info1 = __raw_readl(node->regs + offset + REG_EXT_INFO_1);
+	info2 = __raw_readl(node->regs + offset + REG_EXT_INFO_2);
 
-				/* clear previous interrupt of req_write */
-				offset = OFFSET_REQ_W;
-				__raw_writel(1, node[j].regs + offset + REG_INT_CLR);
-				/* enable interrupt */
-				__raw_writel(enabled, node[j].regs + offset + REG_INT_MASK);
-
-				/* clear previous interrupt of response_read */
-				offset = OFFSET_RESP_R;
-				__raw_writel(1, node[j].regs + offset + REG_INT_CLR);
-				/* enable interrupt */
-				__raw_writel(enabled, node[j].regs + offset + REG_INT_MASK);
-
-				/* clear previous interrupt of response_write */
-				offset = OFFSET_RESP_W;
-				__raw_writel(1, node[j].regs + offset + REG_INT_CLR);
-				/* enable interrupt */
-				__raw_writel(enabled, node[j].regs + offset + REG_INT_MASK);
-				pr_debug("Exynos BUS Monitor irq:%u - %s error reporting %sabled\n",
-					node[j].irq, node[j].name, enabled ? "en" : "dis");
-			}
-		}
-	}
-}
-
-static void busmon_post_handler_by_master(struct busmon_dev *busmon,
-					  struct busmon_nodegroup *group,
-					  char *port, char *master, bool read)
-{
-	/* After treatment by master */
-	if (!port || strlen(port) < 1)
-		return;
-
-	if (!strncmp(port, "CP", strlen(port))) {
-		/* if master is DSP and operation is read, we don't care this */
-		if (master && !strncmp(master, "TL3MtoL2", strlen(master)) && read == true) {
-			group->panic_delayed = true;
-			group->irq_occurred = 0;
-			pr_info("busmon skips CP's DSP(TL3MtoL2) detected\n");
-		} else {
-			/* Disable busmon all interrupts */
-			busmon_init(busmon, false);
-			/* This call is for Exynos8890 only */
-			group->panic_delayed = true;
-			ss310ap_force_crash_exit_ext();
-		}
-	} else if (!strncmp(port, "CPU", strlen(port))) {
-		pr_info("busmon disabled for CPU exception\n");
-		/* Disable busmon all interrupts */
-		busmon_init(busmon, false);
-		group->panic_delayed = true;
-	}
+	pr_info("\n--------------------------------------------------------------------------------\n"
+		"Detail NODE information for debuggging\n\n"
+		"Node Name       : %s [address: 0x%08X]\n"
+		"INTERRUPT_INFO  : 0x%08X\n"
+		"EXT_INFO_0      : 0x%08X\n"
+		"EXT_INFO_1      : 0x%08X\n"
+		"EXT_INFO_2      : 0x%08X\n"
+		"--------------------------------------------------------------------------------\n",
+		node->name, node->phy_regs + offset,
+		info_int,
+		info0,
+		info1,
+		info2);
 }
 
 static void busmon_report_route(struct busmon_dev *busmon,
-			        struct busmon_nodegroup *group,
 				struct busmon_nodeinfo *node,
 				unsigned int offset)
 {
 	struct busmon_masterinfo *master = NULL;
 	struct busmon_rpathinfo *rpath = NULL;
-	unsigned int val, id, user;
+	unsigned int val, id, user, addr;
 
 	val = __raw_readl(node->regs + offset + REG_INT_INFO);
 	id = BIT_ID_VAL(val);
+
+	val = __raw_readl(node->regs + offset + REG_EXT_INFO_2);
+	user = BIT_AXUSER(val);
 
 	rpath = busmon_get_rpathinfo(busmon, id, node->need_rpath);
 	if (!rpath) {
@@ -588,18 +527,14 @@ static void busmon_report_route(struct busmon_dev *busmon,
 				"port:%s, id:%x, user:%x\n",
 				rpath->port_name, id, user);
 		} else {
-
-			pr_auto(ASL3, "\n--------------------------------------------------------------------------------\n"
+			addr = __raw_readl(node->regs + offset + REG_EXT_INFO_0);
+			pr_info("\n--------------------------------------------------------------------------------\n"
 				"Route Information for DATA transaction\n\n"
-				"Master IP:%s's %s ---> Target:%s\n",
-				master->port_name, master->master_name, rpath->dest_name);
-
-			busmon_post_handler_by_master(busmon, group,
-							master->port_name,
-							master->master_name,
-							(offset == OFFSET_RESP_R) ? true : false);
+				"Master IP:%s's %s ---> Target:%s(addr: 0x%08X)\n",
+				master->port_name, master->master_name, rpath->dest_name, addr);
 		}
 	}
+
 }
 
 static void busmon_report_info(struct busmon_dev *busmon,
@@ -607,23 +542,30 @@ static void busmon_report_info(struct busmon_dev *busmon,
 			       struct busmon_nodeinfo *node,
 			       unsigned int offset)
 {
-	unsigned int int_info, errcode, info0, info1, info2;
-	bool read = false, req = false;
-#ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
-	char temp_buf[SZ_128];
-#endif
+	unsigned int val, errcode, addr;
+	bool read = false, req;
 
-	int_info = __raw_readl(node->regs + offset + REG_INT_INFO);
-	if (!BIT_ERR_VALID(int_info)) {
-		pr_info("no information, %s/offset:%x is stopover, "
-			"check other node\n", node->name, offset);
+	val = __raw_readl(node->regs + offset + REG_INT_INFO);
+	if (!BIT_ERR_VALID(val)) {
+		if (!strncmp(node->name, "P_CCORE_BUS_M_NODE", strlen(node->name))) {
+			unsigned int master;
+			master = BIT_ID_VAL(val) & 0x7;
+			pr_info("\n--------------------------------------------------------------------------------\n"
+				"Route Information for SFR transaction\n\n"
+				"Master IP       : %s\n"
+				"AxID            : 0x%X\n"
+				"--------------------------------------------------------------------------------\n",
+				busmon_sfr_errmaster[master],
+				BIT_ID_VAL(val));
+		} else {
+			pr_info("no information, %s/offset:%x is stopover, "
+				"check other node\n", node->name, offset);
+		}
 		return;
 	}
 
-	errcode = BIT_ERR_CODE(int_info);
-	info0 = __raw_readl(node->regs + offset + REG_EXT_INFO_0);
-	info1 = __raw_readl(node->regs + offset + REG_EXT_INFO_1);
-	info2 = __raw_readl(node->regs + offset + REG_EXT_INFO_2);
+	errcode = BIT_ERR_CODE(val);
+	addr = __raw_readl(node->regs + offset + REG_EXT_INFO_0);
 
 	switch(offset) {
 	case OFFSET_REQ_R:
@@ -635,35 +577,6 @@ static void busmon_report_info(struct busmon_dev *busmon,
 			/* Only S-Node is able to make log to registers */
 			pr_info("invalid logged, see more following information\n");
 			break;
-		} else {
-			if (!strncmp(node->name, "P_CCORE_BUS_M_NODE", strlen(node->name))) {
-				/* SFR Path */
-				unsigned int master;
-				master = BIT_ID_VAL(int_info) & 0x7;
-
-				pr_auto(ASL3, "\n--------------------------------------------------------------------------------\n"
-					"Route Information for SFR transaction\n\n"
-					"Master IP		 : %s - %s\n"
-					"AxID			 : 0x%X\n"
-					"--------------------------------------------------------------------------------\n",
-					masterinfo_sfr[master].port_name,
-					masterinfo_sfr[master].master_name,
-					BIT_ID_VAL(int_info));
-
-				busmon_post_handler_by_master(busmon, group,
-								masterinfo_sfr[master].port_name,
-								masterinfo_sfr[master].master_name, read);
-			} else if (!strncmp(node->name, "CCORE_CP_M_NODE", strlen(node->name))){
-				struct busmon_masterinfo* master =
-					busmon_get_masterinfo(busmon, "CP", BIT_AXUSER(info2));
-				if (master)
-					busmon_post_handler_by_master(busmon, group,
-									master->port_name,
-									master->master_name, read);
-				else
-					pr_info("failed to get CP's master information\n");
-
-			}
 		}
 		break;
 	case OFFSET_RESP_R:
@@ -675,19 +588,10 @@ static void busmon_report_info(struct busmon_dev *busmon,
 			/* Only S-Node is able to make log to registers */
 			pr_info("invalid logged, see more following information\n");
 			break;
-		} else {
-			/* 0x6 means timeout */
-			if (errcode == 0x6) {
-				unsigned int mo_offset = read ? REG_R_TIMEOUT_MO : REG_W_TIMEOUT_MO;
-				pr_info("\n--------------------------------------------------------------------------------\n"
-					"Additional information for timeout error\n\n"
-					"Timeout MO val  : 0x%08X\n",
-					__raw_readl(node->regs + mo_offset + OFFSET_TIMEOUT_REG));
-			}
 		}
 		if (node->need_rpath) {
 			/* Data Path */
-			busmon_report_route(busmon, group, node, offset);
+			busmon_report_route(busmon, node, offset);
 		}
 		break;
 	default:
@@ -695,37 +599,29 @@ static void busmon_report_info(struct busmon_dev *busmon,
 		break;
 	}
 
-	pr_auto(ASL3, "\n--------------------------------------------------------------------------------\n"
-		"Transaction information => [%s, %s] Fail to access\n\n"
-		"Detect reason   : %s\n"
-		"Target address  : 0x%llX\n"
-		"Error type      : %s\n"
-		"Group           : %s\n",
-		read ? "READ" : "WRITE",
-		req ? "REQUEST" : "RESPONSE",
+	pr_info("\n--------------------------------------------------------------------------------\n"
+		"Transaction information => Fail to access %s %s \n\n"
+		"reason          : %s\n"
+		"Target address  : 0x%08X\n"
+		"error type      : %s\n"
+		"type            : %s\n",
+		read ? "reading" : "wrting",
+		req ? "request" : "response",
 		node->comment,
-		(unsigned long long)((info1 & (GENMASK(3, 0)) << 32) | info0),
+		addr,
 		busmon_errcode[errcode],
 		group->name);
 
-	pr_auto(ASL3, "\n--------------------------------------------------------------------------------\n"
-		"Detail NODE information for debuggging\n\n"
-		"Node Name		 : %s(0x%08X)\n"
-		"INTERRUPT_INFO  : 0x%08X\n"
-		"EXT_INFO_0 	 : 0x%08X\n"
-		"EXT_INFO_1 	 : 0x%08X\n"
-		"EXT_INFO_2 	 : 0x%08X\n"
-		"--------------------------------------------------------------------------------\n",
-		node->name, node->phy_regs + offset,
-		int_info, info0, info1, info2);
+	/* 0x6 means timeout */
+	if (node->type == S_NODE && errcode == 0x6) {
+		unsigned int mo_offset = read ? REG_R_TIMEOUT_MO : REG_W_TIMEOUT_MO;
+		pr_info("\n--------------------------------------------------------------------------------\n"
+			"additional information for timeout error\n\n"
+			"Timeout MO val  : 0x%08X\n", __raw_readl(node->regs + offset + mo_offset));
+	}
 
-#ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
-	snprintf(temp_buf, SZ_128, "%s (0x%08X) / 0x%08X / Target : 0x%08X / 0x%08X / 0x%08X",
-		node->name, node->phy_regs + offset,
-		int_info, info0, info1, info2);
-	sec_debug_set_extra_info_busmon(temp_buf);
-#endif
-
+	/* report extention raw information of register */
+	busmon_report_ext_info(busmon, node, offset);
 }
 
 static int busmon_parse_info(struct busmon_dev *busmon,
@@ -784,12 +680,6 @@ static int busmon_parse_info(struct busmon_dev *busmon,
 	return ret;
 }
 
-static bool busmon_panic = false;
-bool busmon_get_panic(void)
-{
-       return busmon_panic;
-}
-
 static irqreturn_t busmon_irq_handler(int irq, void *data)
 {
 	struct busmon_dev *busmon = (struct busmon_dev *)data;
@@ -803,8 +693,8 @@ static irqreturn_t busmon_irq_handler(int irq, void *data)
 	/* Search busmon group */
 	for (i = 0; i < ARRAY_SIZE(pdata->nodegroup); i++) {
 		if ((irq - 32) == pdata->nodegroup[i].irq) {
-			pr_info("%s group, irq %d occurrs \n",
-				pdata->nodegroup[i].name, irq - 32);
+			pr_info("%s group, %d interrupt occurrs \n",
+					pdata->nodegroup[i].name, irq - 32);
 			group = &pdata->nodegroup[i];
 			break;
 		}
@@ -813,19 +703,13 @@ static irqreturn_t busmon_irq_handler(int irq, void *data)
 	if (group) {
 		ret = busmon_parse_info(busmon, group, true);
 		if (!ret) {
-			pr_info("%s can't find the error - irq %d\n",
-				group->name, irq - 32);
-		} else {
-			if (group->irq_occurred && !group->panic_delayed) {
-				busmon_panic = true;
-				panic("STOP infinite output by abnormal access");
-			} else {
-				group->irq_occurred++;
-			}
+			pr_info("%s can't find the error - interrupt %d\n", pdata->nodegroup[i].name, irq - 32);
 		}
-	} else {
-		pr_info("can't find irq %d\n", irq - 32);
 	}
+	else {
+		pr_info("%s can't find interrupt %d number \n", pdata->nodegroup[i].name, irq - 32);
+	}
+
 #if 0
 	/* Disable to call notifier_call_chain of busmon in Exynos8890 EVT0 */
 	atomic_notifier_call_chain(&busmon_notifier_list, 0, &busmon->notifier_info);
@@ -855,6 +739,57 @@ static int busmon_logging_panic_handler(struct notifier_block *nb,
 			pr_info("Found errors in %s\n", __func__);
 	}
 	return 0;
+}
+
+static void busmon_init(struct busmon_dev *busmon)
+{
+	struct busmon_platdata *pdata = busmon->pdata;
+	struct busmon_nodeinfo *node;
+	unsigned int offset;
+	int i, j;
+
+	for (i = 0; i < ARRAY_SIZE(pdata->nodegroup); i++) {
+		node = pdata->nodegroup[i].nodeinfo;
+		for (j = 0; j < pdata->nodegroup[i].nodesize; j++) {
+			if (node[j].type == S_NODE && node[j].timeout_enabled) {
+				offset = OFFSET_TIMEOUT_REG;
+				/* Enable Timeout setting */
+				__raw_writel(1,	node[j].regs + offset + REG_DBG_CTL);
+				/* set timeout interval value */
+				__raw_writel(node[j].time_val,
+					node[j].regs + offset + REG_TIMEOUT_INIT_VAL);
+				pr_debug("Exynos BUS Monitor irq:%u - %s timeout enabled\n",
+					node[j].irq, node[j].name);
+			}
+			if (node[j].err_rpt_enabled) {
+				/* clear previous interrupt of req_read */
+				offset = OFFSET_REQ_R;
+				__raw_writel(1, node[j].regs + offset + REG_INT_CLR);
+				/* enable interrupt */
+				__raw_writel(1, node[j].regs + offset + REG_INT_MASK);
+
+				/* clear previous interrupt of req_write */
+				offset = OFFSET_REQ_W;
+				__raw_writel(1, node[j].regs + offset + REG_INT_CLR);
+				/* enable interrupt */
+				__raw_writel(1, node[j].regs + offset + REG_INT_MASK);
+
+				/* clear previous interrupt of response_read */
+				offset = OFFSET_RESP_R;
+				__raw_writel(1, node[j].regs + offset + REG_INT_CLR);
+				/* enable interrupt */
+				__raw_writel(1, node[j].regs + offset + REG_INT_MASK);
+
+				/* clear previous interrupt of response_write */
+				offset = OFFSET_RESP_W;
+				__raw_writel(1, node[j].regs + offset + REG_INT_CLR);
+				/* enable interrupt */
+				__raw_writel(1, node[j].regs + offset + REG_INT_MASK);
+				pr_debug("Exynos BUS Monitor irq:%u - %s error reporting enabled\n",
+					node[j].irq, node[j].name);
+			}
+		}
+	}
 }
 
 static int busmon_probe(struct platform_device *pdev)
@@ -926,8 +861,6 @@ static int busmon_probe(struct platform_device *pdev)
 		pdata->nodegroup[i].nodeinfo = node;
 		pdata->nodegroup[i].irq = node[0].irq;
 		pdata->nodegroup[i].name = dev_name;
-		pdata->nodegroup[i].irq_occurred = 0;
-		pdata->nodegroup[i].panic_delayed = false;
 
 		ret = devm_request_irq(&pdev->dev, pdata->nodegroup[i].irq + 32,
 					busmon_irq_handler, 0, //IRQF_GIC_MULTI_TARGET,
@@ -958,7 +891,7 @@ static int busmon_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, busmon);
 
-	busmon_init(busmon, true);
+	busmon_init(busmon);
 	dev_info(&pdev->dev, "success to probe bus monitor driver\n");
 
 	return 0;
@@ -982,7 +915,7 @@ static int busmon_resume(struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct busmon_dev *busmon = platform_get_drvdata(pdev);
 
-	busmon_init(busmon, true);
+	busmon_init(busmon);
 
 	return 0;
 }

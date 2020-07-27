@@ -1224,10 +1224,12 @@ static ssize_t touchkey_fw_update(struct device *dev,
 	case 'S':
 		cmd = BUILT_IN;
 		break;
+#ifndef CONFIG_SAMSUNG_PRODUCT_SHIP
 	case 'i':
 	case 'I':
 		cmd = SDCARD;
 		break;
+#endif
 	default:
 		info->fw_update_state = 2;
 		goto touchkey_fw_update_out;
@@ -1443,12 +1445,6 @@ out:
 	return count;
 }
 
-static ssize_t get_chip_vendor(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	return sprintf(buf, "ABOV\n");
-}
-
 static DEVICE_ATTR(touchkey_threshold, S_IRUGO, touchkey_threshold_show, NULL);
 static DEVICE_ATTR(brightness, S_IRUGO | S_IWUSR | S_IWGRP, NULL,
 			touchkey_led_control);
@@ -1468,7 +1464,6 @@ static DEVICE_ATTR(keyboard_mode, S_IRUGO | S_IWUSR | S_IWGRP, NULL,
 			keyboard_cover_mode_enable);
 static DEVICE_ATTR(flip_mode, S_IRUGO | S_IWUSR | S_IWGRP, NULL,
 		   flip_cover_mode_enable);
-static DEVICE_ATTR(touchkey_get_chip_vendor, S_IRUGO, get_chip_vendor, NULL);
 
 static struct attribute *sec_touchkey_attributes[] = {
 	&dev_attr_touchkey_threshold.attr,
@@ -1484,7 +1479,6 @@ static struct attribute *sec_touchkey_attributes[] = {
 	&dev_attr_glove_mode.attr,
 	&dev_attr_keyboard_mode.attr,
 	&dev_attr_flip_mode.attr,
-	&dev_attr_touchkey_get_chip_vendor.attr,
 	NULL,
 };
 
@@ -1698,17 +1692,10 @@ static int abov_parse_dt(struct device *dev,
 	}
 
 	pdata->sub_det = of_get_named_gpio(np, "abov,sub-det", 0);
-	if (pdata->sub_det < 0)
+	if (pdata->sub_det < 0) {
 		tk_debug_info(true, dev, "unable to get sub_det\n");
-	else
-		tk_debug_info(true, dev, "%s: sub_det:%d\n",__func__, pdata->sub_det);
-
-	if (gpio_is_valid(pdata->sub_det)) {
-		ret = gpio_get_value(pdata->sub_det);
-		if (ret) {
-			tk_debug_err(true, dev, "Device wasn't connected to board \n");
-			return ret;
-		}
+	} else {
+		tk_debug_info(true, dev, "%s: sub_det:%d\n",__func__,pdata->sub_det);
 	}
 
 	if (of_property_read_string(np, "abov,regulator_avdd", &pdata->regulator_avdd)) {
@@ -1727,6 +1714,7 @@ static int abov_parse_dt(struct device *dev,
 	tk_debug_info(true, dev, "%s: fw path %s\n", __func__, pdata->fw_path);
 
 	pdata->boot_on_ldo = of_property_read_bool(np, "abov,boot-on-ldo");
+	pdata->ldo_always_on = of_property_read_bool(np, "abov,ldo-always-on");
 
 	tk_debug_info(true, dev, "%s: gpio_int:%d, gpio_scl:%d, gpio_sda:%d\n",
 			__func__, pdata->gpio_int, pdata->gpio_scl,
@@ -1836,6 +1824,15 @@ static int abov_tk_probe(struct i2c_client *client,
 
 	if(!info->pdata->boot_on_ldo)
 		msleep(ABOV_RESET_DELAY);
+
+	if (gpio_is_valid(info->pdata->sub_det)) {
+		ret = gpio_get_value(info->pdata->sub_det);
+		if (ret) {
+			tk_debug_err(true, &client->dev, "Device wasn't connected to board \n");
+			ret = -ENODEV;
+			goto err_i2c_check;
+		}
+	}
 
 	info->enabled = true;
 	info->irq = -1;
@@ -1948,6 +1945,7 @@ err_req_irq:
 err_reg_input_dev:
 	mutex_destroy(&info->lock);
 	mutex_destroy(&info->device);
+err_i2c_check:
 	if (info->pdata->power)
 		info->pdata->power(info, false);
 pwr_config:
@@ -2067,6 +2065,7 @@ static int abov_tk_resume(struct device *dev)
 	struct i2c_client *client = to_i2c_client(dev);
 	struct abov_tk_info *info = i2c_get_clientdata(client);
 	u8 led_data;
+	u8 buf;
 
 	if (info->enabled) {
 		tk_debug_info(true, &client->dev, "%s: already power on\n", __func__);
@@ -2107,6 +2106,10 @@ static int abov_tk_resume(struct device *dev)
 	}
 	if (info->keyboard_mode)
 		abov_mode_enable(info->client, ABOV_KEYBOARD, CMD_MOBILE_KBD_ON);
+
+	// Workaround for the board (that vtouch_2.8v could not be off)
+	if(info->pdata->ldo_always_on)
+		abov_tk_i2c_read(client, ABOV_BTNSTATUS, &buf, 1);
 
 	enable_irq(info->irq);
 

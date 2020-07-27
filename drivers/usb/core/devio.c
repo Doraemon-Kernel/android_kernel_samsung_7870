@@ -2427,6 +2427,12 @@ static int usbdev_log(unsigned int cmd, int ret)
 	case USBDEVFS_DISCONNECT_CLAIM:
 		cmd_string = "DISCONNECT_CLAIM";
 		break;
+	case USBDEVFS_ALLOC_STREAMS:
+		cmd_string = "USBDEVFS_ALLOC_STREAMS";
+		break;
+	case USBDEVFS_FREE_STREAMS:
+		cmd_string = "USBDEVFS_FREE_STREAMS";
+		break;
 	default:
 		cmd_string = "DEFAULT";
 		break;

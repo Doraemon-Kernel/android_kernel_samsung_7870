@@ -59,15 +59,14 @@ int fimc_is_ssxvc3_video_probe(void *data)
 	}
 
 	instance = device->instance;
+	video = &device->video_ssxvc3;
+	video->resourcemgr = device->resourcemgr;
 
 	if (instance >= FIMC_IS_SENSOR_COUNT) {
 		err("instance %d was invalid", instance);
 		ret = -EINVAL;
 		goto p_err;
 	}
-
-	video = &device->video_ssxvc3;
-	video->resourcemgr = device->resourcemgr;
 
 	video_name = FIMC_IS_VIDEO_SSXVC3_NAME(instance);
 	video_id = FIMC_IS_VIDEO_SS0VC3_NUM + (instance * 4);
@@ -259,7 +258,18 @@ const struct v4l2_file_operations fimc_is_ssxvc3_video_fops = {
 static int fimc_is_ssxvc3_video_querycap(struct file *file, void *fh,
 	struct v4l2_capability *cap)
 {
-	/* Todo : add to query capability code */
+	struct fimc_is_video *video = video_drvdata(file);
+
+	FIMC_BUG(!cap);
+	FIMC_BUG(!video);
+
+	snprintf(cap->driver, sizeof(cap->driver), "%s", video->vd.name);
+	snprintf(cap->card, sizeof(cap->card), "%s", video->vd.name);
+	cap->capabilities |= V4L2_CAP_STREAMING
+			| V4L2_CAP_VIDEO_CAPTURE
+			| V4L2_CAP_VIDEO_CAPTURE_MPLANE;
+	cap->device_caps |= cap->capabilities;
+
 	return 0;
 }
 

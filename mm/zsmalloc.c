@@ -51,7 +51,6 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/bitops.h>
 #include <linux/errno.h>
 #include <linux/highmem.h>
@@ -66,6 +65,7 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/debugfs.h>
+#include <linux/sched.h>
 #include <linux/zsmalloc.h>
 #include <linux/zpool.h>
 
@@ -319,7 +319,8 @@ static int create_handle_cache(struct zs_pool *pool)
 
 static void destroy_handle_cache(struct zs_pool *pool)
 {
-	kmem_cache_destroy(pool->handle_cachep);
+	if (pool->handle_cachep)
+		kmem_cache_destroy(pool->handle_cachep);
 }
 
 static unsigned long alloc_handle(struct zs_pool *pool)
@@ -424,6 +425,11 @@ static void *zs_zpool_map(void *pool, unsigned long handle,
 	case ZPOOL_MM_RO:
 		zs_mm = ZS_MM_RO;
 		break;
+#ifdef CONFIG_ZSWAP_SAME_PAGE_SHARING
+	case ZPOOL_MM_RO_NOWAIT:
+		zs_mm = ZS_MM_RO_NOWAIT;
+		break;
+#endif
 	case ZPOOL_MM_WO:
 		zs_mm = ZS_MM_WO;
 		break;
@@ -714,6 +720,9 @@ static inline void zs_pool_stat_destroy(struct zs_pool *pool)
 }
 
 #endif
+
+
+
 /*
  * For each size class, zspages are divided into different groups
  * depending on how "full" they are. This was done so that we could
@@ -1505,7 +1514,15 @@ void *zs_map_object(struct zs_pool *pool, unsigned long handle,
 	BUG_ON(in_interrupt());
 
 	/* From now on, migration cannot move the object */
+#ifdef CONFIG_ZSWAP_SAME_PAGE_SHARING
+	if (mm == ZS_MM_RO_NOWAIT) {
+		if (!trypin_tag(handle))
+			return NULL;
+	} else
+		pin_tag(handle);
+#else
 	pin_tag(handle);
+#endif
 
 	obj = handle_to_obj(handle);
 	obj_to_location(obj, &page, &obj_idx);
@@ -2362,6 +2379,7 @@ struct zs_pool *zs_create_pool(char *name, gfp_t flags, struct zs_ops *ops)
 #ifdef CONFIG_ZSMALLOC_OBJ_SEQ
 	pool->recent_seq = 1;
 #endif
+
 	return pool;
 
 err:

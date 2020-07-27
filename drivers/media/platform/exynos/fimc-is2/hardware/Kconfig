@@ -20,11 +20,18 @@ config CAMERA_FIMC_SCALER_USE
         help
           use fimc-scaler
 
-config CAMERA_MC_SCALER_USE
-        bool "Use MC-SCALER"
+config CAMERA_MC_SCALER_VER1_USE
+        bool "Use MC-SCALER VERSION 1"
         depends on USE_DIRECT_IS_CONTROL
         default n
         help
-          use mc-scaler
+          use mc-scaler version 1(scp param)
+
+config CAMERA_MC_SCALER_VER2_USE
+        bool "Use MC-SCALER VERSION 2"
+        depends on USE_DIRECT_IS_CONTROL
+        default n
+        help
+          use mc-scaler version 2(mcs param)
 
 source "drivers/media/platform/exynos/fimc-is2/hardware/api/Kconfig"

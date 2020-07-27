@@ -162,7 +162,7 @@ int fimc_is_sensor_read16(struct i2c_client *client,
 {
 	int ret = 0;
 	struct i2c_msg msg[2];
-	u8 wbuf[2], rbuf[2];
+	u8 wbuf[2], rbuf[2] = {0, 0};
 
 	if (!client->adapter) {
 		pr_err("Could not find adapter!\n");
@@ -322,13 +322,15 @@ p_err:
 	return ret;
 }
 
+#define MAX_BURST 600
+u8 wbuf[(MAX_BURST + 1) * 2];
+
 int fimc_is_sensor_write16_array(struct i2c_client *client,
 	u16 addr, u16 *val, u32 num)
 {
 	int ret = 0;
 	struct i2c_msg msg[1];
 	int i = 0;
-	u8 wbuf[10];
 
 	if (val == NULL) {
 		pr_err("val array is null\n");
@@ -336,8 +338,8 @@ int fimc_is_sensor_write16_array(struct i2c_client *client,
 		goto p_err;
 	}
 
-	if (num > 4) {
-		pr_err("currently limit max num is 4, need to fix it!\n");
+	if (num > MAX_BURST) {
+		pr_err("currently limit max num is %d, need to fix it!\n", MAX_BURST);
 		ret = -ENODEV;
 		goto p_err;
 	}

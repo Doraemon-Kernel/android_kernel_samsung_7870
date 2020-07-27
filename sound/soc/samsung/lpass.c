@@ -23,7 +23,6 @@
 #include <linux/pm_qos.h>
 #include <linux/fb.h>
 #include <linux/iommu.h>
-#include <linux/exynos_iovmm.h>
 #include <linux/dma-mapping.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
@@ -33,8 +32,6 @@
 #include <linux/kthread.h>
 #include <linux/mfd/syscon.h>
 #include <linux/regmap.h>
-
-#include <asm/tlbflush.h>
 
 #include <sound/exynos.h>
 
@@ -56,7 +53,7 @@
 #endif
 
 #ifdef CONFIG_PM_DEVFREQ
-#define USE_AUD_DEVFREQ
+#undef USE_AUD_DEVFREQ
 #ifdef CONFIG_SOC_EXYNOS5422
 #define AUD_CPU_FREQ_UHQA	(1000000)
 #define AUD_KFC_FREQ_UHQA	(1300000)
@@ -109,19 +106,6 @@
 #define AUD_KFC_FREQ_NORM	(0)
 #define AUD_MIF_FREQ_NORM	(0)
 #define AUD_INT_FREQ_NORM	(0)
-#elif defined(CONFIG_SOC_EXYNOS8890)
-#define AUD_CPU_FREQ_UHQA	(0)
-#define AUD_KFC_FREQ_UHQA	(1040000)
-#define AUD_MIF_FREQ_UHQA	(413000)
-#define AUD_INT_FREQ_UHQA	(0)
-#define AUD_CPU_FREQ_HIGH	(0)
-#define AUD_KFC_FREQ_HIGH	(0)
-#define AUD_MIF_FREQ_HIGH	(500000)
-#define AUD_INT_FREQ_HIGH	(0)
-#define AUD_CPU_FREQ_NORM	(0)
-#define AUD_KFC_FREQ_NORM	(0)
-#define AUD_MIF_FREQ_NORM	(0)
-#define AUD_INT_FREQ_NORM	(0)
 #else
 #define AUD_CPU_FREQ_UHQA	(1000000)
 #define AUD_KFC_FREQ_UHQA	(1300000)
@@ -140,7 +124,7 @@
 
 /* Default interrupt mask */
 #define INTR_CA5_MASK_VAL	(LPASS_INTR_SFR)
-#define INTR_CPU_MASK_VAL	(LPASS_INTR_I2S | \
+#define INTR_CPU_MASK_VAL	(LPASS_INTR_DMA | LPASS_INTR_I2S | \
 				 LPASS_INTR_PCM | LPASS_INTR_SB | \
 				 LPASS_INTR_UART | LPASS_INTR_SFR)
 #define INTR_CPU_DMA_VAL	(LPASS_INTR_DMA)
@@ -148,11 +132,6 @@
 #define EXYNOS_PMU_PMU_DEBUG_OFFSET		0x0A00
 #define EXYNOS_GPIO_MODE_AUD_SYS_PWR_REG_OFFSET	0x1340
 #define EXYNOS_PAD_RETENTION_AUD_OPTION_OFFSET 	0x3028
-
-#ifdef CONFIG_SOC_EXYNOS8890
-#define SRAM_BASE 0x3000000
-#define SRAM_SIZE 0x24000
-#endif
 
 /* Audio subsystem version */
 enum {
@@ -214,48 +193,6 @@ extern int check_esa_compr_state(void);
 static void lpass_update_qos(void);
 
 static bool cp_available;
-static atomic_t dram_usage_cnt;
-
-void lpass_disable_mif_status(bool on)
-{
-	u32 val = on ? 1 << 2 : 0x0;
-	writel(val, lpass.regs + LPASS_MIF_POWER);
-}
-
-void lpass_mif_power_on(void)
-{
-	unsigned int timeout = 3000;
-
-	writel(0x2, lpass.regs + LPASS_MIF_POWER);
-	do {
-		mdelay(1);
-		timeout--;
-
-		if (readl(lpass.regs + LPASS_MIF_POWER) & 0x1)
-			break;
-
-	} while (timeout);
-
-	if (!timeout) {
-		pr_err("%s : LPASS driver failed to enable MIF\n",
-			__func__);
-	}
-}
-
-void lpass_inc_dram_usage_count(void)
-{
-	atomic_inc(&dram_usage_cnt);
-}
-
-void lpass_dec_dram_usage_count(void)
-{
-	atomic_dec(&dram_usage_cnt);
-}
-
-int lpass_get_dram_usage_count(void)
-{
-	return atomic_read(&dram_usage_cnt);
-}
 
 bool lpass_i2s_master_mode(void)
 {
@@ -265,7 +202,6 @@ bool lpass_i2s_master_mode(void)
 void update_cp_available(bool cpen)
 {
 	cp_available = cpen;
-	pr_info("%s: cp_available = %d\n", __func__, cp_available);
 }
 
 bool is_cp_aud_enabled(void)
@@ -335,11 +271,6 @@ int exynos_check_aud_pwr(void)
 		return AUD_PWR_AFTR;
 }
 
-void lpass_update_lpclock(u32 ctrlid, bool idle)
-{
-	lpass_update_lpclock_impl(&lpass.pdev->dev, ctrlid, idle);
-}
-
 void __iomem *lpass_get_regs(void)
 {
 	return lpass.regs;
@@ -373,9 +304,7 @@ void lpass_set_dma_intr(bool on)
 
 void lpass_dma_enable(bool on)
 {
-	unsigned long flags;
-
-	spin_lock_irqsave(&lpass.lock, flags);
+	spin_lock(&lpass.lock);
 	if (on) {
 		atomic_inc(&lpass.dma_use_cnt);
 		if (atomic_read(&lpass.dma_use_cnt) == 1)
@@ -385,31 +314,27 @@ void lpass_dma_enable(bool on)
 		if (atomic_read(&lpass.dma_use_cnt) == 0)
 			lpass_set_dma_intr(false);
 	}
-	spin_unlock_irqrestore(&lpass.lock, flags);
+	spin_unlock(&lpass.lock);
 }
 
 void ass_reset(int ip, int op)
 {
-	unsigned long flags;
+	spin_lock(&lpass.lock);
 
-	spin_lock_irqsave(&lpass.lock, flags);
-
-	spin_unlock_irqrestore(&lpass.lock, flags);
+	spin_unlock(&lpass.lock);
 }
 
 void lpass_reset(int ip, int op)
 {
-	u32 reg, val;
-	u32 bit = 0;
+	u32 reg, val, bit;
 	void __iomem *regs;
-	unsigned long flags;
 
 	if (is_old_ass()) {
 		ass_reset(ip, op);
 		return;
 	}
 
-	spin_lock_irqsave(&lpass.lock, flags);
+	spin_lock(&lpass.lock);
 	regs = lpass.regs;
 	reg = LPASS_CORE_SW_RESET;
 	switch (ip) {
@@ -445,7 +370,7 @@ void lpass_reset(int ip, int op)
 		}
 		break;
 	default:
-		spin_unlock_irqrestore(&lpass.lock, flags);
+		spin_unlock(&lpass.lock);
 		pr_err("%s: wrong ip type %d!\n", __func__, ip);
 		return;
 	}
@@ -459,13 +384,13 @@ void lpass_reset(int ip, int op)
 		val |= bit;
 		break;
 	default:
-		spin_unlock_irqrestore(&lpass.lock, flags);
+		spin_unlock(&lpass.lock);
 		pr_err("%s: wrong op type %d!\n", __func__, op);
 		return;
 	}
 
 	writel(val, regs + reg);
-	spin_unlock_irqrestore(&lpass.lock, flags);
+	spin_unlock(&lpass.lock);
 }
 
 void lpass_reset_toggle(int ip)
@@ -683,31 +608,8 @@ static void lpass_release_pad(void)
 	lpass_release_pad_reg();
 }
 
-#ifdef CONFIG_SOC_EXYNOS8890
-static int __attribute__((unused)) lpass_sysmmu_fault_handler(struct iommu_domain *domain,
-	struct device *dev, unsigned long iova, int flags, void *token)
-{
-	if (lpass.mem && lpass.sram_fw_back) {
-		memcpy(lpass.sram_fw_back, lpass.mem, SRAM_SIZE);
-	} else {
-		pr_err("LPASS driver failed to save sram region \n");
-	}
-
-	return 0;
-}
-#endif
-
 static void ass_enable(void)
 {
-	int ret = 0;
-
-#ifdef CONFIG_SOC_EXYNOS8890
-	lpass.mem = ioremap_wc(SRAM_BASE, SRAM_SIZE);
-	if (!lpass.mem) {
-		pr_err("LPASS driver failed to ioremap sram \n");
-		return;
-	}
-#endif
 	/* Enable PLL */
 	lpass_enable_pll(true);
 
@@ -719,19 +621,11 @@ static void ass_enable(void)
 	clk_prepare_enable(lpass.clk_dmac);
 	clk_prepare_enable(lpass.clk_timer);
 
-	ret = iommu_attach_device(lpass.domain, &lpass.pdev->dev);
-	if (ret) {
-		dev_err(&lpass.pdev->dev,
-			"Unable to attach iommu device: %d\n", ret);
-	} else {
-		lpass.enabled = true;
-	}
+	lpass.enabled = true;
 }
 
 static void lpass_enable(void)
 {
-	int ret = 0;
-
 	if (!lpass.valid) {
 		pr_debug("%s: LPASS is not available", __func__);
 		return;
@@ -759,17 +653,6 @@ static void lpass_enable(void)
 	lpass_reset_toggle(LPASS_IP_I2S);
 	lpass_reset_toggle(LPASS_IP_DMA);
 
-#ifdef CONFIG_SOC_EXYNOS8890
-	if (!lpass.mem) {
-		lpass.mem = ioremap_wc(SRAM_BASE, SRAM_SIZE);
-		if (!lpass.mem) {
-			lpass_enable_pll(false);
-			pr_err("LPASS driver failed to ioremap sram \n");
-			return;
-		}
-	}
-#endif
-
 	if (lpass.clk_dmac)
 		clk_disable_unprepare(lpass.clk_dmac);
 
@@ -777,15 +660,9 @@ static void lpass_enable(void)
 	lpass_release_pad();
 
 	/* Clear memory */
-	memset(lpass.mem, 0, lpass.mem_size);
+//	memset(lpass.mem, 0, lpass.mem_size);
 
-	ret = iommu_attach_device(lpass.domain, &lpass.pdev->dev);
-	if (ret) {
-		dev_err(&lpass.pdev->dev,
-			"Unable to attach iommu device: %d\n", ret);
-	} else {
-		lpass.enabled = true;
-	}
+	lpass.enabled = true;
 }
 
 static void ass_disable(void)
@@ -799,28 +676,15 @@ static void ass_disable(void)
 
 	lpass_reg_save();
 
-	iommu_detach_device(lpass.domain, &lpass.pdev->dev);
-
 	/* OSC path */
 	lpass_set_mux_osc();
 
 	/* Disable PLL */
 	lpass_enable_pll(false);
-
-#ifdef CONFIG_SOC_EXYNOS8890
-	iounmap(lpass.mem);
-	lpass.mem = NULL;
-#endif
-
 }
 
 static void lpass_disable(void)
 {
-#ifdef CONFIG_SOC_EXYNOS8890
-	unsigned long start;
-	unsigned long end;
-#endif
-
 	if (!lpass.valid) {
 		pr_debug("%s: LPASS is not available", __func__);
 		return;
@@ -841,8 +705,6 @@ static void lpass_disable(void)
 
 	lpass_reg_save();
 
-	iommu_detach_device(lpass.domain, &lpass.pdev->dev);
-
 	/* OSC path */
 	lpass_set_mux_osc();
 
@@ -851,14 +713,6 @@ static void lpass_disable(void)
 
 	/* Disable PLL */
 	lpass_enable_pll(false);
-
-#ifdef CONFIG_SOC_EXYNOS8890
-	start = (unsigned long)lpass.mem;
-	end = (unsigned long)lpass.mem + lpass.mem_size;
-	iounmap(lpass.mem);
-	flush_tlb_kernel_range(start, end);
-	lpass.mem = NULL;
-#endif
 }
 
 #if 0
@@ -1168,12 +1022,12 @@ static int exynos_aud_alpa_notifier(struct notifier_block *nb,
 				unsigned long event, void *data)
 {
 	switch (event) {
-	case SICD_AUD_ENTER:
+	case SICD_ENTER:
 #ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
 		esa_compr_alpa_notifier(true);
 #endif
 		break;
-	case SICD_AUD_EXIT:
+	case SICD_EXIT:
 #ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
 		esa_compr_alpa_notifier(false);
 #endif
@@ -1227,15 +1081,11 @@ static int lpass_probe(struct platform_device *pdev)
 		return -ENXIO;
 	}
 
-#ifndef CONFIG_SOC_EXYNOS8890
 	lpass.mem = ioremap_wc(res->start, resource_size(res));
 	if (!lpass.mem) {
 		dev_err(dev, "SRAM ioremap failed\n");
 		return -ENOMEM;
 	}
-#else
-	lpass.mem = NULL;
-#endif
 	lpass.mem_size = resource_size(res);
 	pr_info("%s: sram_base = %08X (%08X bytes)\n",
 		__func__, (u32)res->start, (u32)resource_size(res));
@@ -1247,7 +1097,7 @@ static int lpass_probe(struct platform_device *pdev)
 			return -ENXIO;
 		}
 
-		lpass.regs_s = ioremap(res->start, resource_size(res));
+		lpass.regs_s = ioremap_wc(res->start, resource_size(res));
 		if (!lpass.regs_s) {
 			dev_err(dev, "SFR ioremap failed\n");
 			return -ENOMEM;
@@ -1273,10 +1123,17 @@ static int lpass_probe(struct platform_device *pdev)
 	lpass_init_clk_gate();
 
 #ifdef CONFIG_SND_SAMSUNG_IOMMU
-	lpass.domain = get_domain_from_dev(dev);
+	lpass.domain = iommu_domain_alloc(pdev->dev.bus);
 	if (!lpass.domain) {
-		dev_err(dev, "Unable to get iommu domain\n");
-		return -ENOENT;
+		dev_err(dev, "Unable to alloc iommu domain\n");
+		return -ENOMEM;
+	}
+
+	ret = iommu_attach_device(lpass.domain, dev);
+	if (ret) {
+		dev_err(dev, "Unable to attach iommu device: %d\n", ret);
+		iommu_domain_free(lpass.domain);
+		return ret;
 	}
 #else
 	/* Bypass SysMMU */
@@ -1315,9 +1172,6 @@ static int lpass_probe(struct platform_device *pdev)
 	regmap_update_bits(lpass.pmureg,
 			EXYNOS_PMU_PMU_DEBUG_OFFSET,
 			0x1F00, 0x1F00);
-	regmap_update_bits(lpass.pmureg,
-			EXYNOS_PMU_PMU_DEBUG_OFFSET,
-			0x1, 0x0);
 
 #ifdef CONFIG_PM_RUNTIME
 	pm_runtime_enable(&lpass.pdev->dev);
@@ -1329,8 +1183,6 @@ static int lpass_probe(struct platform_device *pdev)
 #endif
 	lpass.display_on = true;
 	fb_register_client(&fb_noti_block);
-
-	lpass_update_lpclock(LPCLK_CTRLID_LEGACY|LPCLK_CTRLID_OFFLOAD, false);
 
 #ifdef USE_AUD_DEVFREQ
 	lpass.cpu_qos = 0;
@@ -1344,13 +1196,6 @@ static int lpass_probe(struct platform_device *pdev)
 #endif
 
 	exynos_pm_register_notifier(&lpass_lpa_nb);
-#ifdef CONFIG_SOC_EXYNOS8890
-	iovmm_set_fault_handler(&lpass.pdev->dev,
-				lpass_sysmmu_fault_handler, NULL);
-	lpass.sram_fw_back = kzalloc(SRAM_SIZE, GFP_KERNEL);
-	if (!lpass.sram_fw_back)
-		pr_err("LPASS driver failed to allocate memory for SRAM FW Backup\n");
-#endif
 
 	pr_info("%s: LPASS driver was registerd successfully\n", __func__);
 	return 0;
@@ -1358,7 +1203,10 @@ static int lpass_probe(struct platform_device *pdev)
 
 static int lpass_remove(struct platform_device *pdev)
 {
-#ifndef CONFIG_SND_SAMSUNG_IOMMU
+#ifdef CONFIG_SND_SAMSUNG_IOMMU
+	iommu_detach_device(lpass.domain, &pdev->dev);
+	iommu_domain_free(lpass.domain);
+#else
 	if (lpass.sysmmu)
 		iounmap(lpass.sysmmu);
 #endif
@@ -1369,12 +1217,8 @@ static int lpass_remove(struct platform_device *pdev)
 #endif
 	iounmap(lpass.regs);
 	iounmap(lpass.regs_s);
-#ifndef CONFIG_SOC_EXYNOS8890
 	iounmap(lpass.mem);
-#endif
-#ifdef CONFIG_SOC_EXYNOS8890
-	kfree(lpass.sram_fw_back);
-#endif
+
 	return 0;
 }
 

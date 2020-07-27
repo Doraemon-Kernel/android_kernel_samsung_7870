@@ -289,8 +289,7 @@ int __filemap_fdatawrite_range(struct address_space *mapping, loff_t start,
 		.range_end = end,
 	};
 
-	if (!mapping_cap_writeback_dirty(mapping) ||
-	    !mapping_tagged(mapping, PAGECACHE_TAG_DIRTY))
+	if (!mapping_cap_writeback_dirty(mapping))
 		return 0;
 
 	ret = do_writepages(mapping, &wbc);
@@ -2043,8 +2042,6 @@ repeat:
 			else
 				goto next;
 		}
-		if (is_migrate_rbin_page(page))
-			goto next;
 
 		if (!page_cache_get_speculative(page))
 			goto repeat;

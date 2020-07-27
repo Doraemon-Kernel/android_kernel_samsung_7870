@@ -109,6 +109,7 @@ struct pdic_notifier_struct {
 	PDIC_SINK_STATUS sink_status;
 	struct blocking_notifier_head notifier_call_chain;
 	struct s2mm005_data *pusbpd;
+	struct usbpd_data *pd_data;
 };
 
 extern void pdic_notifier_call(struct pdic_notifier_struct *value);

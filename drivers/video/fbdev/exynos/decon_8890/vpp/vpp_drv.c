@@ -18,13 +18,11 @@
 #include <linux/exynos_iovmm.h>
 #include <linux/smc.h>
 #include <linux/export.h>
-#include <linux/videodev2_exynos_media.h>
 
-#include "../../../../../soc/samsung/pwrcal/pwrcal.h"
-#include "../../../../../soc/samsung/pwrcal/S5E8890/S5E8890-vclk.h"
 #include "vpp.h"
 #include "vpp_common.h"
 #include "../decon_helper.h"
+#include "../decon_bts.h"
 
 /*
  * Gscaler constraints
@@ -40,7 +38,6 @@
 
 #define MIF_LV1			(2912000/2)
 #define INT_LV7			(400000)
-#define FRAMEDONE_TIMEOUT	msecs_to_jiffies(30)
 
 #define MEM_FAULT_VPP_MASTER            0
 #define MEM_FAULT_VPP_CFW               1
@@ -89,10 +86,6 @@ static void vpp_dump_cfw_register(void)
 
 static void vpp_dump_registers(struct vpp_dev *vpp)
 {
-	if (!test_bit(VPP_RUNNING, &vpp->state)) {
-		dev_err(DEV, "vpp clocks are disabled\n");
-		return;
-	}
 	vpp_dump_cfw_register();
 	dev_info(DEV, "=== VPP%d SFR DUMP ===\n", vpp->id);
 	dev_info(DEV, "start count : %d, done count : %d\n",
@@ -111,17 +104,30 @@ static void vpp_dump_registers(struct vpp_dev *vpp)
 void vpp_op_timer_handler(unsigned long arg)
 {
 	struct vpp_dev *vpp = (struct vpp_dev *)arg;
-	struct decon_device *decon = get_decon_drvdata(0);
-
-	if(decon->ignore_vsync)
-	{
-		dev_info(DEV, "VPP[%d] irq hasn't been occured but ignore_vsync is true skip", vpp->id);
-		return;
-	}
 
 	vpp_dump_registers(vpp);
 
 	dev_info(DEV, "VPP[%d] irq hasn't been occured", vpp->id);
+}
+
+static int vpp_wait_for_update(struct vpp_dev *vpp)
+{
+	int update_cnt;
+	int ret;
+
+	if (test_bit(VPP_POWER_ON, &vpp->state)) {
+		update_cnt = vpp->update_cnt_prev;
+		ret = wait_event_interruptible_timeout(vpp->update_queue,
+				(update_cnt != vpp->update_cnt),
+				msecs_to_jiffies(17));
+		if (ret == 0) {
+			dev_err(DEV, "timeout of shadow update(%d, %d)\n",
+				update_cnt, vpp->update_cnt);
+			return -ETIMEDOUT;
+		}
+		DISP_SS_EVENT_LOG(DISP_EVT_VPP_UPDATE_DONE, vpp->sd, ktime_set(0, 0));
+	}
+	return 0;
 }
 
 static int vpp_wait_for_framedone(struct vpp_dev *vpp)
@@ -133,12 +139,12 @@ static int vpp_wait_for_framedone(struct vpp_dev *vpp)
 		done_cnt = vpp->done_count;
 		dev_dbg(DEV, "%s (%d, %d)\n", __func__,
 				done_cnt, vpp->done_count);
-		ret = wait_event_interruptible_timeout(vpp->framedone_wq,
+		ret = wait_event_interruptible_timeout(vpp->update_queue,
 				(done_cnt != vpp->done_count),
-				FRAMEDONE_TIMEOUT);
+				msecs_to_jiffies(17));
 		if (ret == 0) {
-			dev_dbg(DEV, "timeout of frame done(st:%d, %d, do:%d)\n",
-				vpp->start_count, done_cnt, vpp->done_count);
+			dev_err(DEV, "timeout of frame done(st:%d, up:%d, %d, do:%d)\n",
+				vpp->start_count, vpp->update_cnt, done_cnt, vpp->done_count);
 			return -ETIMEDOUT;
 		}
 	}
@@ -146,24 +152,19 @@ static int vpp_wait_for_framedone(struct vpp_dev *vpp)
 }
 
 static void vpp_separate_fraction_value(struct vpp_dev *vpp,
-		int *integer, u32 *fract_val)
+			int *integer, u32 *fract_val)
 {
-	struct decon_win_config *config = vpp->config;
-	if (is_vpp_rgb32(config) || is_yuv420(config)) {
-		/*
-		 * [30:15] : fraction val, [14:0] : integer val.
-		 */
-		*fract_val = (*integer >> 15) << 4;
-		if (*fract_val & ~VG_POSITION_F_MASK) {
-			dev_warn(DEV, "%d is unsupported value",
+	/*
+	 * [30:15] : fraction val, [14:0] : integer val.
+	 */
+	*fract_val = (*integer >> 15) << 4;
+	if (*fract_val & ~VG_POSITION_F_MASK) {
+		dev_warn(DEV, "%d is unsupported value",
 					*fract_val);
-			*fract_val &= VG_POSITION_F_MASK;
-		}
+		*fract_val &= VG_POSITION_F_MASK;
+	}
 
-		*integer = (*integer & 0x7fff);
-	} else
-		dev_err(DEV, "0x%x format did not support fraction\n",
-				config->format);
+	*integer = (*integer & 0x7fff);
 }
 
 static void vpp_set_initial_phase(struct vpp_dev *vpp)
@@ -174,12 +175,12 @@ static void vpp_set_initial_phase(struct vpp_dev *vpp)
 
 	if (is_fraction(src->x)) {
 		vpp_separate_fraction_value(vpp, &src->x, &fr->y_x);
-		fr->c_x = is_yuv(config) ? fr->y_x / 2 : fr->y_x;
+		fr->c_x = fr->y_x >> 1;
 	}
 
 	if (is_fraction(src->y)) {
 		vpp_separate_fraction_value(vpp, &src->y, &fr->y_y);
-		fr->c_y = is_yuv(config) ? fr->y_y / 2 : fr->y_y;
+		fr->c_y = fr->y_y >> 1;
 	}
 
 	if (is_fraction(src->w)) {
@@ -225,15 +226,10 @@ static int vpp_check_size(struct vpp_dev *vpp, struct vpp_img_format *vi)
 	return 0;
 err:
 	dev_err(DEV, "offset x : %d, offset y: %d\n", src->x, src->y);
-	dev_err(DEV, "src_mul_x : %d, src_mul_y : %d\n", vc.src_mul_x, vc.src_mul_y);
 	dev_err(DEV, "src f_w : %d, src f_h: %d\n", src->f_w, src->f_h);
-	dev_err(DEV, "src_mul_w : %d, src_mul_h : %d\n", vc.src_mul_w, vc.src_mul_h);
 	dev_err(DEV, "src w : %d, src h: %d\n", src->w, src->h);
-	dev_err(DEV, "img_mul_w : %d, img_mul_h : %d\n", vc.img_mul_w, vc.img_mul_h);
 	dev_err(DEV, "dst w : %d, dst h: %d\n", dst->w, dst->h);
-	dev_err(DEV, "sca_mul_w : %d, sca_mul_h : %d\n", vc.sca_mul_w, vc.sca_mul_h);
-	dev_err(DEV, "rotation : %d, color_format : %d\n",
-				config->vpp_parm.rot, config->format);
+	dev_err(DEV, "rotation : %d, color_format : %d\n",config->vpp_parm.rot, config->format);
 
 	return -EINVAL;
 }
@@ -320,38 +316,36 @@ static void vpp_clk_disable(struct vpp_dev *vpp)
 
 static int vpp_init(struct vpp_dev *vpp)
 {
+	struct vpp_params *vpp_parm = &vpp->config->vpp_parm;
+
 	int ret = 0;
 
-	if (vpp->id == 0 || vpp->id == 2) {
-		ret = exynos_smc(MC_FC_SET_CFW_PROT,
-				MC_FC_DRM_SET_CFW_PROT, PROT_G0, 0);
+	if(vpp->id == 0 || vpp->id == 2) {
+		ret = exynos_smc(MC_FC_SET_CFW_PROT, MC_FC_DRM_SET_CFW_PROT, PROT_G0, 0);
 		if (ret != 2) {
 			vpp_err("smc call fail for vpp0: %d\n", ret);
 			return -EBUSY;
 		}
 	}
 
-	if (vpp->id == 1 || vpp->id == 3) {
-		ret = exynos_smc(MC_FC_SET_CFW_PROT,
-				MC_FC_DRM_SET_CFW_PROT, PROT_G1, 0);
+	if(vpp->id == 1 || vpp->id == 3) {
+		ret = exynos_smc(MC_FC_SET_CFW_PROT, MC_FC_DRM_SET_CFW_PROT, PROT_G1, 0);
 		if (ret != 2) {
 			vpp_err("smc call fail for vpp0: %d)\n", ret);
 			return -EBUSY;
 		}
 	}
 
-	if (vpp->id == 4 || vpp->id == 6) {
-		ret = exynos_smc(MC_FC_SET_CFW_PROT,
-				MC_FC_DRM_SET_CFW_PROT, PROT_VGR0, 0);
+	if(vpp->id == 4 || vpp->id == 6) {
+		ret = exynos_smc(MC_FC_SET_CFW_PROT, MC_FC_DRM_SET_CFW_PROT, PROT_VGR0, 0);
 		if (ret != 2) {
 			vpp_err("smc call fail for vpp1: %d\n", ret);
 			return -EBUSY;
 		}
 	}
 
-	if (vpp->id == 5 || vpp->id == 7 || vpp->id == 8) {
-		ret = exynos_smc(MC_FC_SET_CFW_PROT,
-				MC_FC_DRM_SET_CFW_PROT, PROT_G3, 0);
+	if(vpp->id == 5 || vpp->id == 7 || vpp->id == 8) {
+		ret = exynos_smc(MC_FC_SET_CFW_PROT, MC_FC_DRM_SET_CFW_PROT, PROT_G3, 0);
 		if (ret != 2) {
 			vpp_err("smc call fail for vpp1: %d)\n", ret);
 			return -EBUSY;
@@ -363,6 +357,7 @@ static int vpp_init(struct vpp_dev *vpp)
 		return ret;
 
 	vpp_reg_init(vpp->id);
+	vpp_reg_set_rgb_type(vpp->id, vpp_parm->eq_mode);
 	vpp->h_ratio = vpp->v_ratio = 0;
 	vpp->fract_val.y_x = vpp->fract_val.y_y = 0;
 	vpp->fract_val.c_x = vpp->fract_val.c_y = 0;
@@ -429,18 +424,20 @@ static int vpp_set_read_order(struct vpp_dev *vpp)
 
 	if (cur_read_order != vpp->prev_read_order) {
 		u32 ipoption[vpp->pbuf_num];
-		int i;
+		ipoption[0] = SYSMMU_PBUFCFG_ASCENDING_INPUT;
 
-		if (cur_read_order == SYSMMU_PBUFCFG_ASCENDING) {
-			ipoption[0] = SYSMMU_PBUFCFG_ASCENDING_INPUT;
-			ipoption[1] = SYSMMU_PBUFCFG_ASCENDING_INPUT;
-		} else {
-			ipoption[0] = SYSMMU_PBUFCFG_DESCENDING_INPUT;
-			ipoption[1] = SYSMMU_PBUFCFG_DESCENDING_INPUT;
+		if (is_vgr1(vpp)) {
+			ipoption[3] = SYSMMU_PBUFCFG_ASCENDING_INPUT;
+			ipoption[4] = SYSMMU_PBUFCFG_ASCENDING_INPUT;
 		}
 
-		for (i = 2; i < vpp->pbuf_num; i++)
-			ipoption[i] = SYSMMU_PBUFCFG_ASCENDING_INPUT;
+		if (cur_read_order == SYSMMU_PBUFCFG_ASCENDING) {
+			ipoption[1] = SYSMMU_PBUFCFG_ASCENDING_INPUT;
+			ipoption[2] = SYSMMU_PBUFCFG_ASCENDING_INPUT;
+		} else {
+			ipoption[1] = SYSMMU_PBUFCFG_DESCENDING_INPUT;
+			ipoption[2] = SYSMMU_PBUFCFG_DESCENDING_INPUT;
+		}
 
 		ret = sysmmu_set_prefetch_buffer_property(&vpp->pdev->dev,
 				vpp->pbuf_num, 0, ipoption, NULL);
@@ -449,29 +446,6 @@ static int vpp_set_read_order(struct vpp_dev *vpp)
 	vpp->prev_read_order = cur_read_order;
 
 	return ret;
-}
-
-void vpp_split_single_plane(struct decon_win_config *config, struct vpp_size_param *p)
-{
-	switch(config->format) {
-	case DECON_PIXEL_FORMAT_NV12N:
-		p->addr1 = NV12N_CBCR_BASE(p->addr0, p->src_fw, p->src_fh);
-		break;
-	case DECON_PIXEL_FORMAT_NV12N_10B:
-		p->addr1 = NV12N_10B_CBCR_BASE(p->addr0, p->src_fw, p->src_fh);
-	default:
-		break;
-	}
-}
-
-void vpp_set_deadlock_time(struct vpp_dev *vpp, int msec)
-{
-	int deadlock_num;
-	int disp;
-
-	disp = cal_dfs_get_rate(dvfs_disp);
-	deadlock_num = msec * disp;
-	vpp_reg_set_deadlock_num(vpp->id, deadlock_num);
 }
 
 static int vpp_set_config(struct vpp_dev *vpp)
@@ -504,14 +478,11 @@ static int vpp_set_config(struct vpp_dev *vpp)
 		}
 		/* The state need to be set here to handle err case */
 		set_bit(VPP_RUNNING, &vpp->state);
-		DISP_SS_EVENT_LOG(DISP_EVT_VPP_SET_RUNNING, vpp->sd, ktime_set(0, 0));
 		spin_unlock_irqrestore(&vpp->slock, flags);
 		enable_irq(vpp->irq);
 	}
 
 	vpp_reg_wait_pingpong_clear(vpp->id);
-
-	vpp_set_initial_phase(vpp);
 	vpp_to_scale_params(vpp, &p);
 	ret = vpp_set_scale_info(vpp, &p);
 	if (ret)
@@ -520,16 +491,11 @@ static int vpp_set_config(struct vpp_dev *vpp)
 	vpp->v_ratio = p.vpp_v_ratio;
 
 	vpp_select_format(vpp, &vi);
-	vpp_reg_set_rgb_type(vpp->id, config->vpp_parm.eq_mode);
-
-	if (config->compression && is_rotation(config)) {
-		dev_err(DEV,"Unsupported rotation when using afbc enable");
-		return -EINVAL;
-	}
-
-	ret = vpp_reg_set_in_format(vpp->id, &vi);
+	ret = vpp_reg_set_in_format(vpp->id, config->format, &vi);
 	if (ret)
 		goto err;
+
+	vpp_set_initial_phase(vpp);
 
 	ret = vpp_check_size(vpp, &vi);
 	if (ret)
@@ -552,8 +518,7 @@ static int vpp_set_config(struct vpp_dev *vpp)
 			goto err;
 	}
 
-	vpp_split_single_plane(config, &p);
-	vpp_reg_set_in_buf_addr(vpp->id, &p, &vi);
+	vpp_reg_set_in_buf_addr(vpp->id, &p);
 	vpp_reg_set_smart_if_pix_num(vpp->id, config->dst.w, config->dst.h);
 
 	if (vpp_check_block_mode(vpp))
@@ -566,6 +531,7 @@ static int vpp_set_config(struct vpp_dev *vpp)
 
 	vpp->start_count++;
 
+	vpp->update_cnt_prev = vpp->update_cnt;
 	DISP_SS_EVENT_LOG(DISP_EVT_VPP_WINCON, vpp->sd, ktime_set(0, 0));
 	return 0;
 err:
@@ -573,26 +539,7 @@ err:
 	return ret;
 }
 
-static int vpp_tui_protection(struct v4l2_subdev *sd, int enable)
-{
-	struct vpp_dev *vpp = v4l2_get_subdevdata(sd);
-	int ret = 0;
-
-	if (test_bit(VPP_POWER_ON, &vpp->state)) {
-		dev_err(DEV, "VPP is not ready for TUI (%ld)\n", vpp->state);
-		return -EBUSY;
-	}
-
-	if (enable)
-		ret = vpp_clk_enable(vpp);
-	else
-		vpp_clk_disable(vpp);
-
-	return ret;
-}
-
-static long vpp_subdev_ioctl(struct v4l2_subdev *sd,
-				unsigned int cmd, void *arg)
+static long vpp_subdev_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	struct vpp_dev *vpp = v4l2_get_subdevdata(sd);
 	int ret = 0;
@@ -641,10 +588,6 @@ static long vpp_subdev_ioctl(struct v4l2_subdev *sd,
 		clear_bit(VPP_STOPPING, &vpp->state);
 		break;
 
-	case VPP_TUI_PROTECT:
-		ret = vpp_tui_protection(sd, state);
-		break;
-
 	case VPP_GET_BTS_VAL:
 		vpp->config = (struct decon_win_config *)arg;
 		call_bts_ops(vpp, bts_get_bw, vpp);
@@ -660,21 +603,20 @@ static long vpp_subdev_ioctl(struct v4l2_subdev *sd,
 		call_bts_ops(vpp, bts_set_rot_mif, vpp);
 		break;
 
+	case VPP_WAIT_FOR_UPDATE:
+		vpp_wait_for_update(vpp);
+		break;
+
 	case VPP_DUMP:
 		vpp_dump_registers(vpp);
 		break;
 
 	case VPP_WAIT_IDLE:
-		if (test_bit(VPP_RUNNING, &vpp->state))
-			vpp_reg_wait_idle(vpp->id);
+		vpp_reg_wait_idle(vpp->id);
 		break;
 
 	case VPP_WAIT_FOR_FRAMEDONE:
 		ret = vpp_wait_for_framedone(vpp);
-		break;
-
-	case VPP_SET_DEADLOCK_NUM:
-		vpp_set_deadlock_time(vpp, 20);
 		break;
 
 	default:
@@ -810,20 +752,22 @@ static irqreturn_t vpp_irq_handler(int irq, void *priv)
 		vpp_reg_set_clear_irq(vpp->id, vpp_irq);
 
 		if (is_err_irq(vpp_irq)) {
-			dev_err(DEV, "vpp%d interrupt info(0x%x)\n",vpp->id, vpp_irq);
-			if ((vpp_irq == VG_IRQ_DEADLOCK_STATUS) && (vpp->id == 6 || vpp->id == 7))
-				vpp->afbc_re = vpp_reg_set_debug_sfr(vpp->id);
-			if (!(vpp_irq == VG_IRQ_DEADLOCK_STATUS)) {
-				exynos_sysmmu_show_status(&vpp->pdev->dev);
-				goto err;
-			}
+			dev_err(DEV, "Error interrupt (0x%x)\n", vpp_irq);
+			vpp_dump_registers(vpp);
+			exynos_sysmmu_show_status(&vpp->pdev->dev);
+			goto err;
 		}
 	}
 
 	if (vpp_irq & VG_IRQ_FRAMEDONE) {
 		vpp->done_count++;
-		wake_up_interruptible_all(&vpp->framedone_wq);
 		DISP_SS_EVENT_LOG(DISP_EVT_VPP_FRAMEDONE, vpp->sd, start);
+	}
+
+	if (vpp_irq & VG_IRQ_SFR_UPDATE_DONE) {
+		vpp->update_cnt++;
+		wake_up_interruptible_all(&vpp->update_queue);
+		DISP_SS_EVENT_LOG(DISP_EVT_VPP_SHADOW_UPDATE, vpp->sd, ktime_set(0, 0));
 	}
 
 	dev_dbg(DEV, "irq status : 0x%x\n", vpp_irq);
@@ -924,7 +868,6 @@ static int vpp_probe(struct platform_device *pdev)
 	struct vpp_dev *vpp;
 	struct resource *res;
 	int irq;
-	int vpp_irq = 0;
 	int ret = 0;
 
 	vpp = devm_kzalloc(dev, sizeof(*vpp), GFP_KERNEL);
@@ -936,42 +879,49 @@ static int vpp_probe(struct platform_device *pdev)
 	vpp->id = of_alias_get_id(dev->of_node, "vpp");
 
 	pr_info("###%s:VPP%d probe : start\n", __func__, vpp->id);
-	of_property_read_u32(dev->of_node, "#ar-id-num", &vpp->pbuf_num);
+	ret = of_property_read_u32(dev->of_node, "#pb-id-cells",
+			&vpp->pbuf_num);
+	if (ret) {
+		dev_err(DEV, "failed to get PB info\n");
+		return ret;
+	}
+
+	/*
+	 * VGR1 sysmmu uses 6 PB, but there are only 5 axids from master
+	 */
+	if (is_vgr1(vpp))
+		vpp->pbuf_num = 5;
 
 	vpp->pdev = pdev;
 
 	vpp_config_id(vpp);
 
-	if (vpp->id == 0 || vpp->id == 2) {
-		ret = exynos_smc(MC_FC_SET_CFW_PROT,
-				MC_FC_DRM_SET_CFW_PROT, PROT_G0, 0);
+	if(vpp->id == 0 || vpp->id == 2) {
+		ret = exynos_smc(MC_FC_SET_CFW_PROT, MC_FC_DRM_SET_CFW_PROT, PROT_G0, 0);
 		if (ret != 2) {
 			vpp_err("smc call fail for vpp0: %d\n", ret);
 			return -EBUSY;
 		}
 	}
 
-	if (vpp->id == 1 || vpp->id == 3) {
-		ret = exynos_smc(MC_FC_SET_CFW_PROT,
-				MC_FC_DRM_SET_CFW_PROT, PROT_G1, 0);
+	if(vpp->id == 1 || vpp->id == 3) {
+		ret = exynos_smc(MC_FC_SET_CFW_PROT, MC_FC_DRM_SET_CFW_PROT, PROT_G1, 0);
 		if (ret != 2) {
 			vpp_err("smc call fail for vpp0: %d)\n", ret);
 			return -EBUSY;
 		}
 	}
 
-	if (vpp->id == 4 || vpp->id == 6) {
-		ret = exynos_smc(MC_FC_SET_CFW_PROT,
-				MC_FC_DRM_SET_CFW_PROT, PROT_VGR0, 0);
+	if(vpp->id == 4 || vpp->id == 6) {
+		ret = exynos_smc(MC_FC_SET_CFW_PROT, MC_FC_DRM_SET_CFW_PROT, PROT_VGR0, 0);
 		if (ret != 2) {
 			vpp_err("smc call fail for vpp1: %d\n", ret);
 			return -EBUSY;
 		}
 	}
 
-	if (vpp->id == 5 || vpp->id == 7 || vpp->id == 8) {
-		ret = exynos_smc(MC_FC_SET_CFW_PROT,
-				MC_FC_DRM_SET_CFW_PROT, PROT_G3, 0);
+	if(vpp->id == 5 || vpp->id == 7 || vpp->id == 8) {
+		ret = exynos_smc(MC_FC_SET_CFW_PROT, MC_FC_DRM_SET_CFW_PROT, PROT_G3, 0);
 		if (ret != 2) {
 			vpp_err("smc call fail for vpp1: %d)\n", ret);
 			return -EBUSY;
@@ -991,34 +941,6 @@ static int vpp_probe(struct platform_device *pdev)
 		dev_err(DEV, "Failed to get IRQ resource\n");
 		return irq;
 	}
-
-	pm_runtime_enable(dev);
-
-	ret = pm_runtime_get_sync(DEV);
-	if (ret < 0) {
-		dev_err(DEV, "Failed runtime_get(), %d\n", ret);
-		return ret;
-	}
-
-	ret = vpp_clk_enable(vpp);
-	if (ret)
-		return ret;
-
-	vpp_irq = vpp_reg_get_irq_status(vpp->id);
-	vpp_reg_set_clear_irq(vpp->id, vpp_irq);
-
-	ret = vpp_reg_wait_op_status(vpp->id);
-	if (ret < 0) {
-		dev_err(dev, "%s : vpp-%d is working\n",
-				__func__, vpp->id);
-		return ret;
-	}
-
-	vpp_clk_disable(vpp);
-
-	pm_runtime_put_sync(DEV);
-
-	spin_lock_init(&vpp->slock);
 
 	ret = devm_request_irq(dev, irq, vpp_irq_handler,
 				0, pdev->name, vpp);
@@ -1051,9 +973,10 @@ static int vpp_probe(struct platform_device *pdev)
 	vpp_clk_info(vpp);
 
 	init_waitqueue_head(&vpp->stop_queue);
-	init_waitqueue_head(&vpp->framedone_wq);
+	init_waitqueue_head(&vpp->update_queue);
 
 	platform_set_drvdata(pdev, vpp);
+	pm_runtime_enable(dev);
 
 	ret = iovmm_activate(dev);
 	if (ret < 0) {
@@ -1069,6 +992,7 @@ static int vpp_probe(struct platform_device *pdev)
 	pm_qos_add_request(&vpp->vpp_mif_qos, PM_QOS_BUS_THROUGHPUT, 0);
 
 	mutex_init(&vpp->mlock);
+	spin_lock_init(&vpp->slock);
 
 	iovmm_set_fault_handler(dev, vpp_sysmmu_fault_handler, NULL);
 
@@ -1112,7 +1036,6 @@ static struct platform_driver vpp_driver __refdata = {
 		.owner	= THIS_MODULE,
 		.pm	= &vpp_pm_ops,
 		.of_match_table = of_match_ptr(vpp_device_table),
-		.suppress_bind_attrs = true,
 	}
 };
 

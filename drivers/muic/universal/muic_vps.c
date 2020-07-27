@@ -40,6 +40,8 @@
 #include <linux/of_gpio.h>
 #endif /* CONFIG_OF */
 
+#include <linux/battery/sec_charging_common.h> 
+
 #include "muic-internal.h"
 #include "muic_apis.h"
 #include "muic_i2c.h"
@@ -77,7 +79,13 @@
 #define DEV_TYPE3_AV_WITH_VBUS		(0x1 << 4)
 #define DEV_TYPE3_NO_STD_CHG		(0x1 << 2)
 #define DEV_TYPE3_MHL			(0x1 << 0)
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705)
+#define DEV_TYPE3_LO_TA			(0x1 << 5)
+#define DEV_TYPE3_CHG_TYPE	(DEV_TYPE3_U200_CHG | DEV_TYPE3_NO_STD_CHG | \
+				DEV_TYPE3_LO_TA)
+#else
 #define DEV_TYPE3_CHG_TYPE	(DEV_TYPE3_U200_CHG | DEV_TYPE3_NO_STD_CHG)
+#endif
 
 static struct vps_cfg cfg_MHL = {
 	.name = "MHL",
@@ -85,7 +93,7 @@ static struct vps_cfg cfg_MHL = {
 };
 static struct vps_cfg cfg_OTG = {
 	.name = "OTG",
-	.attr = MATTR(VCOM_USB, VB_ANY),
+	.attr = MATTR(VCOM_OPEN, VB_CHK),
 };
 static struct vps_cfg cfg_VZW_ACC = {
 	.name = "VZW Accessory",
@@ -95,13 +103,21 @@ static struct vps_cfg cfg_VZW_INCOMPATIBLE = {
 	.name = "VZW Incompatible",
 	.attr = MATTR(VCOM_OPEN, VB_ANY),
 };
-static struct vps_cfg cfg_RDU_TA = {
-	.name = "RDU TA",
-	.attr = MATTR(VCOM_OPEN, VB_HIGH) | MATTR_CDET_SUPP,
+static struct vps_cfg cfg_SMARTDOCK = {
+	.name = "Smartdock",
+	.attr = MATTR(VCOM_OPEN, VB_CHK),
 };
 static struct vps_cfg cfg_HMT = {
 	.name = "HMT",
 	.attr = MATTR(VCOM_USB, VB_ANY),
+};
+static struct vps_cfg cfg_POGO = {
+	.name = "POGO",
+	.attr = MATTR(VCOM_USB, VB_ANY) | MATTR_SUPP,
+};
+static struct vps_cfg cfg_CHARGING_POGO_VB = {
+	.name = "Charging POGO VB",
+	.attr = MATTR(VCOM_OPEN, VB_ANY) | MATTR_SUPP,
 };
 static struct vps_cfg cfg_AUDIODOCK = {
 	.name = "Audiodock",
@@ -113,15 +129,11 @@ static struct vps_cfg cfg_USB_LANHUB = {
 };
 static struct vps_cfg cfg_CHARGING_CABLE = {
 	.name = "Charging Cable",
-	.attr = MATTR(VCOM_OPEN, VB_ANY),
-};
-static struct vps_cfg cfg_GAMEPAD = {
-	.name = "Game Pad",
 	.attr = MATTR(VCOM_USB, VB_ANY),
 };
-static struct vps_cfg cfg_TYPE1_CHG = {
-	.name = "TYPE1 Charger",
-	.attr = MATTR(VCOM_OPEN, VB_HIGH) | MATTR_CDET_SUPP,
+static struct vps_cfg cfg_UNIVERSAL_MMDOCK = {
+	.name = "Universal Multimedia dock",
+	.attr = MATTR(VCOM_USB, VB_HIGH),
 };
 static struct vps_cfg cfg_JIG_USB_OFF = {
 	.name = "Jig USB Off",
@@ -137,7 +149,7 @@ static struct vps_cfg cfg_DESKDOCK = {
 };
 static struct vps_cfg cfg_TYPE2_CHG = {
 	.name = "TYPE2 Charger",
-	.attr = MATTR(VCOM_OPEN, VB_HIGH),
+	.attr = MATTR(VCOM_OPEN, VB_ANY),
 };
 static struct vps_cfg cfg_JIG_UART_OFF = {
 	.name = "Jig UART Off",
@@ -164,12 +176,6 @@ static struct vps_cfg cfg_UNDEFINED_CHARGING = {
 	.name = "Undefined Charging",
 	.attr = MATTR(VCOM_OPEN, VB_HIGH) | MATTR_SUPP,
 };
-#if defined(CONFIG_MUIC_HV_SUPPORT_POGO_DOCK)
-static struct vps_cfg cfg_POGO_DOCK = {
-	.name = "Pogo dock",
-	.attr = MATTR(VCOM_OPEN, VB_HIGH) | MATTR_SUPP,
-};
-#endif
 
 static struct vps_tbl_data vps_table[] = {
 	[MDEV(OTG)]			= {0x00, "GND",	&cfg_OTG,},
@@ -177,14 +183,15 @@ static struct vps_tbl_data vps_table[] = {
 	/* 0x01 ~ 0x0D : Remote Sx Button */
 	[MDEV(VZW_ACC)]		= {0x0e, "28.7K",	&cfg_VZW_ACC,},
 	[MDEV(VZW_INCOMPATIBLE)]	= {0x0f, "34K",	&cfg_VZW_INCOMPATIBLE,},
-	[MDEV(RDU_TA)]		= {0x10, "40.2K",	&cfg_RDU_TA,},
+	[MDEV(SMARTDOCK)]		= {0x10, "40.2K",	&cfg_SMARTDOCK,},
 	[MDEV(HMT)]			= {0x11, "49.9K",	&cfg_HMT,},
+	[MDEV(POGO)]			= {0x11, "49.9K",	&cfg_POGO,},
 	[MDEV(AUDIODOCK)]		= {0x12, "64.9K",	&cfg_AUDIODOCK,},
 	[MDEV(USB_LANHUB)]		= {0x13, "80.07K",	&cfg_USB_LANHUB,},
 	[MDEV(CHARGING_CABLE)]	= {0x14, "102K",	&cfg_CHARGING_CABLE,},
-	[MDEV(GAMEPAD)]		= {0x15, "121K",	&cfg_GAMEPAD,},
+	[MDEV(UNIVERSAL_MMDOCK)]	= {0x15, "121K",	&cfg_UNIVERSAL_MMDOCK,},
 	/* 0x16: UART Cable */
-	[MDEV(TYPE1_CHG)]		= {0x17, "200K",	&cfg_TYPE1_CHG,},
+	/* 0x17: CEA-936A Type 1 Charger */
 	[MDEV(JIG_USB_OFF)]		= {0x18, "255K",	&cfg_JIG_USB_OFF,},
 	[MDEV(JIG_USB_ON)]		= {0x19, "301K",	&cfg_JIG_USB_ON,},
 	[MDEV(DESKDOCK)]		= {0x1a, "365K",	&cfg_DESKDOCK,},
@@ -195,18 +202,18 @@ static struct vps_tbl_data vps_table[] = {
 	[MDEV(TA)]			= {0x1f, "OPEN",	&cfg_TA,},
 	[MDEV(USB)]			= {0x1f, "OPEN",	&cfg_USB,},
 	[MDEV(CDP)]			= {0x1f, "OPEN",	&cfg_CDP,},
+	[MDEV(CHARGING_POGO_VB)]	= {0x1f, "OPEN",	&cfg_CHARGING_POGO_VB,},
 	[MDEV(UNDEFINED_CHARGING)]	= {0xfe, "UNDEFINED",	&cfg_UNDEFINED_CHARGING,},
-#if defined(CONFIG_MUIC_HV_SUPPORT_POGO_DOCK)
-	[MDEV(POGO_DOCK)]		= {0x1f, "OPEN",	&cfg_POGO_DOCK,},
-#endif
 	[ATTACHED_DEV_NUM]		= {0x00, "NUM", NULL,},
 };
 
-static bool mdev_undefined_range(int adc)
+bool mdev_undefined_range(int adc)
 {
 	switch (adc) {
-	case ADC_SEND_END ... ADC_REMOTE_S12:
-	case ADC_UART_CABLE:
+	case ADC_SEND_END ... ADC_RDU_TA:
+	case ADC_AUDIODOCK ... ADC_UNIVERSAL_MMDOCK:
+	case ADC_CEA936ATYPE1_CHG:
+	case ADC_DESKDOCK ... ADC_CEA936ATYPE2_CHG:
 	case ADC_AUDIOMODE_W_REMOTE:
 		return true;
 	default:
@@ -214,22 +221,6 @@ static bool mdev_undefined_range(int adc)
 	}
 
 	return false;
-}
-
-static bool vps_is_acceptable(muic_data_t *pmuic, int adc)
-{
-	if (pmuic->attached_dev == ATTACHED_DEV_HMT_MUIC) {
-		if ((adc == ADC_OPEN) || (adc == ADC_HMT))
-			return true;
-		else
-			return false;
-	} else if (pmuic->attached_dev == ATTACHED_DEV_GAMEPAD_MUIC) {
-		if ((adc == ADC_OPEN) || (adc == ADC_GAMEPAD) || (adc == ADC_GND))
-			return true;
-		else
-			return false;
-	} else
-		return true;
 }
 
 struct vps_tbl_data * mdev_to_vps(muic_attached_dev_t mdev)
@@ -263,7 +254,7 @@ bool vps_name_to_mdev(const char *name, int *sdev)
 		return false;
 	}
 
-	pr_debug("%s:%s->[%2d]\n", __func__, pvps->cfg->name, mdev);
+	pr_info("%s:%s->[%2d]\n", __func__, pvps->cfg->name, mdev);
 
 	*sdev = mdev;
 
@@ -317,12 +308,19 @@ bool vps_is_factory_dev(muic_attached_dev_t mdev)
 
 static bool vps_is_1k_mhl_cable(vps_data_t *pmsr)
 {
-	return pmsr->t.adc1k ? true : false;
+#define STATUS1_ADC1K_SHIFT		7
+	u8 adc1k = 0x1 << STATUS1_ADC1K_SHIFT; /* VPS_VENDOR */
+
+	return (pmsr->t.adc1k == adc1k) ? true : false;
 }
 
 static bool vps_is_adc(vps_data_t *pmsr, struct vps_tbl_data *pvps)
 {
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705)
+	if (pmsr->s.adc == pvps->adc)
+#else
 	if (pmsr->t.adc == pvps->adc)
+#endif
 		return true;
 
 	 return false;
@@ -332,8 +330,11 @@ static bool vps_is_adc(vps_data_t *pmsr, struct vps_tbl_data *pvps)
 static bool vps_is_vbvolt(vps_data_t *pmsr, struct vps_tbl_data *pvps)
 {
 	int attr = pvps->cfg->attr;
-
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705)
+	if (pmsr->s.vbvolt == MATTR_TO_VBUS(attr))
+#else
 	if (pmsr->t.vbvolt == MATTR_TO_VBUS(attr))
+#endif
 		return true;
 
 	if (MATTR_TO_VBUS(attr) == VB_ANY)
@@ -343,8 +344,8 @@ static bool vps_is_vbvolt(vps_data_t *pmsr, struct vps_tbl_data *pvps)
 }
 
 /* Check it the resolved device type is treated as a different one
-  * when VBUS also comes along.
-  */
+ * when VBUS also comes along.
+ */
 int resolve_twin_mdev(int mdev, bool vbus)
 {
 	if (vbus) {
@@ -352,69 +353,37 @@ int resolve_twin_mdev(int mdev, bool vbus)
 			pr_info("%s: mdev:%d vbus:%d\n",__func__, mdev, vbus);
 			return MDEV(DESKDOCK_VB);
 		}
-		else if (mdev == MDEV(JIG_UART_ON)) {
-			pr_info("%s: mdev:%d vbus:%d\n",__func__, mdev, vbus);
-			return MDEV(JIG_UART_ON_VB);
-		}
 	}
 
 	return 0;
 }
 
-/* 
- * To filter out the chargers which don't support AFC,
- * such as LO.
- */
-bool vps_is_hv_ta(vps_data_t *pvps)
-{
-	if (pvps->t.chgtyp == CHGTYP_DEDICATED_CHARGER)
-		return true;
-
-	return false;
-}
-
-int vps_chgtyp_to_dev(int chgtyp)
-{
-	int ret = -1;
-
-	switch (chgtyp) {
-	case CHGTYP_USB:
-		ret = ATTACHED_DEV_USB_MUIC;
-		break;
-	case CHGTYP_CDP:
-		ret = ATTACHED_DEV_CDP_MUIC;
-		break;
-	case CHGTYP_DEDICATED_CHARGER:
-		ret = ATTACHED_DEV_TA_MUIC;
-		break;
-	case CHGTYP_500MA:
-	case CHGTYP_1A:
-	case CHGTYP_SPECIAL_3_3V_CHARGER:
-		ret = ATTACHED_DEV_TA_MUIC;
-		break;
-	case CHGTYP_NO_VOLTAGE:
-	default:
-		pr_err("%s: Undefined chgtyp %d\n",__func__, chgtyp);
-	}
-
-	return ret;
-}
-
 int resolve_dev_based_on_adc_chgtype(muic_data_t *pmuic, vps_data_t *pmsr)
 {
 	int dev_type;
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705)
+	pr_info("%s: adc=%02x, chgtyp=%02x\n",__func__, pmsr->s.adc, pmsr->t.chgtyp);
 
+	switch(pmsr->s.adc){
+#else
 	pr_info("%s: adc=%02x, chgtyp=%02x\n",__func__, pmsr->t.adc, pmsr->t.chgtyp);
 
 	switch(pmsr->t.adc){
+#endif
 	case ADC_OPEN:
-		dev_type = vps_chgtyp_to_dev(pmsr->t.chgtyp);
-		if (dev_type < 0) {
-			pr_info("%s not able to resolve using ADC and CHGTYPE[OPEN]\n",__func__);
+		if(pmsr->t.chgtyp == CHGTYP_DEDICATED_CHARGER)
+			dev_type = ATTACHED_DEV_TA_MUIC;
+		else if(pmsr->t.chgtyp == CHGTYP_UNOFFICIAL_CHARGER)
+			dev_type = ATTACHED_DEV_TA_MUIC;
+                else if(pmsr->t.chgtyp == CHGTYP_USB)
+                        dev_type= ATTACHED_DEV_USB_MUIC;
+                else if(pmsr->t.chgtyp == CHGTYP_CDP)
+                        dev_type = ATTACHED_DEV_CDP_MUIC;
+                else{
+			pr_info("%s not able to resolve using ADC and CHGTYPE\n",__func__);
 	                return -1;
 		}
 		break;
-	case ADC_CEA936ATYPE1_CHG:
 	case ADC_219:
 		if(pmsr->t.chgtyp == CHGTYP_DEDICATED_CHARGER)
                         dev_type = ATTACHED_DEV_TA_MUIC;
@@ -425,17 +394,19 @@ int resolve_dev_based_on_adc_chgtype(muic_data_t *pmuic, vps_data_t *pmsr)
                 else if(pmsr->t.chgtyp == CHGTYP_USB)
                         dev_type = ATTACHED_DEV_USB_MUIC;
                 else {
-                        pr_info("%s not able to resolve using ADC and CHGTYPE[219K]\n",__func__);
+                        pr_info("%s not able to resolve using ADC and CHGTYPE\n",__func__);
                         return -1;
                 }
 		break;
-	case ADC_RDU_TA:
-		if (pmsr->t.chgtyp == CHGTYP_DEDICATED_CHARGER)
-			dev_type = ATTACHED_DEV_RDU_TA_MUIC;
-		else {
-			pr_info("%s abnormal RDU_TA\n",__func__);
-	                return -1;
-		}
+	case ADC_SMARTDOCK:
+		if(pmsr->t.chgtyp == CHGTYP_DEDICATED_CHARGER)
+                        dev_type = ATTACHED_DEV_SMARTDOCK_MUIC;
+                else if(pmsr->t.chgtyp == CHGTYP_USB)
+                        dev_type = ATTACHED_DEV_SMARTDOCK_MUIC;
+                else{
+                        pr_info("%s not able to resolve using ADC and CHGTYPE\n",__func__);
+                        return -1;
+                }
 		break;
 	default:
 		pr_info("%s not able to resolve using ADC and CHGTYPE\n",__func__);
@@ -450,23 +421,10 @@ int vps_find_attached_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, int *pi
 	struct vps_tbl_data *pvps;
 	muic_attached_dev_t new_dev = ATTACHED_DEV_UNKNOWN_MUIC, mdev;
 	vps_data_t *pmsr = &pmuic->vps;
-	int attr, ret = 0;
+	int attr;
 	int intr = MUIC_INTR_ATTACH;
-	int chgdet_dev = 0;
 
-	pr_debug("%s\n",__func__);
-
-
-	if (pmuic->discard_interrupt) {
-		pr_info("%s:%s Under ADC mode change.\n", MUIC_DEV_NAME, __func__);
-		return -1;
-	}
-
-	if ((pmsr->t.vbvolt == VB_HIGH) && pmsr->t.chgdetrun &&
-		(pmsr->t.adc != ADC_DESKDOCK)) {
-		pr_info("%s:%s chgdet is running.\n", MUIC_DEV_NAME, __func__);
-		return -1;
-	}
+	pr_info("%s\n",__func__);
 
 	for (mdev = MDEV(NONE); mdev < ATTACHED_DEV_NUM; mdev++) {
 		pvps = &vps_table[mdev];
@@ -476,21 +434,9 @@ int vps_find_attached_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, int *pi
 		attr = pvps->cfg->attr;
 
 		if (vps_is_1k_mhl_cable(pmsr)) {
-			new_dev = mdev = MDEV(MHL);
-			pr_info("%s:%s MHL found at mdev:%d(%s)\n",
-					MUIC_DEV_NAME, __func__, mdev, pvps->cfg->name);
+			new_dev = mdev;
 			break;
 		}
-
-#if defined(CONFIG_MUIC_HV_SUPPORT_POGO_DOCK)
-		if (gpio_is_valid(pmuic->dock_int_ap) && gpio_get_value(pmuic->dock_int_ap) == 0
-				&& pmsr->t.vbvolt == VB_HIGH) {
-			new_dev = MDEV(POGO_DOCK);
-			pr_info("%s:%s POGO DOCK found at mdev:%d\n",
-					MUIC_DEV_NAME, __func__, mdev);
-			break;
-		}
-#endif
 
 		if (!vps_is_adc(pmsr, pvps))
 			continue;
@@ -499,105 +445,68 @@ int vps_find_attached_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, int *pi
 			continue;
 
 		if(MATTR_TO_CDET(attr)){
-			if (!pmsr->t.chgtyp) {
-				intr = MUIC_INTR_DETACH;
-				pr_info("%s:%s No chgtyp. Assumes detach.\n", MUIC_DEV_NAME, __func__);
-				break;
-			}
-
-			if (pmsr->t.DCDTimedout) {
-				pr_info("%s:%s DCDTimedout. Forced To USB\n", MUIC_DEV_NAME, __func__);
-				new_dev = mdev = MDEV(USB);
-				break;
-			}
-
 			/* some function for cdeten check */
-			chgdet_dev = resolve_dev_based_on_adc_chgtype(pmuic,pmsr);
-			if (chgdet_dev < 0) {
-				chgdet_dev = 0;
-				continue;
-			}
+			new_dev = resolve_dev_based_on_adc_chgtype(pmuic,pmsr);
+			if(new_dev != -1)
+				break;
 		}
 
-		pr_info("%s:%s vps table match found at [1]mdev:%d(%s)\n",
+		pr_info("%s:%s vps table match found at mdev:%d(%s)\n",
 				MUIC_DEV_NAME, __func__, mdev, pvps->cfg->name);
-
-		new_dev = chgdet_dev ? chgdet_dev : mdev;
-
+		new_dev = mdev;
 		break;
 	}
 
-	/* do nothing */
-	if (ret < 0)
-		return -1;
-
-	/* Check Undefined range */
-	if (pmuic->undefined_range) {
-		if ((pmsr->t.vbvolt == VB_HIGH) &&
-			mdev_undefined_range(pmsr->t.adc)) {
-			pr_info("%s:%s undefined range adc:%02x\n",
-						MUIC_DEV_NAME, __func__, pmsr->t.adc);
-
-			*pintr = intr = MUIC_INTR_ATTACH;
-			*pdev = new_dev = ATTACHED_DEV_UNDEFINED_RANGE_MUIC;
-			return 0;
-		}
-	}
-
-	if (!vps_is_acceptable(pmuic, pmsr->t.adc)) {
-		pr_info("%s:%s Unacceptable adc(0x%02x) for HMT -> discarded.\n",
-			MUIC_DEV_NAME, __func__, pmsr->t.adc);
-
-		com_to_open_with_vbus(pmuic);
-		return -1;
-	}
-
 	if (mdev == ATTACHED_DEV_NUM) {
-		/* Check the cable types which are not listed in the vps table if vbus is. */
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705)
+		if (pmsr->s.vbvolt == VB_HIGH) {
+#else
 		if (pmsr->t.vbvolt == VB_HIGH) {
+#endif
 			new_dev = ATTACHED_DEV_UNDEFINED_CHARGING_MUIC;
-			pr_info("%s:%s unsupported ID + VB [%2d]\n",
-						MUIC_DEV_NAME, __func__, new_dev);
+			pr_info("%s:%s unsupported ID + VB\n", MUIC_DEV_NAME, __func__);
 		}
 		else
 		{
 			intr = MUIC_INTR_DETACH;
 			new_dev = ATTACHED_DEV_NONE_MUIC;
 			if(pvps->cfg)
-				pr_info("%s:%s vps table match found at [2]mdev:%d(%s)\n",
+				pr_info("%s:%s vps table match found at mdev:%d(%s)\n",
 						MUIC_DEV_NAME, __func__, mdev, pvps->cfg->name);
-		}
-	} else {
-		/* Check if the cable type is supported with the attr of the cable.
-		  */
-
-		int twin_mdev = 0;
-
-		if (vps_is_supported_dev(new_dev)) {
-			if ((twin_mdev = resolve_twin_mdev(new_dev, pmsr->t.vbvolt))) {
-				new_dev = twin_mdev;
-				pr_info("%s:Supported twin mdev-> %d\n", __func__, twin_mdev);
-			} else
-				pr_info("%s:Supported.\n", __func__);
-
-		} else if(pmsr->t.vbvolt && (intr == MUIC_INTR_ATTACH) &&
-			!MATTR_TO_NOCHG(attr)) {
-			new_dev = ATTACHED_DEV_UNDEFINED_CHARGING_MUIC;
-			pr_info("%s:Unsupported->UNDEFINED_CHARGING\n", __func__);
-		} else {
-			intr = MUIC_INTR_DETACH;
-			new_dev = ATTACHED_DEV_UNKNOWN_MUIC;
-			pr_info("%s:Unsupported->Discarded.\n", __func__);
 		}
 	}
 
 	*pintr = intr;
 	*pdev = new_dev;
 
-	return ret;
+	return new_dev;
 }
 
-#if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
+/*
+  * vps_show_tablbe() functions displays the VPS table as a below format
+dev   ADC      (RID)         attr                     vps_name
+ --------------------------------------------------------------
+[ 1] = 1f(      OPEN) 00000521:S:_                          USB
+[ 2] = 1f(      OPEN) 00000521:S:_                          CDP
+[ 3] = 00(       GND) 00000122:S:_                          OTG
+[ 4] = 1f(      OPEN) 00000521:S:_                           TA
+[12] = fe( UNDEFINED) 00000121:S:_           Undefined Charging
+[13] = 1a(      365K) 00000122:S:_                     Deskdock
+[16] = 1c(      523K) 00000333:S:F                 Jig UART Off
+[20] = 1d(      619K) 00000333:S:F                  Jig UART On
+[21] = 18(      255K) 00000351:S:F                  Jig USB Off
+[22] = 19(      301K) 00000351:S:F                   Jig USB On
+[23] = 10(     40.2K) 00000022:_:_                    Smartdock
+[27] = 15(      121K) 00000151:S:_    Universal Multimedia dock
+[28] = 12(     64.9K) 00000051:_:_                    Audiodock
+[29] = fe(        1K) 00000123:S:_                          MHL
+[30] = 14(      102K) 00000153:S:_               Charging Cable
+[45] = 11(     49.9K) 00000053:_:_                          HMT
+[46] = 0e(     28.7K) 00000023:_:_                VZW Accessory
+[47] = 0f(       34K) 00000023:_:_             VZW Incompatible
+[48] = 13(    80.07K) 00000123:S:_                   USB LANHUB
+[49] = 1b(      442K) 00000123:S:_                TYPE2 Charger
+*/
 void vps_show_table(void)
 {
 	struct vps_tbl_data *pvps;
@@ -623,7 +532,6 @@ void vps_show_table(void)
 	pr_info("done.\n");
 
 }
-#endif
 
 void vps_show_supported_list(void)
 {
@@ -649,26 +557,71 @@ void vps_show_supported_list(void)
 			MATTR_TO_FACT(attr) ? 'F' : '_',
 			pvps->cfg->name);
 
-
 	}
 
 	pr_info("done.\n");
 
 }
 
-
 static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, int *pintr)
 {
 	muic_attached_dev_t new_dev = ATTACHED_DEV_UNKNOWN_MUIC;
 	int intr = MUIC_INTR_DETACH;
-	int vbvolt = 0;
-	int val1, val2, val3, adc;
+	int vbvolt = 0, adc = 0;
+	int twin_mdev = 0;
+	union power_supply_propval wcvalue;
+
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5504)
+	new_dev = pmuic->vps.t.attached_dev;
+	if (new_dev != ATTACHED_DEV_UNKNOWN_MUIC)
+		intr = MUIC_INTR_ATTACH;
+	adc = pmuic->vps.s.adc;
+	vbvolt = pmuic->vps.s.vbvolt;
+#else
+	int val1, val2, val3;
 
 	val1 = pmuic->vps.s.val1;
 	val2 = pmuic->vps.s.val2;
 	val3 = pmuic->vps.s.val3;
 	adc = pmuic->vps.s.adc;
 	vbvolt = pmuic->vps.s.vbvolt;
+
+	psy_do_property("pogo", get, POWER_SUPPLY_PROP_ONLINE, wcvalue);
+
+	pr_info("%s:%s wcvalue: %d\n", MUIC_DEV_NAME, __func__, wcvalue.intval);
+
+#ifdef CONFIG_MUIC_POGO
+	/* Check Undefined range */
+	if (pmuic->undefined_range && wcvalue.intval) {
+		pr_info("%s:%s adc:%02x\n", MUIC_DEV_NAME, __func__, pmuic->vps.s.adc);
+
+		if (mdev_undefined_range(pmuic->vps.s.adc)) {
+			pr_info("%s:%s undefined range detect\n",
+				MUIC_DEV_NAME, __func__);
+
+			*pintr = intr = MUIC_INTR_ATTACH;
+			*pdev = new_dev = ATTACHED_DEV_UNDEFINED_RANGE_MUIC;
+			return 0;
+		}
+
+		if (pmuic->vps.s.adc == ADC_OPEN) {
+			pr_info("%s:%s Charging pogo detect\n", MUIC_DEV_NAME, __func__);
+
+			*pintr = intr = MUIC_INTR_ATTACH;
+			*pdev = new_dev = ATTACHED_DEV_CHARGING_POGO_VB_MUIC;
+			return 0;
+		}
+	} else if (pmuic->attached_dev == ATTACHED_DEV_CHARGING_POGO_VB_MUIC) {
+		pr_info("%s:%s Charging pogo detached\n", MUIC_DEV_NAME, __func__);
+
+		BCD_rescan_incomplete_insertion(pmuic, pmuic->is_rescanned);
+		pmuic->is_dcdtmr_intr = true;
+		pmuic->is_rescanned = true;
+
+		*pintr = intr = MUIC_INTR_DETACH;
+		return 0;
+	}
+#endif
 
 	/* Attached */
 	switch (val1) {
@@ -721,10 +674,10 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 		pr_info("%s : JIG_USB_ON DETECTED\n", MUIC_DEV_NAME);
 		break;
 	case DEV_TYPE2_TTY:
-		/* MM-dock is handled in an attachment function with vbus */
+		if (!vbvolt) break;
 		intr = MUIC_INTR_ATTACH;
 		new_dev = ATTACHED_DEV_UNIVERSAL_MMDOCK_MUIC;
-		pr_info("%s : UNIVERSAL_MMDOCK DETECTED(%d)\n", MUIC_DEV_NAME, vbvolt);
+		pr_info("%s : UNIVERSAL_MMDOCK DETECTED\n", MUIC_DEV_NAME);
 		break;
 
 	default:
@@ -737,6 +690,7 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 
 		if (val3 & DEV_TYPE3_NO_STD_CHG) {
 			new_dev = ATTACHED_DEV_USB_MUIC;
+			pmuic->is_dcdtmr_intr = true;
 			pr_info("%s : TYPE3 DCD_OUT_TIMEOUT DETECTED\n", MUIC_DEV_NAME);
 
 		} else {
@@ -758,15 +712,27 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 		new_dev = ATTACHED_DEV_MHL_MUIC;
 		pr_info("%s : MHL DETECTED\n", MUIC_DEV_NAME);
 	}
+#endif
 
 	/* If there is no matching device found using device type registers
 		use ADC to find the attached device */
 	if(new_dev == ATTACHED_DEV_UNKNOWN_MUIC) {
 		switch (adc) {
+		case ADC_USB_LANHUB:
+			intr = MUIC_INTR_ATTACH;
+			new_dev = ATTACHED_DEV_USB_LANHUB_MUIC;
+			pr_info("%s : LANHUB DETECTED\n", MUIC_DEV_NAME);
+			break;
+
 		case ADC_CEA936ATYPE1_CHG : /*200k ohm */
 		{
+			int rescanned_dev;
+
+			if (!vbvolt)
+				break;
+
 			/* For LG USB cable which has 219k ohm ID */
-			int rescanned_dev = do_BCD_rescan(pmuic);
+			rescanned_dev = do_BCD_rescan(pmuic);
 
 			if (rescanned_dev > 0) {
 				pr_info("%s : TYPE1 CHARGER DETECTED(USB)\n", MUIC_DEV_NAME);
@@ -826,6 +792,11 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 			new_dev = ATTACHED_DEV_CHARGING_CABLE_MUIC;
 			pr_info("%s : PS_CABLE DETECTED\n", MUIC_DEV_NAME);
 			break;
+		case ADC_DESKDOCK:
+			intr = MUIC_INTR_ATTACH;
+			new_dev = ATTACHED_DEV_DESKDOCK_MUIC;
+			pr_info("%s : ADC DESKDOCK DETECTED\n", MUIC_DEV_NAME);
+			break;
 		case ADC_OPEN:
 			/* sometimes muic fails to catch JIG_UART_OFF detaching */
 			/* double check with ADC */
@@ -835,8 +806,10 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 				pr_info("%s : ADC OPEN DETECTED\n", MUIC_DEV_NAME);
 			}
 			break;
-		case ADC_GAMEPAD:
-			pr_info("%s : ADC GAMEPAD Discarded\n", MUIC_DEV_NAME);
+		case ADC_UNIVERSAL_MMDOCK:
+			intr = MUIC_INTR_ATTACH;
+			new_dev = ATTACHED_DEV_UNIVERSAL_MMDOCK_MUIC;
+			pr_info("%s : ADC UNIVERSAL_MMDOCK\n", MUIC_DEV_NAME);
 			break;
 
 		case ADC_RESERVED_VZW:
@@ -849,6 +822,12 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 			new_dev = ATTACHED_DEV_VZW_INCOMPATIBLE_MUIC;
 			intr = MUIC_INTR_ATTACH;
 			pr_info("%s : ADC INCOMPATIBLE_VZW DETECTED\n", MUIC_DEV_NAME);
+			break;
+
+		case ADC_POGO:
+			new_dev = ATTACHED_DEV_POGO_MUIC;
+			intr = MUIC_INTR_ATTACH;
+			pr_info("%s : ADC POGO DETECTED\n", MUIC_DEV_NAME);
 			break;
 
 		default:
@@ -864,11 +843,16 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 		}
 	}
 
-	/* Check if the cable type is supported.
+	/* Check it the cable type is supported.
 	  */
-	if (vps_is_supported_dev(new_dev))
-		pr_info("%s:Supported.\n", __func__);
-	else if(vbvolt && (intr == MUIC_INTR_ATTACH)) {
+
+	if (vps_is_supported_dev(new_dev)) {
+		if ((twin_mdev = resolve_twin_mdev(new_dev, vbvolt))) {
+			new_dev = twin_mdev;
+			pr_info("%s:Supported twin mdev-> %d\n", __func__, twin_mdev);
+		} else
+			pr_info("%s:Supported.\n", __func__);
+	} else if(vbvolt && (intr == MUIC_INTR_ATTACH)) {
 		new_dev = ATTACHED_DEV_UNDEFINED_CHARGING_MUIC;
 		pr_info("%s:Unsupported->UNDEFINED_CHARGING\n", __func__);
 	} else {

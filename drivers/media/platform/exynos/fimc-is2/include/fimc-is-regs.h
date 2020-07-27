@@ -351,6 +351,8 @@
 
 #elif defined(CONFIG_SOC_EXYNOS7870)
 
+#elif defined(CONFIG_SOC_EXYNOS7880)
+
 #else
 #error fimc-is driver can NOT support this platform
 

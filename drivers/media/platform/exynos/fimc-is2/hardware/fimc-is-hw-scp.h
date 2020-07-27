@@ -53,7 +53,6 @@ enum scp_param_change_flag {
 struct fimc_is_hw_scp {
 	u32	img_format;
 	bool	conv420_en;
-	bool	param_change_flags[SCP_PARAM_CHANGE_MAX];
 	struct hw_api_scaler_setfile *setfile;
 };
 

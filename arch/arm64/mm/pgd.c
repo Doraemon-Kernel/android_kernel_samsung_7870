@@ -47,7 +47,10 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
 pgd_t *pgd_alloc(struct mm_struct *mm)
 {
 	pgd_t *ret = NULL;
-	ret = (pgd_t *) rkp_ro_alloc();
+#ifdef CONFIG_KNOX_KAP
+	if (boot_mode_security)
+#endif
+		ret = (pgd_t *) rkp_ro_alloc();
 	if (!ret) {
 		if (PGD_SIZE == PAGE_SIZE)
 			ret = (pgd_t *)get_zeroed_page(GFP_KERNEL);
@@ -60,11 +63,14 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
 		return ret;
 	}
 
-	if (rkp_started)
+#ifdef CONFIG_KNOX_KAP
+	if (boot_mode_security && rkp_started)
+#endif  //CONFIG_KNOX_KAP
 		rkp_call(RKP_PGD_NEW, (unsigned long)ret, 0, 0, 0, 0);
 	return ret;
 }
 #endif
+
 #ifndef  CONFIG_TIMA_RKP
 void pgd_free(struct mm_struct *mm, pgd_t *pgd)
 {
@@ -76,12 +82,16 @@ void pgd_free(struct mm_struct *mm, pgd_t *pgd)
 #else
 void pgd_free(struct mm_struct *mm, pgd_t *pgd)
 {
-
-	if (rkp_started)
-		rkp_call(RKP_PGD_FREE, (unsigned long)pgd, 0, 0, 0, 0);
+	int rkp_do = 0;
+#ifdef CONFIG_KNOX_KAP
+	if (boot_mode_security)
+#endif	//CONFIG_KNOX_KAP
+		rkp_do = 1;
+	
+	if (rkp_do) rkp_call(RKP_PGD_FREE, (unsigned long)pgd, 0, 0, 0, 0);
 	/* if pgd memory come from read only buffer, the put it back */
 	/*TODO: use a macro*/
-	if((unsigned long)pgd >= (unsigned long)RKP_RBUF_VA && (unsigned long)pgd < ((unsigned long)RKP_RBUF_VA +  TIMA_ROBUF_SIZE))
+	if( rkp_do &&	(unsigned long)pgd >= (unsigned long)RKP_RBUF_VA && (unsigned long)pgd < ((unsigned long)RKP_RBUF_VA +  TIMA_ROBUF_SIZE))
 		rkp_ro_free((void*)pgd);
 	else
 	{

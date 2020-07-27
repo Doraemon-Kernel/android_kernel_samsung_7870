@@ -51,6 +51,7 @@
 #include <linux/usb/f_accessory.h>
 #include <asm-generic/siginfo.h>
 #include <linux/kernel.h>
+#include <linux/file.h>
 #include "f_mtp.h"
 #include "gadget_chips.h"
 
@@ -208,7 +209,7 @@ static struct usb_ss_ep_comp_descriptor mtpg_superspeed_bulk_comp_desc = {
 	.bDescriptorType =      USB_DT_SS_ENDPOINT_COMP,
 
 	/* the following 2 values can be tweaked if necessary */
-	.bMaxBurst =         4,
+	/* .bMaxBurst =         0, */
 	/* .bmAttributes =      0, */
 };
 
@@ -834,6 +835,49 @@ static void interrupt_complete(struct usb_ep *ep, struct usb_request *req)
 	printk(KERN_DEBUG "Finished Writing Interrupt Data\n");
 }
 */
+#ifdef CONFIG_COMPAT
+static ssize_t interrupt_write_config_compat(struct file *fd,
+			const char __user *buf, size_t count)
+{
+	struct mtpg_dev *dev = fd->private_data;
+	struct usb_request *req = 0;
+	int  ret;
+
+	DEBUG_MTPB("[%s] \tline = [%d]\n", __func__, __LINE__);
+
+	if (count > MTPG_INTR_BUFFER_SIZE)
+			return -EINVAL;
+
+	ret = wait_event_interruptible_timeout(dev->intr_wq,
+		(req = mtpg_req_get(dev, &dev->intr_idle)),
+						msecs_to_jiffies(1000));
+
+	if (!req) {
+		printk(KERN_ERR "[%s]Alloc has failed\n", __func__);
+		return -ENOMEM;
+	}
+
+	if (copy_from_user(req->buf, buf, count)) {
+		mtpg_req_put(dev, &dev->intr_idle, req);
+		printk(KERN_ERR "[%s]copy from user has failed\n", __func__);
+		return -EIO;
+	}
+
+	req->length = count;
+	/*req->complete = interrupt_complete;*/
+
+	ret = usb_ep_queue(dev->int_in, req, GFP_ATOMIC);
+
+	if (ret) {
+		printk(KERN_ERR "[%s:%d]\n", __func__, __LINE__);
+		mtpg_req_put(dev, &dev->intr_idle, req);
+	}
+
+	DEBUG_MTPB("[%s] \tline = [%d] returning ret is %d\\n",
+						__func__, __LINE__, ret);
+	return ret;
+}
+#else
 static ssize_t interrupt_write(struct file *fd,
 			struct mtp_event *event, size_t count)
 {
@@ -875,6 +919,8 @@ static ssize_t interrupt_write(struct file *fd,
 						__func__, __LINE__, ret);
 	return ret;
 }
+#endif
+
 static void mtp_complete_ep0_transection(struct usb_ep *ep, struct usb_request *req)
 {
 	if (req->status || req->actual != req->length) {
@@ -995,7 +1041,9 @@ static void read_send_work(struct work_struct *work)
 static long  mtpg_ioctl(struct file *fd, unsigned int code, unsigned long arg)
 {
 	struct mtpg_dev		*dev = fd->private_data;
+#ifndef CONFIG_COMPAT
   struct mtp_event        event;
+#endif
 	struct usb_composite_dev *cdev;
 	struct usb_request	*req;
 	int status = 0;
@@ -1051,6 +1099,18 @@ static long  mtpg_ioctl(struct file *fd, unsigned int code, unsigned long arg)
 	case MTP_WRITE_INT_DATA:
 		printk(KERN_INFO "[%s]\t%d MTP intrpt_Write no slep\n",
 						__func__, __LINE__);
+#ifdef CONFIG_COMPAT
+		ret_value = interrupt_write_config_compat(fd, (const char *)arg , MTP_MAX_PACKET_LEN_FROM_APP);
+		if (ret_value < 0) {
+			printk(KERN_ERR "[%s]\t%d MTP_WRITE_INT_DATA_CONFIG_COMPAT interptFD failed\n",
+							 __func__, __LINE__);
+			status = -EIO;
+		} else {
+			printk(KERN_DEBUG "[%s]\t%d MTP_WRITE_INT_DATA_CONFIG_COMPAT intruptFD suces\n",
+							 __func__, __LINE__);
+			status = MTP_MAX_PACKET_LEN_FROM_APP;
+		}
+#else
 		if (copy_from_user(&event, (void __user *)arg, sizeof(event))){
 			status = -EFAULT;
 			printk(KERN_ERR "[%s]\t%d:copyfrmuser fail\n",
@@ -1059,14 +1119,15 @@ static long  mtpg_ioctl(struct file *fd, unsigned int code, unsigned long arg)
 		}
 		ret_value = interrupt_write(fd, &event, MTP_MAX_PACKET_LEN_FROM_APP);
 		if (ret_value < 0) {
-			printk(KERN_ERR "[%s]\t%d interptFD failed\n",
+			printk(KERN_ERR "[%s]\t%d MTP_WRITE_INT_DATA interptFD failed\n",
 							 __func__, __LINE__);
 			status = -EIO;
 		} else {
-			printk(KERN_DEBUG "[%s]\t%d intruptFD suces\n",
+			printk(KERN_DEBUG "[%s]\t%d MTP_WRITE_INT_DATA intruptFD suces\n",
 							 __func__, __LINE__);
 			status = MTP_MAX_PACKET_LEN_FROM_APP;
 		}
+#endif
 		break;
 
 	case SET_MTP_USER_PID:
@@ -1164,17 +1225,25 @@ static long  mtpg_ioctl(struct file *fd, unsigned int code, unsigned long arg)
 		struct read_send_info	info;
 		struct work_struct *work;
 		struct file *file = NULL;
+
+		if (_lock(&dev->ioctl_excl)){
+			status = -EBUSY;
+			goto exit;
+		}
+
 		printk(KERN_DEBUG "[%s]SEND_FILE_WITH_HEADER line=[%d]\n",
 							__func__, __LINE__);
 
 		if (copy_from_user(&info, (void __user *)arg, sizeof(info))) {
 			status = -EFAULT;
+			_unlock(&dev->ioctl_excl);
 			goto exit;
 		}
 
 		file = fget(info.Fd);
 		if (!file) {
 			status = -EBADF;
+			_unlock(&dev->ioctl_excl);
 			printk(KERN_DEBUG "[%s] line=[%d] bad file number\n",
 							__func__, __LINE__);
 			goto exit;
@@ -1195,6 +1264,7 @@ static long  mtpg_ioctl(struct file *fd, unsigned int code, unsigned long arg)
 
 		smp_rmb();
 		status = dev->read_send_result;
+		_unlock(&dev->ioctl_excl);
 		break;
 	}
 	case MTP_VBUS_DISABLE:
@@ -1377,7 +1447,6 @@ mtpg_function_bind(struct usb_configuration *c, struct usb_function *f)
 	 */
 
 	printk(KERN_DEBUG "[%s]\tline = [%d]\n", __func__, __LINE__);
-
 	id = usb_interface_id(c, f);
 	if (id < 0) {
 		printk(KERN_ERR "[%s]Error in usb_interface_id\n", __func__);
@@ -1466,7 +1535,6 @@ mtpg_function_bind(struct usb_configuration *c, struct usb_function *f)
 
 	mtpg->cdev = cdev;
 	the_mtpg->cdev = cdev;
-
 	return 0;
 
 autoconf_fail:
@@ -1806,7 +1874,7 @@ static int mtp_setup(void)
 {
 	struct mtpg_dev	*mtpg;
 	int		rc;
-	int 		err;
+	int err;
 
 	printk(KERN_DEBUG "[%s] \tline = [%d]\n", __func__, __LINE__);
 	memset(guid_info, '0', 1);

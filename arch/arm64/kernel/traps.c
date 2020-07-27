@@ -30,7 +30,6 @@
 #include <linux/init.h>
 #include <linux/sched.h>
 #include <linux/syscalls.h>
-#include <linux/exynos-ss.h>
 
 #include <asm/atomic.h>
 #include <asm/barrier.h>
@@ -45,9 +44,6 @@
 #include <linux/sec_debug.h>
 #endif
 
-#ifdef CONFIG_RKP_CFP_ROPP
-#include <linux/rkp_cfp.h>
-#endif
 static const char *handler[]= {
 	"Synchronous Abort",
 	"IRQ",
@@ -153,9 +149,6 @@ static void dump_instr(const char *lvl, struct pt_regs *regs)
 static void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 {
 	struct stackframe frame;
-#ifdef CONFIG_RKP_CFP_ROPP
-	unsigned long init_pc = 0x0, rrk = 0x0;
-#endif
 
 	pr_debug("%s(regs = %p tsk = %p)\n", __func__, regs, tsk);
 
@@ -179,18 +172,7 @@ static void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 		frame.pc = thread_saved_pc(tsk);
 	}
 
-#ifdef CONFIG_RKP_CFP_ROPP
-	init_pc = frame.pc;
-#ifdef CONFIG_RKP_CFP_ROPP_HYPKEY
-	rkp_call(CFP_ROPP_RET_KEY, (unsigned long) &(task_thread_info(tsk)->rrk), 0, 0, 0, 0);
-	asm("mov %0, x16" : "=r" (rrk));
-#else //CONFIG_RKP_CFP_ROPP_HYPKEY
-	rrk = task_thread_info(tsk)->rrk;
-#endif //CONFIG_RKP_CFP_ROPP_HYPKEY
-#endif //CONFIG_RKP_CFP_ROPP
-
 	pr_emerg("Call trace:\n");
-
 	while (1) {
 		unsigned long where = frame.pc;
 		int ret;
@@ -198,13 +180,7 @@ static void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 		ret = unwind_frame(&frame);
 		if (ret < 0)
 			break;
-#ifdef CONFIG_RKP_CFP_ROPP
-        if ((where != init_pc) && (0x1 == dump_stack_dec)){
-            where = where ^ rrk;
-        }
-#endif
 		dump_backtrace_entry(where, frame.sp);
-
 	}
 }
 
@@ -212,9 +188,6 @@ static void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 static void dump_backtrace_auto_summary(struct pt_regs *regs, struct task_struct *tsk)
 {
 	struct stackframe frame;
-#ifdef CONFIG_RKP_CFP_ROPP
-	unsigned long init_pc = 0x0, rrk = 0x0;
-#endif
 
 	pr_debug("%s(regs = %p tsk = %p)\n", __func__, regs, tsk);
 
@@ -237,16 +210,6 @@ static void dump_backtrace_auto_summary(struct pt_regs *regs, struct task_struct
 		frame.sp = thread_saved_sp(tsk);
 		frame.pc = thread_saved_pc(tsk);
 	}
-
-#ifdef CONFIG_RKP_CFP_ROPP
-	init_pc = frame.pc;
-#ifdef CONFIG_RKP_CFP_ROPP_HYPKEY
-	rkp_call(CFP_ROPP_RET_KEY, (unsigned long) &(task_thread_info(tsk)->rrk), 0, 0, 0, 0);
-	asm("mov %0, x16" : "=r" (rrk));
-#else //CONFIG_RKP_CFP_ROPP_HYPKEY
-	rrk = task_thread_info(tsk)->rrk;
-#endif //CONFIG_RKP_CFP_ROPP_HYPKEY
-#endif //CONFIG_RKP_CFP_ROPP
 
 	pr_auto_once(2);
 	pr_auto(ASL2, "Call trace:\n");
@@ -258,11 +221,6 @@ static void dump_backtrace_auto_summary(struct pt_regs *regs, struct task_struct
 		ret = unwind_frame(&frame);
 		if (ret < 0)
 			break;
-#ifdef CONFIG_RKP_CFP_ROPP
-		if ((where != init_pc) && (0x1 == dump_stack_dec)){
-			where = where ^ rrk;
-		}
-#endif
 		dump_backtrace_entry_auto_summary(where, frame.sp);
 	}
 }
@@ -305,10 +263,10 @@ static int __die(const char *str, int err, struct thread_info *thread,
 		dump_mem(KERN_EMERG, "Stack: ", regs->sp,
 			 THREAD_SIZE + (unsigned long)task_stack_page(tsk));
 
-#ifdef CONFIG_SEC_DEBUG_AUTO_SUMMARY
-		dump_backtrace_auto_summary(NULL, tsk);
+#ifdef CONFIG_SEC_DEBUG_AUTO_SUMMARY		
+		dump_backtrace_auto_summary(regs, tsk);
 #else
-		dump_backtrace(NULL, tsk);
+		dump_backtrace(regs, tsk);
 #endif
 		dump_instr(KERN_EMERG, regs);
 	}
@@ -332,14 +290,8 @@ void die(const char *str, struct pt_regs *regs, int err)
 	console_verbose();
 	bust_spinlocks(1);
 
-	if (!user_mode(regs)) {
-		/*
-		 * If recalling hardlockup core has been run before,
-		 * PC value must be replaced to real PC value.
-		 */
-		exynos_ss_hook_hardlockup_entry((void *)regs);
+	if (!user_mode(regs))
 		bug_type = report_bug(regs->pc, regs);
-	}
 	if (bug_type != BUG_TRAP_TYPE_NONE)
 		str = "Oops - BUG";
 
@@ -360,12 +312,12 @@ void die(const char *str, struct pt_regs *regs, int err)
 #if defined(CONFIG_SEC_DEBUG)
 	if (in_interrupt())
 		panic("%s\nPC is at %pS\nLR is at %pS",
-				"Fatal exception in interrupt", (void *)regs->pc,
-				compat_user_mode(regs) ? (void *)regs->compat_lr : (void *)regs->regs[30]);
+		      "Fatal exception in interrupt", (void *)regs->pc,
+		      compat_user_mode(regs) ? (void *)regs->compat_lr : (void *)regs->regs[30]);
 	if (panic_on_oops)
 		panic("%s\nPC is at %pS\nLR is at %pS",
-				"Fatal exception", (void *)regs->pc,
-				compat_user_mode(regs) ? (void *)regs->compat_lr : (void *)regs->regs[30]);
+		      "Fatal exception", (void *)regs->pc,
+		      compat_user_mode(regs) ? (void *)regs->compat_lr : (void *)regs->regs[30]);
 #else
 	if (in_interrupt())
 		panic("Fatal exception in interrupt");
@@ -471,7 +423,8 @@ asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 	if (call_undef_hook(regs) == 0)
 		return;
 
-	if (unhandled_signal(current, SIGILL) && show_unhandled_signals_ratelimited()) {
+	if (show_unhandled_signals && unhandled_signal(current, SIGILL) &&
+	    printk_ratelimit()) {
 		pr_info("%s[%d]: undefined instruction: pc=%p\n",
 			current->comm, task_pid_nr(current), pc);
 		dump_instr(KERN_INFO, regs);
@@ -484,7 +437,7 @@ asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 
 #ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
 	if (!user_mode(regs))
-		sec_debug_set_extra_info_fault(UNDEF_FAULT, (unsigned long)regs->pc, regs);
+		sec_debug_set_extra_info_fault(-1, regs);
 #endif
 
 	arm64_notify_die("Oops - undefined instruction", regs, &info, 0);
@@ -599,14 +552,10 @@ asmlinkage void bad_mode(struct pt_regs *regs, int reason, unsigned int esr)
 {
 	console_verbose();
 
-	pr_auto(ASL1, "Bad mode in %s handler detected, code 0x%08x -- %s\n",
+	pr_crit("Bad mode in %s handler detected, code 0x%08x -- %s\n",
 		handler[reason], esr, esr_get_class_string(esr));
 
-#ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
-	sec_debug_set_extra_info_fault(BAD_MODE_FAULT, (unsigned long)regs->pc, regs);
-	sec_debug_set_extra_info_esr(esr);
-#endif
-
+	die("Oops - bad mode", regs, 0);
 	local_irq_disable();
 	panic("bad mode");
 }
@@ -624,6 +573,13 @@ asmlinkage void bad_el0_sync(struct pt_regs *regs, int reason, unsigned int esr)
 	pr_crit("Bad EL0 synchronous exception detected on CPU%d, code 0x%08x\n",
 		smp_processor_id(), esr);
 	__show_regs(regs);
+
+#ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
+	if (!user_mode(regs)) {
+		sec_debug_set_extra_info_fault(SEC_DEBUG_BADMODE_MAGIC, regs);
+		sec_debug_set_extra_info_esr(esr);
+	}
+#endif
 
 	info.si_signo = SIGILL;
 	info.si_errno = 0;

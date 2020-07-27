@@ -11,6 +11,7 @@
 
 #include "scaler.h"
 #include "scaler-regs.h"
+#include <linux/io.h>
 
 #define COEF(val_l, val_h) ((((val_h) & 0x1FF) << 16) | ((val_l) & 0x1FF))
 extern int sc_set_blur;
@@ -514,43 +515,25 @@ static struct sc_csc_tab sc_no_csc = {
 };
 
 static struct sc_csc_tab sc_y2r = {
-	
-	/* REC.601 Narrow */	
+	/* (0,1) 601 Narrow */
 	{ 0x254, 0x000, 0x331, 0x254, 0xF38, 0xE60, 0x254, 0x409, 0x000 },
-	/* REC.601 Wide */	
+	/* (0,1) 601 Wide */
 	{ 0x200, 0x000, 0x2BE, 0x200, 0xF54, 0xE9B, 0x200, 0x377, 0x000 },
-	/* REC.709 Narrow */
+	/* (0,1) 709 Narrow */
 	{ 0x254, 0x000, 0x331, 0x254, 0xF38, 0xE60, 0x254, 0x409, 0x000 },
-	/* REC.709 Wide */
+	/* (0,1) 709 Wide */
 	{ 0x200, 0x000, 0x314, 0x200, 0xFA2, 0xF15, 0x200, 0x3A2, 0x000 },
-	/* BT.2020 Narrow */
-	{ 0x254, 0x000, 0x36F, 0x254, 0xF9E, 0xEAC, 0x254, 0x461, 0x000 },
-	/* BT.2020 Wide */
-	{ 0x200, 0x000, 0x2F3, 0x200, 0xFAC, 0xEDB, 0x200, 0x3C3, 0x000 },
-	/* DCI-P3 Narrow */
-	{ 0x254, 0x000, 0x3AE, 0x254, 0xF96, 0xEEE, 0x254, 0x456, 0x000 },
-	/* DCI-P3 Wide */
-	{ 0x200, 0x000, 0x329, 0x200, 0xFA5, 0xF15, 0x200, 0x3B9, 0x000 },
 };
 
 static struct sc_csc_tab sc_r2y = {
-	
-	/* REC.601 Narrow */
+	/* (1,0) 601 Narrow */
 	{ 0x084, 0x102, 0x032, 0xFB4, 0xF6B, 0x0E1, 0x0E1, 0xF44, 0xFDC },
-	/* REC.601 Wide  */
+	/* (1,0) 601 Wide  */
 	{ 0x099, 0x12D, 0x03A, 0xFA8, 0xF52, 0x106, 0x106, 0xF25, 0xFD6 },
-	/* REC.709 Narrow */
+	/* (1,0) 709 Narrow */
 	{ 0x05E, 0x13A, 0x020, 0xFCC, 0xF53, 0x0E1, 0x0E1, 0xF34, 0xFEC },
-	/* REC.709 Wide */
+	/* (1,0) 709 Wide */
 	{ 0x06D, 0x16E, 0x025, 0xFC4, 0xF36, 0x106, 0x106, 0xF12, 0xFE8 },
-	/* TODO: BT.2020 Narrow */
-	{ 0x087, 0x15B, 0x01E, 0xFB9, 0xF47, 0x100, 0x100, 0xF15, 0xFEB },
-	/* BT.2020 Wide */
-	{ 0x087, 0x15B, 0x01E, 0xFB9, 0xF47, 0x100, 0x100, 0xF15, 0xFEB },
-	/* TODO: DCI-P3 Narrow */
-	{ 0x06B, 0x171, 0x023, 0xFC6, 0xF3A, 0x100, 0x100, 0xF16, 0xFEA },
-	/* DCI-P3 Wide */
-	{ 0x06B, 0x171, 0x023, 0xFC6, 0xF3A, 0x100, 0x100, 0xF16, 0xFEA },
 };
 
 static struct sc_csc_tab *sc_csc_list[] = {
@@ -608,13 +591,6 @@ void sc_hwset_pre_multi_format(struct sc_dev *sc, bool src, bool dst)
 {
 	unsigned long cfg = readl(sc->regs + SCALER_SRC_CFG);
 
-	if (sc->version == SCALER_VERSION(4, 0, 1)) {
-		if (src != dst)
-			dev_err(sc->dev,
-			"pre-multi fmt should be same between src and dst\n");
-		return;
-	}
-
 	if (src && ((cfg & SCALER_CFG_FMT_MASK) == SCALER_CFG_FMT_ARGB8888)) {
 		cfg &= ~SCALER_CFG_FMT_MASK;
 		cfg |= SCALER_CFG_FMT_P_ARGB8888;
@@ -651,41 +627,87 @@ void get_blend_value(unsigned int *cfg, u32 val, bool pre_multi)
 		*cfg |= (1 << SCALER_OP_SEL_INV_SHIFT);
 }
 
-void sc_hwset_blend(struct sc_dev *sc, enum sc_blend_op bl_op, bool pre_multi,
-		unsigned char g_alpha)
+void sc_hwset_blend_src_addr(struct sc_dev *sc, struct sc_addr *addr)
 {
-	unsigned int cfg = readl(sc->regs + SCALER_CFG);
+	__raw_writel(addr->y, sc->regs + SCALER_BLEND_SRC_BASE_REG);
+}
+
+void sc_set_blendsrc_cfg(struct sc_dev *sc, bool pre_multi,
+				struct sc_src_blend_cfg *src_blend_cfg)
+{
+	u32 val = 0;
+
+	if (!pre_multi && src_blend_cfg->pre_multi)
+		val |= (1 << SCALER_SRC_ALPHA_MUL_EN_SHIFT);
+	else if (pre_multi && !src_blend_cfg->pre_multi)
+		val |= (1 << SCALER_SRC_ALPHA_DIV_EN_SHIFT);
+
+	val |= (src_blend_cfg->blend_src_color_byte_swap
+				<< SCALER_BLEND_SRC_COLOR_BYTE_SWAP_SHIFT);
+	val |= (src_blend_cfg->blend_src_color_format
+				<< SCALER_BLEND_SRC_COLOR_FORMAT_SHIFT);
+
+	/* setting it to 2, as suggested by AP team engineer
+	 * JINWOOK LEE <jdmcjini.lee@samsung.com> */
+	val |= (2 << SCALER_BLEND_DST_CSC_HOFFSET_SHIFT);
+	val |= (2 << SCALER_BLEND_DST_CSC_VOFFSET_SHIFT);
+	__raw_writel(val, sc->regs + SCALER_BLEND_CFG_REG);
+}
+
+void sc_set_blend_src_span(struct sc_dev *sc, u32 val)
+{
+	__raw_writel(val, sc->regs + SCALER_BLEND_SRC_SPAN_REG);
+}
+
+void sc_blend_src_pos(struct sc_dev *sc, u32 hpos, u32 vpos)
+{
+	__raw_writel((hpos << SCALER_BLEND_SRC_H_POS_SHIFT) |
+				(vpos << SCALER_BLEND_SRC_V_POS_SHIFT),
+				sc->regs + SCALER_BLEND_SRC_POS_REG);
+}
+
+void sc_blend_src_wh(struct sc_dev *sc, u32 width, u32 height)
+{
+	__raw_writel((width << SCALER_BLEND_SRC_WH_WIDTH_SHIFT) |
+				(height << SCALER_BLEND_SRC_WH_HEIGHT_SHIFT),
+				sc->regs + SCALER_BLEND_SRC_WH_REG);
+}
+
+void sc_hwset_blend(struct sc_dev *sc, enum sc_blend_op bl_op, bool pre_multi,
+		unsigned char g_alpha, struct sc_src_blend_cfg *src_blend_cfg)
+{
+	unsigned int cfg = __raw_readl(sc->regs + SCALER_CFG);
 	int idx = bl_op - 1;
 
 	cfg |= SCALER_CFG_BLEND_EN;
-	writel(cfg, sc->regs + SCALER_CFG);
+	__raw_writel(cfg, sc->regs + SCALER_CFG);
 
-	cfg = readl(sc->regs + SCALER_SRC_BLEND_COLOR);
+	cfg = __raw_readl(sc->regs + SCALER_SRC_BLEND_COLOR);
 	get_blend_value(&cfg, sc_bl_op_tbl[idx].src_color, pre_multi);
 	if (g_alpha < 0xff)
 		cfg |= (SRC_GA << SCALER_OP_SEL_SHIFT);
-	writel(cfg, sc->regs + SCALER_SRC_BLEND_COLOR);
+	__raw_writel(cfg, sc->regs + SCALER_SRC_BLEND_COLOR);
 	sc_dbg("src_blend_color is 0x%x, %d\n", cfg, pre_multi);
 
-	cfg = readl(sc->regs + SCALER_SRC_BLEND_ALPHA);
+	cfg = __raw_readl(sc->regs + SCALER_SRC_BLEND_ALPHA);
 	get_blend_value(&cfg, sc_bl_op_tbl[idx].src_alpha, 1);
 	if (g_alpha < 0xff)
 		cfg |= (SRC_GA << SCALER_OP_SEL_SHIFT) | (g_alpha << 0);
-	writel(cfg, sc->regs + SCALER_SRC_BLEND_ALPHA);
+	__raw_writel(cfg, sc->regs + SCALER_SRC_BLEND_ALPHA);
 	sc_dbg("src_blend_alpha is 0x%x\n", cfg);
 
-	cfg = readl(sc->regs + SCALER_DST_BLEND_COLOR);
+	cfg = __raw_readl(sc->regs + SCALER_DST_BLEND_COLOR);
 	get_blend_value(&cfg, sc_bl_op_tbl[idx].dst_color, pre_multi);
 	if (g_alpha < 0xff)
 		cfg |= ((INV_SAGA & 0xf) << SCALER_OP_SEL_SHIFT);
-	writel(cfg, sc->regs + SCALER_DST_BLEND_COLOR);
+	__raw_writel(cfg, sc->regs + SCALER_DST_BLEND_COLOR);
 	sc_dbg("dst_blend_color is 0x%x\n", cfg);
 
-	cfg = readl(sc->regs + SCALER_DST_BLEND_ALPHA);
+	cfg = __raw_readl(sc->regs + SCALER_DST_BLEND_ALPHA);
 	get_blend_value(&cfg, sc_bl_op_tbl[idx].dst_alpha, 1);
 	if (g_alpha < 0xff)
 		cfg |= ((INV_SAGA & 0xf) << SCALER_OP_SEL_SHIFT);
-	writel(cfg, sc->regs + SCALER_DST_BLEND_ALPHA);
+	__raw_writel(cfg, sc->regs + SCALER_DST_BLEND_ALPHA);
 	sc_dbg("dst_blend_alpha is 0x%x\n", cfg);
 
 	/*
@@ -694,10 +716,25 @@ void sc_hwset_blend(struct sc_dev *sc, enum sc_blend_op bl_op, bool pre_multi,
 	 * result image should be divided by alpha value
 	 * because the result is always pre-multiplied.
 	 */
-	if (!pre_multi) {
+	if (!pre_multi && !sc->variant->blending) {
 		cfg = readl(sc->regs + SCALER_CFG);
 		cfg |= SCALER_CFG_BL_DIV_ALPHA_EN;
-		writel(cfg, sc->regs + SCALER_CFG);
+		__raw_writel(cfg, sc->regs + SCALER_CFG);
+	}
+
+	/* Set source blending configuration */
+	if (sc->variant->blending) {
+		sc_set_blendsrc_cfg(sc, pre_multi, src_blend_cfg);
+
+		/* span in the units of pixels */
+		sc_set_blend_src_span(sc, src_blend_cfg->blend_src_stride);
+
+		sc_blend_src_pos(sc,
+				src_blend_cfg->blend_src_h_pos,
+				src_blend_cfg->blend_src_v_pos);
+		sc_blend_src_wh(sc,
+				src_blend_cfg->blend_src_crop_width,
+				src_blend_cfg->blend_src_crop_height);
 	}
 }
 
@@ -733,26 +770,16 @@ void sc_hwset_csc_coef(struct sc_dev *sc, enum sc_csc_idx idx,
 	if (idx == NO_CSC) {
 		csc_eq_val = sc_csc_list[idx]->narrow_601;
 	} else {
-		if (csc->csc_eq == V4L2_COLORSPACE_REC709) {
-			if (csc->csc_range == SC_CSC_NARROW)
-				csc_eq_val = sc_csc_list[idx]->narrow_709;
-			else
-				csc_eq_val = sc_csc_list[idx]->wide_709;
-		} else if (csc->csc_eq == V4L2_COLORSPACE_BT2020) {
-			if (csc->csc_range == SC_CSC_NARROW)
-				csc_eq_val = sc_csc_list[idx]->narrow_2020;
-			else
-				csc_eq_val = sc_csc_list[idx]->wide_2020;
-		} else if (csc->csc_eq == V4L2_COLORSPACE_DCI_P3) {
-			if (csc->csc_range == SC_CSC_NARROW)
-				csc_eq_val = sc_csc_list[idx]->narrow_p3;
-			else
-				csc_eq_val = sc_csc_list[idx]->wide_p3;
-		} else {
+		if (csc->csc_eq == SC_CSC_601) {
 			if (csc->csc_range == SC_CSC_NARROW)
 				csc_eq_val = sc_csc_list[idx]->narrow_601;
 			else
 				csc_eq_val = sc_csc_list[idx]->wide_601;
+		} else {
+			if (csc->csc_range == SC_CSC_NARROW)
+				csc_eq_val = sc_csc_list[idx]->narrow_709;
+			else
+				csc_eq_val = sc_csc_list[idx]->wide_709;
 		}
 	}
 
@@ -779,6 +806,7 @@ void sc_hwset_csc_coef(struct sc_dev *sc, enum sc_csc_idx idx,
 		else
 			cfg |= SCALER_CFG_CSC_Y_OFFSET_DST;
 	}
+
 	writel(cfg, sc->regs + SCALER_CFG);
 }
 
@@ -892,13 +920,19 @@ void sc_hwset_src_imgsize(struct sc_dev *sc, struct sc_frame *frame)
 	 */
 	if (frame->sc_fmt->num_comp == 2)
 		cfg |= (frame->width << frame->sc_fmt->cspan) << 16;
-	if (frame->sc_fmt->num_comp == 3) {
+	else if (frame->sc_fmt->num_comp == 3 &&
+					frame->sc_fmt->is_alphablend_fmt)
+		cfg |= (frame->width << frame->sc_fmt->cspan) << 16;
+	else if (frame->sc_fmt->num_comp == 3) {
 		if (sc_fmt_is_ayv12(frame->sc_fmt->pixelformat))
 			cfg |= ALIGN(frame->width >> 1, 16) << 16;
 		else if (frame->sc_fmt->cspan) /* YUV444 */
 			cfg |= frame->width << 16;
 		else
 			cfg |= (frame->width >> 1) << 16;
+	} else if (frame->sc_fmt->num_comp == 4) {
+		if (sc_fmt_is_ayv12(frame->sc_fmt->pixelformat))
+			cfg |= ALIGN(frame->width >> 1, 16) << 16;
 	}
 
 	writel(cfg, sc->regs + SCALER_SRC_SPAN);
@@ -985,19 +1019,18 @@ void sc_hwregs_dump(struct sc_dev *sc)
 			sc->regs + 0x260, 4, false);
 	print_hex_dump(KERN_NOTICE, "", DUMP_PREFIX_ADDRESS, 16, 4,
 			sc->regs + 0x278, 4, false);
-	if (sc->version <= SCALER_VERSION(2, 1, 1))
-		print_hex_dump(KERN_NOTICE, "", DUMP_PREFIX_ADDRESS, 16, 4,
+	print_hex_dump(KERN_NOTICE, "", DUMP_PREFIX_ADDRESS, 16, 4,
 			sc->regs + 0x280, 0x28C - 0x280 + 4, false);
 	print_hex_dump(KERN_NOTICE, "", DUMP_PREFIX_ADDRESS, 16, 4,
 			sc->regs + 0x290, 0x298 - 0x290 + 4, false);
-	if (sc->version <= SCALER_VERSION(2, 1, 1))
-		print_hex_dump(KERN_NOTICE, "", DUMP_PREFIX_ADDRESS, 16, 4,
+	print_hex_dump(KERN_NOTICE, "", DUMP_PREFIX_ADDRESS, 16, 4,
 			sc->regs + 0x2A8, 0x2A8 - 0x2A0 + 4, false);
 	print_hex_dump(KERN_NOTICE, "", DUMP_PREFIX_ADDRESS, 16, 4,
 			sc->regs + 0x2B0, 0x2C4 - 0x2B0 + 4, false);
-	if (sc->version >= SCALER_VERSION(3, 0, 0))
-		print_hex_dump(KERN_NOTICE, "", DUMP_PREFIX_ADDRESS, 16, 4,
+	print_hex_dump(KERN_NOTICE, "", DUMP_PREFIX_ADDRESS, 16, 4,
 			sc->regs + 0x2D0, 0x2DC - 0x2D0 + 4, false);
+	print_hex_dump(KERN_NOTICE, "", DUMP_PREFIX_ADDRESS, 16, 4,
+			sc->regs + 0x300, 0x318 - 0x300 + 4, false);
 
 	/* shadow registers */
 	print_hex_dump(KERN_NOTICE, "", DUMP_PREFIX_ADDRESS, 16, 4,
@@ -1036,32 +1069,31 @@ void sc_hwregs_dump(struct sc_dev *sc)
 
 /* starts from the second status which is the begining of err status */
 const static char *sc_irq_err_status[] = {
-	[ 0] = "illigal src color",
-	[ 1] = "illigal src Y base",
-	[ 2] = "illigal src Cb base",
-	[ 3] = "illigal src Cr base",
-	[ 4] = "illigal src Y span",
-	[ 5] = "illigal src C span",
-	[ 6] = "illigal src YH pos",
-	[ 7] = "illigal src YV pos",
-	[ 8] = "illigal src CH pos",
-	[ 9] = "illigal src CV pos",
-	[10] = "illigal src width",
-	[11] = "illigal src height",
-	[12] = "illigal dst color",
-	[13] = "illigal dst Y base",
-	[14] = "illigal dst Cb base",
-	[15] = "illigal dst Cr base",
-	[16] = "illigal dst Y span",
-	[17] = "illigal dst C span",
-	[18] = "illigal dst H pos",
-	[19] = "illigal dst V pos",
-	[20] = "illigal dst width",
-	[21] = "illigal dst height",
-	[23] = "illigal scaling ratio",
-	[25] = "illigal pre-scaler width/height",
-	[28] = "AXI Write Error Response",
-	[29] = "AXI Read Error Response",
+	[0] = "illegal src color",
+	[1] = "illegal src Y base",
+	[2] = "illegal src Cb base",
+	[3] = "illegal src Cr base",
+	[4] = "illegal src Y span",
+	[5] = "illegal src C span",
+	[6] = "illegal src YH pos",
+	[7] = "illegal src YV pos",
+	[8] = "illegal src CH pos",
+	[9] = "illegal src CV pos",
+	[10] = "illegal src width",
+	[11] = "illegal src height",
+	[12] = "illegal dst color",
+	[13] = "illegal dst Y base",
+	[14] = "illegal dst Cb base",
+	[15] = "illegal dst Cr base",
+	[16] = "illegal dst Y span",
+	[17] = "illegal dst C span",
+	[18] = "illegal dst H pos",
+	[19] = "illegal dst V pos",
+	[20] = "illegal dst width",
+	[21] = "illegal dst height",
+	[23] = "illegal scaling ratio",
+	[24] = "illegal format/width/height of blending source",
+	[25] = "illegal pre-scaler width/height",
 	[31] = "timeout",
 };
 

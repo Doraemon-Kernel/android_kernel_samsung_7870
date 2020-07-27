@@ -91,7 +91,7 @@ static int sensor_module_2p8_power_setpin(struct platform_device *pdev,
 	struct device_node *dnode;
 	int gpio_reset = 0;
 	int gpio_none = 0;
-#ifdef CONFIG_SOC_EXYNOS7870
+#if defined(CONFIG_SOC_EXYNOS7870) || defined(CONFIG_SOC_EXYNOS7880)
 	int gpio_dovdd_en = 0;
 #endif
 
@@ -112,7 +112,7 @@ static int sensor_module_2p8_power_setpin(struct platform_device *pdev,
 		gpio_free(gpio_reset);
 	}
 
-#ifdef CONFIG_SOC_EXYNOS7870
+#if defined(CONFIG_SOC_EXYNOS7870) || defined(CONFIG_SOC_EXYNOS7880)
 	gpio_dovdd_en = of_get_named_gpio(dnode, "gpio_dovdd_en", 0);
 	if (!gpio_is_valid(gpio_dovdd_en)) {
 		dev_err(dev, "failed to get PIN_POWER_EN\n");
@@ -130,7 +130,7 @@ static int sensor_module_2p8_power_setpin(struct platform_device *pdev,
 
 	/* BACK CAEMRA - POWER ON */
 	SET_PIN(pdata, SENSOR_SCENARIO_NORMAL, GPIO_SCENARIO_ON, gpio_reset, "sen_rst low", PIN_OUTPUT, 0, 0);
-#ifdef CONFIG_SOC_EXYNOS7870
+#if defined(CONFIG_SOC_EXYNOS7870) || defined(CONFIG_SOC_EXYNOS7880)
 	SET_PIN(pdata, SENSOR_SCENARIO_NORMAL, GPIO_SCENARIO_ON, gpio_dovdd_en, "dovdd_1p8_en", PIN_OUTPUT, 1, 0);
 #endif
 	SET_PIN(pdata, SENSOR_SCENARIO_NORMAL, GPIO_SCENARIO_ON, gpio_none, "VDD_REAR_CAM_AF_2P8", PIN_REGULATOR, 1, 0);
@@ -141,7 +141,7 @@ static int sensor_module_2p8_power_setpin(struct platform_device *pdev,
 	/* BACK CAEMRA - POWER OFF */
 	SET_PIN(pdata, SENSOR_SCENARIO_NORMAL, GPIO_SCENARIO_OFF, gpio_reset, "sen_rst", PIN_RESET, 0, 0);
 	SET_PIN(pdata, SENSOR_SCENARIO_NORMAL, GPIO_SCENARIO_OFF, gpio_reset, "sen_rst input", PIN_INPUT, 0 ,0);
-#ifdef CONFIG_SOC_EXYNOS7870
+#if defined(CONFIG_SOC_EXYNOS7870) || defined(CONFIG_SOC_EXYNOS7880)
 	SET_PIN(pdata, SENSOR_SCENARIO_NORMAL, GPIO_SCENARIO_OFF, gpio_dovdd_en, "dovdd_1p8_en", PIN_INPUT, 0, 0);
 #endif
 	SET_PIN(pdata, SENSOR_SCENARIO_NORMAL, GPIO_SCENARIO_OFF, gpio_none, "VDD_REAR_CAM_AF_2P8", PIN_REGULATOR, 0, 0);
@@ -168,7 +168,7 @@ int sensor_module_2p8_probe(struct platform_device *pdev)
 
 	core = (struct fimc_is_core *)dev_get_drvdata(fimc_is_dev);
 	if (!core) {
-		probe_err("core device is not yet probed");
+		probe_info("core device is not yet probed");
 		return -EPROBE_DEFER;
 	}
 
@@ -196,10 +196,14 @@ int sensor_module_2p8_probe(struct platform_device *pdev)
 	module->subdev = subdev_module;
 	module->device = pdata->id;
 	module->client = NULL;
-	module->active_width = 5312;
-	module->active_height = 2988;
-	module->pixel_width = module->active_width + 16;
-	module->pixel_height = module->active_height + 12;
+	module->active_width = 5312 + 16;
+	module->active_height = 2988 + 12;
+	module->margin_left = 0;
+	module->margin_right = 0;
+	module->margin_top = 0;
+	module->margin_bottom = 0;
+	module->pixel_width = module->active_width;
+	module->pixel_height = module->active_height;
 	module->max_framerate = 120;
 	module->position = pdata->position;
 	module->mode = CSI_MODE_CH0_ONLY;

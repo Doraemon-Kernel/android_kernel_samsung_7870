@@ -6,5 +6,6 @@ config TYPEC
 	default y
 	depends on ANDROID_MAJOR_VERSION != "n"
 	depends on ANDROID_MAJOR_VERSION != "o"
+	depends on CCIC_NOTIFIER
 
 endmenu

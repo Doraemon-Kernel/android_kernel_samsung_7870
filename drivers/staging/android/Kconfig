@@ -20,9 +20,8 @@ config ANDROID_BINDER_IPC
 	  between said processes.
 
 config ANDROID_BINDER_IPC_32BIT
-	bool
-	depends on !64BIT && ANDROID_BINDER_IPC
-	default y
+	bool "Use old 32-bit binder api"
+        default y if ANDROID_MAJOR_VERSION != "o" && ANDROID_MAJOR_VERSION != "p" && ANDROID_MAJOR_VERSION != "q"
 	---help---
 	  The Binder API has been changed to support both 32 and 64bit
 	  applications in a mixed environment.
@@ -53,13 +52,6 @@ config ANDROID_BINDER_IPC_SELFTEST
           Binder selftest checks the allocation and free of binder buffers
           exhaustively with combinations of various buffer sizes and
           alignments.
-
-config SEC_TRACE_BINDERCNT
-	bool "Trace process binder count"
-	default n
-	---help---
-	  This feature can be used to monitor binder transactions count to
-	  a designated process.
 
 config ASHMEM
 	bool "Enable the Anonymous Shared Memory Subsystem"
@@ -115,7 +107,7 @@ config ANDROID_LOW_MEMORY_KILLER_AUTODETECT_OOM_ADJ_VALUES
 	  to oom_score_adj values.
 
 config ANDROID_INTF_ALARM_DEV
-	bool "Android alarm driver"
+	tristate "Android alarm driver"
 	depends on RTC_CLASS
 	default n
 	---help---
@@ -161,6 +153,7 @@ config ANDROID_VSOC
 	  a QEmu ivshmem device. If built as a module, it will be called vsoc.
 
 source "drivers/staging/android/ion/Kconfig"
+
 
 endif # if ANDROID
 

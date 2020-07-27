@@ -39,8 +39,8 @@ enum bh_state_bits {
 	BH_Sync_Flush,
 	BH_Defer_Completion, /* Defer AIO completion to workqueue */
 #ifdef CONFIG_JOURNAL_DATA_TAG
-	BH_Journal,	/* Buffer contains journal data */
-	BH_Jmeta,	/* Buffer contains metadata */
+	BH_Journal,     /* Buffer contains journal data */
+	BH_Jmeta,       /* Buffer contains metadata */
 #endif
 
 	BH_PrivateStart,/* not a state bit, but the first bit available

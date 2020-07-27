@@ -327,7 +327,7 @@ struct skb_shared_info {
 	/* Intermediate layers must ensure that destructor_arg
 	 * remains valid until skb destructor */
 	void *		destructor_arg;
-    
+
  // ------------- START of KNOX_VPN ------------------//
 	uid_t uid;
 	pid_t pid;
@@ -452,7 +452,7 @@ static inline u32 skb_mstamp_us_delta(const struct skb_mstamp *t1,
 }
 
 
-/** 
+/**
  *	struct sk_buff - socket buffer
  *	@next: Next buffer in list
  *	@prev: Previous buffer in list
@@ -641,9 +641,7 @@ struct sk_buff {
 #ifdef CONFIG_NETWORK_SECMARK
 	__u32			secmark;
 #endif
-
 	__u32			priomark;
-
 	union {
 		__u32		mark;
 		__u32		dropcount;
@@ -709,7 +707,7 @@ static inline bool skb_pfmemalloc(const struct sk_buff *skb)
  */
 static inline struct dst_entry *skb_dst(const struct sk_buff *skb)
 {
-	/* If refdst was not refcounted, check we still are in a 
+	/* If refdst was not refcounted, check we still are in a
 	 * rcu_read_lock section
 	 */
 	WARN_ON((skb->_skb_refdst & SKB_DST_NOREF) &&
@@ -2470,7 +2468,7 @@ static inline int skb_cow_head(struct sk_buff *skb, unsigned int headroom)
  *	is untouched. Otherwise it is extended. Returns zero on
  *	success. The skb is freed on error.
  */
- 
+
 static inline int skb_padto(struct sk_buff *skb, unsigned int len)
 {
 	unsigned int size = skb->len;
@@ -3259,8 +3257,7 @@ struct skb_gso_cb {
 	int	encap_level;
 	__u16	csum_start;
 };
-#define SKB_SGO_CB_OFFSET	32
-#define SKB_GSO_CB(skb) ((struct skb_gso_cb *)((skb)->cb + SKB_SGO_CB_OFFSET))
+#define SKB_GSO_CB(skb) ((struct skb_gso_cb *)(skb)->cb)
 
 static inline int skb_tnl_header_len(const struct sk_buff *inner_skb)
 {

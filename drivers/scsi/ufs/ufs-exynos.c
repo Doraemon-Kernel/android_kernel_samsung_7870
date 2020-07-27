@@ -114,9 +114,6 @@ static inline void exynos_ufs_ctrl_phy_pwr(struct exynos_ufs *ufs, bool en)
 
 static struct exynos_ufs *ufs_host_backup[1];
 static int ufs_host_index = 0;
-static int dump_once_again = 1;
-static int dump_sfr[292];
-static int dump_attr[188];
 
 static struct exynos_ufs_sfr_log ufs_cfg_log_sfr[] = {
 	{"STD HCI SFR"			,	LOG_STD_HCI_SFR,		0},
@@ -285,13 +282,6 @@ static struct exynos_ufs_sfr_log ufs_cfg_log_sfr[] = {
 	{"DME_PEER_GETSET_RDATA"	,	UNIP_DME_PEER_GETSET_RDATA		,	0},
 	{"DME_PEER_GETSET_CONTROL"	,	UNIP_DME_PEER_GETSET_CONTROL		,	0},
 	{"DME_PEER_GETSET_RESULT"	,	UNIP_DME_PEER_GETSET_RESULT		,	0},
-	{"DME_DIRECT_GETSET_BASE"	,	UNIP_DME_DIRECT_GETSET_BASE		,	0},
-	{"DME_DIRECT_GETSET_ERR_ADDR"	,	UNIP_DME_DIRECT_GETSET_ERR_ADDR		,	0},
-	{"DME_DIRECT_GETSET_ERR_CODE"	,	UNIP_DME_DIRECT_GETSET_ERR_CODE		,	0},
-	{"DME_INTR_ERROR_CODE"		,	UNIP_DME_INTR_ERROR_CODE		,	0},
-	{"DME_DEEPSTALL_ENTER_REQ"	,	UNIP_DME_DEEPSTALL_ENTER_REQ		,	0},
-	{"DME_DISCARD_CPORT_ID"		,	UNIP_DME_DISCARD_CPORT_ID		,	0},
-	{"DBG_DME_CTRL_STATE"		,	UNIP_DBG_DME_CTRL_STATE			,	0},
 	{"DBG_FORCE_DME_CTRL_STATE"	,	UNIP_DBG_FORCE_DME_CTRL_STATE		,	0},
 	{"DBG_AUTO_DME_LINKSTARTUP"	,	UNIP_DBG_AUTO_DME_LINKSTARTUP,			0},
 	{"DBG_PA_CTRLSTATE"		,	UNIP_DBG_PA_CTRLSTATE			,	0},
@@ -647,8 +637,7 @@ static void exynos_ufs_get_sfr(struct ufs_hba *hba)
 {
 	struct exynos_ufs *ufs = to_exynos_ufs(hba);
 	struct exynos_ufs_sfr_log* cfg = ufs->debug.sfr;
-	int sel_api = 0;
-	int i = 0;
+	int sel_api;
 
 	while(cfg) {
 		if (!cfg->name)
@@ -671,11 +660,7 @@ static void exynos_ufs_get_sfr(struct ufs_hba *hba)
 				cfg->val = phy_pma_readl(ufs, cfg->offset);
 			else
 				cfg->val = 0xFFFFFFFF;
-
 		}
-
-		if (dump_once_again)
-			dump_sfr[i++] = cfg->val;
 
 		/* Next SFR */
 		cfg++;
@@ -685,17 +670,21 @@ static void exynos_ufs_get_sfr(struct ufs_hba *hba)
 static void exynos_ufs_get_attr(struct ufs_hba *hba)
 {
 	u32 i;
+	u32 intr_status;
 	u32 intr_enable;
 	struct exynos_ufs_attr_log* cfg = ufs_cfg_log_attr;
-	int j = 0;
 
 	/* Disable and backup interrupts */
 	intr_enable = ufshcd_readl(hba, REG_INTERRUPT_ENABLE);
 	ufshcd_writel(hba, 0, REG_INTERRUPT_ENABLE);
+	intr_status = ufshcd_readl(hba, REG_INTERRUPT_STATUS);
 
 	while(cfg) {
 		if (cfg->offset == 0)
 			break;
+
+		/* Clear UIC command completion */
+		ufshcd_writel(hba, UIC_COMMAND_COMPL, REG_INTERRUPT_STATUS);
 
 		/* Send DME_GET */
 		ufshcd_writel(hba, cfg->offset, REG_UIC_COMMAND_ARG_1);
@@ -712,16 +701,10 @@ static void exynos_ufs_get_attr(struct ufs_hba *hba)
 			}
 		}
 
-		/* Clear UIC command completion */
-		ufshcd_writel(hba, UIC_COMMAND_COMPL, REG_INTERRUPT_STATUS);
-
 		/* Fetch result and value */
 		cfg->res = ufshcd_readl(hba, REG_UIC_COMMAND_ARG_2 &
 				MASK_UIC_COMMAND_RESULT);
 		cfg->val = ufshcd_readl(hba, REG_UIC_COMMAND_ARG_3);
-
-		if (dump_once_again)
-			dump_attr[j++] = cfg->val;
 
 		/* Next attribute */
 		cfg++;
@@ -729,6 +712,7 @@ static void exynos_ufs_get_attr(struct ufs_hba *hba)
 
 out:
 	/* Restore and enable interrupts */
+	ufshcd_writel(hba, intr_status ^ 0xFFFFFFFF, REG_INTERRUPT_STATUS);
 	ufshcd_writel(hba, intr_enable, REG_INTERRUPT_ENABLE);
 }
 
@@ -800,29 +784,14 @@ static void exynos_ufs_get_debug_info(struct ufs_hba *hba)
 {
 	struct exynos_ufs *ufs = to_exynos_ufs(hba);
 
-	if ((hba->debug.flag & UFSHCD_DEBUG_DUMP) && dump_once_again)
-		goto dump;
-
 	if (!(ufs->misc_flags & EXYNOS_UFS_MISC_TOGGLE_LOG))
 		return;
 
-dump:
 	exynos_ufs_get_sfr(hba);
 	exynos_ufs_get_attr(hba);
 	exynos_ufs_get_misc(hba);
-	printk("dump_once_again %d\n", dump_once_again);
-	WARN_ON(1);
 
-#if defined(CONFIG_SCSI_UFS_TEST_MODE)
-		/* do not recover system if test mode is enabled */
-		BUG();
-#endif
-
-	if (hba->debug.flag & UFSHCD_DEBUG_DUMP)
-		dump_once_again = 0;
-
-	if (!(hba->debug.flag & UFSHCD_DEBUG_DUMP))
-		ufs->misc_flags &= ~(EXYNOS_UFS_MISC_TOGGLE_LOG);
+	ufs->misc_flags &= ~(EXYNOS_UFS_MISC_TOGGLE_LOG);
 }
 
 static inline
@@ -932,7 +901,7 @@ static inline void exynos_ufs_gate_clk(struct exynos_ufs *ufs, bool en)
 
 static void exynos_ufs_set_unipro_pclk(struct exynos_ufs *ufs)
 {
-	u32 pclk_rate;
+	u32 pclk_ctrl, pclk_rate;
 	u32 f_min, f_max;
 	u8 div = 0;
 
@@ -951,6 +920,9 @@ static void exynos_ufs_set_unipro_pclk(struct exynos_ufs *ufs)
 
 	WARN(pclk_rate < f_min, "not available pclk range %d\n", pclk_rate);
 
+	pclk_ctrl = hci_readl(ufs, HCI_UNIPRO_APB_CLK_CTRL);
+	pclk_ctrl = (pclk_ctrl & ~0xf) | (div & 0xf);
+	hci_writel(ufs, pclk_ctrl, HCI_UNIPRO_APB_CLK_CTRL);
 	ufs->pclk_rate = pclk_rate;
 }
 
@@ -987,7 +959,6 @@ static void exynos_ufs_set_pwm_clk_div(struct exynos_ufs *ufs)
 			}
 		}
 	}
-	ufs->pwm_freq = clk;
 
 	if (clk_idx >= 0)
 		ufshcd_dme_set(hba, UIC_ARG_MIB(CMN_PWM_CMN_CTRL),
@@ -1007,67 +978,6 @@ static long exynos_ufs_calc_time_cntr(struct exynos_ufs *ufs, long period)
 
 	return (period * precise) / ((clk_period * precise) + fraction);
 }
-
-static int exynos_ufs_calc_line_init_pre_len(struct exynos_ufs *ufs, int tx_ls_prep_len)
-{
-	u32 pwm_g1_ns;
-	u32 val = 1;
-	u32 result;
-	u32 pwm_gear = 1;
-	long pwm_g1_freq;
-	int i;
-	int pow_val;
-
-	pwm_g1_freq = ufs->pwm_freq;
-
-	pwm_g1_ns = (1000 *1000 *1000 / pwm_g1_freq); //ns
-
-	pow_val = (tx_ls_prep_len + pwm_gear - 7);
-	if (pow_val <= 0)
-		val = 1;
-	else {
-		for(i = 0; i < pow_val; i++)
-			val *= 2;
-	}
-
-	result = pwm_g1_ns * 10 * val;
-
-	return (result/1000);
-}
-
-static void exynos_ufs_set_line_init_prep_len(struct exynos_ufs *ufs)
-{
-	struct uic_pwr_mode *act_pmd = &ufs->act_pmd_parm;
-	struct ufs_hba *hba = ufs->hba;
-	u32 tx_ls_prepare_length;
-	u32 result;
-	u32 result_div;
-	u32 rate = act_pmd->hs_series;
-	int i;
-
-	for (i = 0; i <= 15; i++) {  /* gear1 prepare length 1~15 */
-		tx_ls_prepare_length = i;
-
-		result = exynos_ufs_calc_line_init_pre_len(ufs, tx_ls_prepare_length);
-
-		if (result > 200)
-			break;
-	}
-
-	if (rate == 1)
-		result_div = ((result * 10000) / 160);
-	else
-		result_div = ((result * 10000) / 136);
-
-	ufshcd_dme_set(hba, UIC_ARG_MIB(PA_DBG_OV_TM), TRUE);
-	for_each_ufs_lane(ufs, i) {
-		ufshcd_dme_set(hba, UIC_ARG_MIB_SEL(0x29E, i), (result_div >> 8) & 0xFF);
-		ufshcd_dme_set(hba, UIC_ARG_MIB_SEL(0x29F, i), result_div & 0xFF);
-		ufshcd_dme_set(hba, UIC_ARG_MIB_SEL(0x29D, i), 0x10);
-	}
-	ufshcd_dme_set(hba, UIC_ARG_MIB(PA_DBG_OV_TM), FALSE);
-}
-
 
 static void exynos_ufs_compute_phy_time_v(struct exynos_ufs *ufs,
 					struct phy_tm_parm *tm_parm)
@@ -1182,9 +1092,6 @@ static void exynos_ufs_config_phy_cap_attr(struct exynos_ufs *ufs)
 			ufshcd_dme_set(hba,
 				UIC_ARG_MIB_SEL(RX_ADV_GRANULARITY_CAP, i), 0);
 
-			ufshcd_dme_set(hba,
-				UIC_ARG_MIB_SEL(TX_ADV_GRANULARITY_CAP, i), 0);
-
 			if (ufs->rx_min_actv_time_cap)
 				ufshcd_dme_set(hba,
 					UIC_ARG_MIB_SEL(RX_MIN_ACTIVATETIME_CAP, i),
@@ -1194,11 +1101,6 @@ static void exynos_ufs_config_phy_cap_attr(struct exynos_ufs *ufs)
 				ufshcd_dme_set(hba,
 					UIC_ARG_MIB_SEL(RX_HIBERN8TIME_CAP, i),
 					ufs->rx_hibern8_time_cap);
-
-			if (ufs->tx_hibern8_time_cap)
-				ufshcd_dme_set(hba,
-					UIC_ARG_MIB_SEL(TX_HIBERN8TIME_CAP, i),
-					ufs->tx_hibern8_time_cap);
 		}
 	} else if (ufs->rx_adv_fine_gran_sup_en == 1) {
 		for_each_ufs_lane(ufs, i) {
@@ -1243,38 +1145,17 @@ static void exynos_ufs_config_smu(struct exynos_ufs *ufs)
 {
 	int ret;
 
-#if defined(CONFIG_UFS_FMP_DM_CRYPT) || defined(CONFIG_UFS_FMP_ECRYPT_FS)
-	ret = exynos_smc(SMC_CMD_FMP, FMP_SECURITY, UFS_FMP, FMP_DESC_ON);
-#else
-	ret = exynos_smc(SMC_CMD_FMP, FMP_SECURITY, UFS_FMP, FMP_DESC_OFF);
-#endif
-	if (ret)
-		dev_err(ufs->dev, "Fail to smc call for FMP SECURITY\n");
+	/* SMU protection initialization */
 
 #if defined(CONFIG_UFS_FMP_DM_CRYPT) || defined(CONFIG_UFS_FMP_ECRYPT_FS)
-	ret = exynos_smc(SMC_CMD_SMU, FMP_SMU_INIT, FMP_SMU_ON, 0);
+	ret = exynos_smc(SMC_CMD_SMU, FMP_SMU_INIT, 1, 0);
 #else
-	ret = exynos_smc(SMC_CMD_SMU, FMP_SMU_INIT, FMP_SMU_OFF, 0);
+	ret = exynos_smc(SMC_CMD_SMU, FMP_SMU_INIT, 0, 0);
 #endif
 	if (ret)
-		dev_err(ufs->dev, "Fail to smc call for FMP SMU Initialization\n");
+		dev_err(ufs->dev, "Fail to smc call for FMP SMU initialization\n");
 
 	return;
-}
-
-static void exynos_ufs_enable_io_coherency(struct exynos_ufs *ufs)
-{
-#if defined(CONFIG_SCSI_SKIP_CPU_SYNC)
-	u32 reg;
-
-	if (!of_get_child_by_name(ufs->dev->of_node, "ufs-sys")) {
-		panic("Not configured to use IO coherency");
-		return;
-	}
-
-	reg = readl(ufs->sys.reg_sys);
-	writel(reg | ((1 << 16) | (1 << 17)), ufs->sys.reg_sys);
-#endif
 }
 
 static bool exynos_ufs_wait_pll_lock(struct exynos_ufs *ufs)
@@ -1665,6 +1546,30 @@ static void exynos_ufs_config_intr(struct exynos_ufs *ufs, u32 errs, u8 index)
 	}
 }
 
+static int exynos_ufs_line_rest_ctrl(struct exynos_ufs *ufs)
+{
+	struct ufs_hba *hba = ufs->hba;
+	u32 val;
+	int i;
+
+	ufshcd_dme_set(hba, UIC_ARG_MIB(0x9565), 0xf);
+	ufshcd_dme_set(hba, UIC_ARG_MIB(0x9565), 0xf);
+	for_each_ufs_lane(ufs, i)
+		ufshcd_dme_set(hba, UIC_ARG_MIB_SEL(0x2b, i), 0x0);
+	ufshcd_dme_set(hba, UIC_ARG_MIB(0x9518), 0x1);
+	udelay(1);
+	ufshcd_dme_get(hba, UIC_ARG_MIB(0x9564), &val);
+	ufshcd_dme_set(hba, UIC_ARG_MIB(0x9564), val | (1 << 12));
+	ufshcd_dme_set(hba, UIC_ARG_MIB(0x9539), 0x1);
+	ufshcd_dme_set(hba, UIC_ARG_MIB(0x9541), 0x1);
+	ufshcd_dme_set(hba, UIC_ARG_MIB(0x9543), 0x1);
+	udelay(1600);
+	ufshcd_dme_get(hba, UIC_ARG_MIB(0x9564), &val);
+	ufshcd_dme_set(hba, UIC_ARG_MIB(0x9564), val & ~(1 << 12));
+
+	return 0;
+}
+
 static int exynos_ufs_pre_link(struct ufs_hba *hba)
 {
 	struct exynos_ufs *ufs = to_exynos_ufs(hba);
@@ -1690,8 +1595,8 @@ static int exynos_ufs_pre_link(struct ufs_hba *hba)
 	exynos_ufs_config_phy_time_v(ufs);
 	exynos_ufs_config_phy_cap_attr(ufs);
 
-	if (ufs->opts & EXYNOS_UFS_OPTS_SET_LINE_INIT_PREP_LEN)
-		exynos_ufs_set_line_init_prep_len(ufs);
+	exynos_ufs_line_rest_ctrl(ufs);
+
 	return 0;
 }
 
@@ -1708,8 +1613,6 @@ static int exynos_ufs_post_link(struct ufs_hba *hba)
 {
 	struct exynos_ufs *ufs = to_exynos_ufs(hba);
 	const struct exynos_ufs_soc *soc = to_phy_soc(ufs);
-	u32 peer_rx_min_actv_time_cap;
-	u32 max_rx_hibern8_time_cap;
 
 	exynos_ufs_establish_connt(ufs);
 	exynos_ufs_fit_aggr_timeout(ufs);
@@ -1739,12 +1642,6 @@ static int exynos_ufs_post_link(struct ufs_hba *hba)
 		if (ufs->pa_hibern8time)
 			ufshcd_dme_set(hba,
 				UIC_ARG_MIB(PA_HIBERN8TIME), ufs->pa_hibern8time);
-	} else {
-		ufshcd_dme_get(hba, UIC_ARG_MIB(PA_TACTIVATE), &peer_rx_min_actv_time_cap);
-		ufshcd_dme_get(hba, UIC_ARG_MIB(PA_HIBERN8TIME), &max_rx_hibern8_time_cap);
-		if (ufs->rx_min_actv_time_cap <= peer_rx_min_actv_time_cap)
-			ufshcd_dme_peer_set(hba, UIC_ARG_MIB(PA_TACTIVATE), peer_rx_min_actv_time_cap + 1);
-		ufshcd_dme_set(hba,UIC_ARG_MIB(PA_HIBERN8TIME), max_rx_hibern8_time_cap + 1);
 	}
 
 	if (soc)
@@ -1826,15 +1723,6 @@ static void exynos_ufs_host_reset(struct ufs_hba *hba)
 	exynos_ufs_attr_dump(hba);
 }
 
-static inline void exynos_ufs_dev_reset_ctrl(struct exynos_ufs *ufs, bool en)
-{
-
-	if (en)
-		hci_writel(ufs, 1 << 0, HCI_GPIO_OUT);
-	else
-		hci_writel(ufs, 0 << 0, HCI_GPIO_OUT);
-}
-
 static void exynos_ufs_dev_hw_reset(struct ufs_hba *hba)
 {
 	struct exynos_ufs *ufs = to_exynos_ufs(hba);
@@ -1872,12 +1760,10 @@ static void exynos_ufs_post_hibern8(struct ufs_hba *hba, u8 enter)
 
 static int exynos_ufs_link_startup_notify(struct ufs_hba *hba, bool notify)
 {
-	struct exynos_ufs *ufs = to_exynos_ufs(hba);
 	int ret = 0;
 
 	switch (notify) {
 	case PRE_CHANGE:
-		exynos_ufs_enable_io_coherency(ufs);
 		exynos_ufs_dev_hw_reset(hba);
 		ret = exynos_ufs_pre_link(hba);
 		break;
@@ -1972,10 +1858,6 @@ static int __exynos_ufs_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 {
 	struct exynos_ufs *ufs = to_exynos_ufs(hba);
 
-	pm_qos_update_request(&ufs->pm_qos_int, 0);
-
-	exynos_ufs_dev_reset_ctrl(ufs, false);
-
 	exynos_ufs_ctrl_phy_pwr(ufs, false);
 
 	return 0;
@@ -1983,9 +1865,7 @@ static int __exynos_ufs_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 
 static int __exynos_ufs_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 {
-#if defined(CONFIG_UFS_FMP_DM_CRYPT) || defined(CONFIG_UFS_FMP_ECRYPT_FS)
 	int ret;
-#endif
 	struct exynos_ufs *ufs = to_exynos_ufs(hba);
 
 	exynos_ufs_ctrl_phy_pwr(ufs, true);
@@ -1995,15 +1875,11 @@ static int __exynos_ufs_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 	exynos_ufs_ctrl_hci_core_clk(ufs, false);
 	exynos_ufs_config_smu(ufs);
 
-#if defined(CONFIG_UFS_FMP_DM_CRYPT) || defined(CONFIG_UFS_FMP_ECRYPT_FS)
-	ret = exynos_smc(SMC_CMD_RESUME, 0, UFS_FMP, FMP_DESC_ON);
+#if defined(CONFIG_UFS_FMP_DM_CRYPT)
+	ret = exynos_smc(SMC_CMD_RESUME, 0, UFS_FMP, 1);
 #else
-	ret = exynos_smc(SMC_CMD_RESUME, 0, UFS_FMP, FMP_DESC_OFF);
+	ret = exynos_smc(SMC_CMD_RESUME, 0, UFS_FMP, 0);
 #endif
-
-	if (ufshcd_is_clkgating_allowed(hba))
-		clk_disable_unprepare(ufs->clk_hci);
-
 	if (ret)
 		dev_warn(ufs->dev, "failed to smc call for FMP: %x\n", ret);
 
@@ -2138,37 +2014,6 @@ static int exynos_ufs_clk_init(struct device *dev, struct exynos_ufs *ufs)
 	return ret;
 }
 
-static int exynos_ufs_populate_dt_sys(struct device *dev, struct exynos_ufs *ufs)
-{
-	struct device_node *np;
-	struct exynos_ufs_sys *sys = &ufs->sys;
-	struct resource io_res;
-	int ret;
-
-	np = of_get_child_by_name(dev->of_node, "ufs-sys");
-	if (!np) {
-		dev_err(dev, "failed to get ufs-sys node\n");
-		return -ENODEV;
-	}
-
-	ret = of_address_to_resource(np, 0, &io_res);
-	if (ret) {
-		dev_err(dev, "failed to get i/o address sysreg\n");
-		goto err_0;
-	}
-
-	sys->reg_sys = devm_ioremap_resource(dev, &io_res);
-	if (!sys->reg_sys) {
-		dev_err(dev, "failed to ioremap sysreg\n");
-		ret = -ENOMEM;
-		goto err_0;
-	}
-err_0:
-	of_node_put(np);
-
-	return ret;
-}
-
 static int exynos_ufs_populate_dt_phy(struct device *dev, struct exynos_ufs *ufs)
 {
 	struct device_node *ufs_phy, *phy_sys;
@@ -2298,10 +2143,6 @@ static int exynos_ufs_populate_dt(struct device *dev, struct exynos_ufs *ufs)
 		goto out;
 	}
 
-	ret = exynos_ufs_populate_dt_sys(dev, ufs);
-	if (ret)
-		dev_err(dev, "failed to populate ufs-sys\n");
-
 	ret = of_property_read_u32_array(np,
 			"pclk-freq-avail-range",freq, ARRAY_SIZE(freq));
 	if (!ret) {
@@ -2320,9 +2161,6 @@ static int exynos_ufs_populate_dt(struct device *dev, struct exynos_ufs *ufs)
 	if (of_find_property(np, "ufs-opts-use-seperated-pclk", NULL))
 		ufs->opts |= EXYNOS_UFS_OPTS_USE_SEPERATED_PCLK;
 
-	if (of_find_property(np, "ufs-opts-set-line-init-prep-len", NULL))
-		ufs->opts |= EXYNOS_UFS_OPTS_SET_LINE_INIT_PREP_LEN;
-
 	if (!of_property_read_u32(np, "ufs-rx-adv-fine-gran-sup_en",
 				&ufs->rx_adv_fine_gran_sup_en)) {
 		if (ufs->rx_adv_fine_gran_sup_en == 0) {
@@ -2338,12 +2176,6 @@ static int exynos_ufs_populate_dt(struct device *dev, struct exynos_ufs *ufs)
 					&ufs->rx_hibern8_time_cap))
 				dev_warn(dev,
 					"ufs-rx-hibern8-time-cap is empty\n");
-
-			if (of_property_read_u32(np,
-					"ufs-tx-hibern8-time-cap",
-					&ufs->tx_hibern8_time_cap))
-				dev_warn(dev,
-					"ufs-tx-hibern8-time-cap is empty\n");
 		} else if (ufs->rx_adv_fine_gran_sup_en == 1) {
 			/* fine granularity step */
 			if (of_property_read_u32(np,
@@ -2813,7 +2645,6 @@ static const struct ufs_hba_variant exynos_ufs_drv_data = {
 	.ops		= &exynos_ufs_ops,
 	.quirks		= UFSHCI_QUIRK_BROKEN_DWORD_UTRD |
 			  UFSHCI_QUIRK_BROKEN_REQ_LIST_CLR |
-			  UFSHCI_QUIRK_USE_ABORT_TASK |
 			  UFSHCI_QUIRK_SKIP_INTR_AGGR,
 	.vs_data	= &exynos_ufs_soc_data,
 };
@@ -2831,7 +2662,6 @@ static struct platform_driver exynos_ufs_driver = {
 		.owner = THIS_MODULE,
 		.pm = &exynos_ufs_dev_pm_ops,
 		.of_match_table = exynos_ufs_match,
-		.suppress_bind_attrs = true,
 	},
 	.probe = exynos_ufs_probe,
 	.remove = exynos_ufs_remove,

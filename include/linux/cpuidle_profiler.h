@@ -30,19 +30,19 @@
 #define C2_CPD			PSCI_CLUSTER_SLEEP
 #define C2_SICD			PSCI_SYSTEM_IDLE
 #define C2_SICD_CPD		PSCI_SYSTEM_IDLE_CLUSTER_SLEEP
-#define C2_SICD_AUD		PSCI_SYSTEM_IDLE_AUDIO
 
 /*
  * LPM sub state
  */
 #define	LPM_SICD		SYS_SICD
+#if defined(CONFIG_SOC_EXYNOS8890)
 #define	LPM_SICD_CPD		SYS_SICD_CPD
-#define	LPM_SICD_AUD		SYS_SICD_AUD
+#define LPM_ALPA		SYS_ALPA
+#define	LPM_DSTOP		SYS_DSTOP
+#endif
 #define	LPM_AFTR		SYS_AFTR
 #define	LPM_STOP		SYS_STOP
-#define	LPM_DSTOP		SYS_DSTOP
 #define	LPM_LPD			SYS_LPD
-#define LPM_ALPA		SYS_ALPA
 
 #define to_cluster(cpu)		MPIDR_AFFINITY_LEVEL(cpu_logical_map(cpu), 1)
 

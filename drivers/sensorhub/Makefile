@@ -2,6 +2,5 @@
 # Makefile for the sensor hub.
 #
 
-obj-$(CONFIG_SENSORS_SSP_BBD)	+= brcm/
-obj-$(CONFIG_SENSORS_SSP_STM)	+= stm/
-obj-$(CONFIG_SENSORS_SSP_ATMEL)	+= atmel/
+obj-$(CONFIG_SENSORS_SSP_STM32)	+= stm32/
+obj-$(CONFIG_SENSORS_SSP_STM_V2)		+= stm_v2/

@@ -57,10 +57,10 @@
 #include "mali_kbase_mem_profile_debugfs.h"
 #include "mali_kbase_debug_job_fault.h"
 #include "mali_kbase_jd_debugfs.h"
+#include "mali_kbase_cpuprops.h"
 #include "mali_kbase_gpuprops.h"
 #include "mali_kbase_jm.h"
 #include "mali_kbase_vinstr.h"
-#include "mali_kbase_ipa.h"
 #ifdef CONFIG_GPU_TRACEPOINTS
 #include <trace/events/gpu.h>
 #endif
@@ -170,8 +170,7 @@ void kbase_jd_done(struct kbase_jd_atom *katom, int slot_nr, ktime_t *end_timest
 void kbase_jd_cancel(struct kbase_device *kbdev, struct kbase_jd_atom *katom);
 void kbase_jd_evict(struct kbase_device *kbdev, struct kbase_jd_atom *katom);
 void kbase_jd_zap_context(struct kbase_context *kctx);
-bool jd_done_nolock(struct kbase_jd_atom *katom,
-		struct list_head *completed_jobs_ctx);
+bool jd_done_nolock(struct kbase_jd_atom *katom);
 void kbase_jd_free_external_resources(struct kbase_jd_atom *katom);
 bool jd_submit_atom(struct kbase_context *kctx,
 			 const struct base_jd_atom_v2 *user_atom,
@@ -566,20 +565,6 @@ void kbasep_trace_clear(struct kbase_device *kbdev);
 /** PRIVATE - do not use directly. Use KBASE_TRACE_DUMP() instead */
 void kbasep_trace_dump(struct kbase_device *kbdev);
 
-#ifdef CONFIG_MALI_DEBUG
-/**
- * kbase_set_driver_inactive - Force driver to go inactive
- * @kbdev:    Device pointer
- * @inactive: true if driver should go inactive, false otherwise
- *
- * Forcing the driver inactive will cause all future IOCTLs to wait until the
- * driver is made active again. This is intended solely for the use of tests
- * which require that no jobs are running while the test executes.
- */
-void kbase_set_driver_inactive(struct kbase_device *kbdev, bool inactive);
-#endif /* CONFIG_MALI_DEBUG */
-
 /* MALI_SEC_INTEGRATION */
 void gpu_dump_register_hooks(struct kbase_device *kbdev);
-
 #endif

@@ -257,7 +257,18 @@ const struct v4l2_file_operations fimc_is_mcs_video_fops = {
 static int fimc_is_mcs_video_querycap(struct file *file, void *fh,
 	struct v4l2_capability *cap)
 {
-	/* Todo : add to query capability code */
+	struct fimc_is_video *video = video_drvdata(file);
+
+	FIMC_BUG(!cap);
+	FIMC_BUG(!video);
+
+	snprintf(cap->driver, sizeof(cap->driver), "%s", video->vd.name);
+	snprintf(cap->card, sizeof(cap->card), "%s", video->vd.name);
+	cap->capabilities |= V4L2_CAP_STREAMING
+			| V4L2_CAP_VIDEO_OUTPUT
+			| V4L2_CAP_VIDEO_OUTPUT_MPLANE;
+	cap->device_caps |= cap->capabilities;
+
 	return 0;
 }
 
@@ -354,7 +365,6 @@ static int fimc_is_mcs_video_qbuf(struct file *file, void *priv,
 {
 	int ret = 0;
 	struct fimc_is_video_ctx *vctx = file->private_data;
-	struct fimc_is_queue *queue;
 
 	BUG_ON(!vctx);
 
@@ -362,19 +372,10 @@ static int fimc_is_mcs_video_qbuf(struct file *file, void *priv,
 	mdbgv_mcs("%s(%02d:%d)\n", vctx, __func__, buf->type, buf->index);
 #endif
 
-	queue = GET_QUEUE(vctx);
-
-	if (!test_bit(FIMC_IS_QUEUE_STREAM_ON, &queue->state)) {
-		merr("stream off state, can NOT qbuf", vctx);
-		ret = -EINVAL;
-		goto p_err;
-	}
-
 	ret = CALL_VOPS(vctx, qbuf, buf);
 	if (ret)
 		merr("qbuf is fail(%d)", vctx, ret);
 
-p_err:
 	return ret;
 }
 
@@ -749,6 +750,7 @@ static void fimc_is_mcs_buffer_finish(struct vb2_buffer *vb)
 
 const struct vb2_ops fimc_is_mcs_qops = {
 	.queue_setup		= fimc_is_mcs_queue_setup,
+	.buf_init			= fimc_is_buffer_init,
 	.buf_prepare		= fimc_is_mcs_buffer_prepare,
 	.buf_queue		= fimc_is_mcs_buffer_queue,
 	.buf_finish		= fimc_is_mcs_buffer_finish,

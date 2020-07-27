@@ -211,8 +211,8 @@ static void sync_fence_delayed_free(struct kref *kref) {
 	 * pend the worker for a jiffie to prevent superfluous invokation of
 	 * workers.
 	 */
-	if (llist_add(&fence->rmnode, &delayed_free_list))
-		schedule_delayed_work(&sync_fence_delayed_work, 1);
+	llist_add(&fence->rmnode, &delayed_free_list);
+	schedule_delayed_work(&sync_fence_delayed_work, 1);
 }
 
 static void fence_check_cb_func(struct fence *f, struct fence_cb *cb)

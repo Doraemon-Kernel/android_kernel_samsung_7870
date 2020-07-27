@@ -39,17 +39,9 @@ struct fimc_is_interface_hwip {
 	ulong				state;
 
 	/* interrupt */
-	unsigned int			irq[INTR_HWIP_MAX];
+	int				irq[INTR_HWIP_MAX];
 	char				irq_name[INTR_HWIP_MAX][IRQ_NAME_LENGTH];
 	struct hwip_intr_handler	handler[INTR_HWIP_MAX];
-
-	/* for logging */
-	ulong				kvaddr;
-	u32				dvaddr;
-
-	/* for internal DMA */
-	void				*fw_cookie;
-	struct vb2_alloc_ctx		*alloc_ctx;
 
 	struct fimc_is_hw_ip		*hw_ip;
 };
@@ -62,6 +54,7 @@ struct fimc_is_interface_ischain {
 	ulong				state;
 	struct fimc_is_interface_hwip	itf_ip[HW_SLOT_MAX];
 
+	struct fimc_is_minfo		*minfo;
 	/* for access mcuctl regs
 	 * This is only valid that mcuctl exists
 	 */

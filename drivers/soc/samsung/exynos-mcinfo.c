@@ -27,8 +27,6 @@ struct mcinfo_data {
 	u32		basecnt;
 	u32		irqcnt;
 	u32		bit_array[2];
-
-	struct notifier_block panic_nb;
 };
 
 #if defined(CONFIG_MCINFO_SYSFS)
@@ -65,40 +63,32 @@ static struct attribute_group exynos_mcinfo_attr_group = {
 };
 #endif /* MCINFO_SYSFS */
 
+#if defined(CONFIG_SOC_EXYNOS7870)
 static irqreturn_t exynos_mc_irq_handler(int irq, void *p)
 {
+	unsigned int memory_stat;
+	unsigned int mr4;
 	struct mcinfo_data *data = p;
-	unsigned int tmp;
 	int i;
 
+	pr_err("DREX high temperature\n");
 	for (i = 0; i < data->basecnt; i++) {
-		tmp = __raw_readl(data->base[i])
-			<< (31 - data->bit_array[0] - data->bit_array[1])
-			>> (31 - data->bit_array[1]);
-		pr_info("[SW Trip] HwTempRange#%d: 0x%x\n", i, tmp);
+		memory_stat = __raw_readl(data->base[i]);
+		mr4 = memory_stat << (31 - data->bit_array[0] - data->bit_array[1])
+				  >> (31 - data->bit_array[1]);
+		pr_err("DREX(%d): MEMORY_STATUS_SFR(%u) MR4(%u)\n", i, memory_stat, mr4);
 	}
-
-	panic("[SW Trip] Memory temperature is too high (irqnum: %d)\n", irq);
 
 	return IRQ_HANDLED;
 }
-
-static int exynos_mcinfo_notify_panic(struct notifier_block *nb,
-		unsigned long event, void *unused)
+#else
+static irqreturn_t exynos_mc_irq_handler(int irq, void *p)
 {
-	struct mcinfo_data *data = container_of(nb, struct mcinfo_data, panic_nb);
-	unsigned int tmp;
-	int i = 0;
+	panic("[SW Trip]Memory temperature is too high");
 
-	for (i = 0; i < data->basecnt; i++) {
-		tmp = __raw_readl(data->base[i])
-			<< (31 - data->bit_array[0] - data->bit_array[1])
-			>> (31 - data->bit_array[1]);
-		pr_info("HwTempRange#%d: 0x%x\n", i, tmp);
-	}
-
-	return NOTIFY_DONE;
+	return IRQ_HANDLED;
 }
+#endif
 
 #if defined(CONFIG_OF)
 static int exynos_mcinfo_parse_dt(struct device_node *np, struct mcinfo_data *data)
@@ -128,20 +118,18 @@ static int exynos_mcinfo_parse_dt(struct device_node *np, struct mcinfo_data *da
 		return ret;
 	}
 
-	if (data->irqcnt) {
-		/* Register IRQ for SW trip */
-		for (i = 0; i < data->irqcnt; i++) {
-			irqnum = irq_of_parse_and_map(data->dev->of_node, i);
-			if (irqnum < 0) {
-				dev_err(data->dev, "Failed to get IRQ map\n");
-				return -EINVAL;
-			}
-			ret = devm_request_irq(data->dev, irqnum,
-					exynos_mc_irq_handler,
-					IRQF_SHARED, dev_name(data->dev), data);
-			if (ret)
-				return ret;
+	/* Register IRQ for SW trip */
+	for (i = 0; i < data->irqcnt; i++) {
+		irqnum = irq_of_parse_and_map(data->dev->of_node, i);
+		if (!irqnum) {
+			dev_err(data->dev, "Failed to get IRQ map\n");
+			return -EINVAL;
 		}
+		ret = devm_request_irq(data->dev, irqnum,
+			exynos_mc_irq_handler,
+			IRQF_SHARED, dev_name(data->dev), data);
+		if (ret)
+			return ret;
 	}
 
 	return 0;
@@ -161,7 +149,7 @@ static int __devinit exynos_mcinfo_probe(struct platform_device *pdev)
 
 	data = devm_kzalloc(&pdev->dev, sizeof(struct mcinfo_data), GFP_KERNEL);
 	if (!data) {
-		pr_err("%s:Not enough memory\n", __func__);
+		dev_err(&pdev->dev, "Not enough memory\n");
 		return -ENOMEM;
 	}
 
@@ -185,11 +173,8 @@ static int __devinit exynos_mcinfo_probe(struct platform_device *pdev)
 		for (i = 0; i < data->basecnt; i++) {
 			res = platform_get_resource(pdev, IORESOURCE_MEM, i);
 			data->base[i] = devm_ioremap_resource(&pdev->dev, res);
-			if (IS_ERR(data->base[i])) {
-				ret = PTR_ERR(data->base[i]);
-				kfree(data->base);
-				return ret;
-			}
+			if (IS_ERR(data->base[i]))
+				return PTR_ERR(data->base[i]);
 		}
 	}
 
@@ -200,12 +185,6 @@ static int __devinit exynos_mcinfo_probe(struct platform_device *pdev)
 		dev_warn(data->dev, "Failed to create sysfs for MR4\n");
 #endif /* MCINFO_SYSFS */
 
-	/* Register Panic notifier */
-	data->panic_nb.notifier_call = exynos_mcinfo_notify_panic;
-	data->panic_nb.next = NULL;
-	data->panic_nb.priority = 0;
-	atomic_notifier_chain_register(&panic_notifier_list, &data->panic_nb);
-
 	dev_info(data->dev, "probe finished!\n");
 	return 0;
 }
@@ -213,6 +192,7 @@ static int __devinit exynos_mcinfo_probe(struct platform_device *pdev)
 static int __devexit exynos_mcinfo_remove(struct platform_device *pdev)
 {
 	struct mcinfo_data *data = platform_get_drvdata(pdev);
+	int i;
 
 #if defined(CONFIG_MCINFO_SYSFS)
 	sysfs_remove_group(&data->dev->kobj,
@@ -221,7 +201,12 @@ static int __devexit exynos_mcinfo_remove(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, NULL);
 
+	for (i = 0; i < data->basecnt; i++) {
+		devm_iounmap(&pdev->dev, data->base[i]);
+	}
+
 	kfree(data->base);
+	kfree(data);
 
 	return 0;
 }

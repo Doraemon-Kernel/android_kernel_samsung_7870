@@ -148,7 +148,7 @@ config GENERIC_CALIBRATE_DELAY
 	def_bool y
 
 config ZONE_DMA
-	def_bool n
+	def_bool y
 
 config HAVE_GENERIC_RCU_GUP
 	def_bool y
@@ -188,6 +188,12 @@ config PGTABLE_LEVELS
 	default 3 if ARM64_4K_PAGES && ARM64_VA_BITS_39
 	default 4 if ARM64_4K_PAGES && ARM64_VA_BITS_48
 
+config SEC_FACTORY
+	bool "Sec factory mode support"
+	default n
+	help
+	  It will support a sec factory mode
+
 source "init/Kconfig"
 
 source "kernel/Kconfig.freezer"
@@ -218,6 +224,31 @@ menu "Samsung Exynos"
 config ARCH_EXYNOS
 	bool
 
+config SOC_EXYNOS7870
+	bool "Samsung EXYNOS7870"
+	select ARCH_EXYNOS
+	select ARCH_HAS_CPUFREQ
+	select HAVE_S3C2410_I2C if I2C
+	select HAVE_S3C2410_WATCHDOG if WATCHDOG
+	select HAVE_S3C_RTC if RTC_CLASS
+	select ARCH_SUPPORTS_MSI
+	select ARM_AMBA
+	select CLKSRC_OF
+	select USE_OF
+	select COMMON_CLK_SAMSUNG
+	select CLKSRC_EXYNOS_MCT
+	select PINCTRL
+	select PM_GENERIC_DOMAINS if PM
+	select SOC_SAMSUNG
+	select SAMSUNG_DMADEV
+
+config ARCH_EXYNOS7
+	bool "SAMSUNG EXYNOS7"
+	select HAVE_ARM_SCU if SMP
+	select HAVE_SMP
+	help
+	  Samsung EXYNOS7 (A57/A53) SoC based systems
+
 config SOC_EXYNOS8890
 	bool "Samsung EXYNOS8890"
 	select ARCH_EXYNOS
@@ -236,6 +267,10 @@ config SOC_EXYNOS8890
 	select PM_GENERIC_DOMAINS if PM
 	select SOC_SAMSUNG
 	select SAMSUNG_DMADEV
+
+config SOC_EXYNOS8890_EVT1
+	default n
+	bool "Samsung EXYNOS8890 evt1"
 
 config ARCH_EXYNOS8
 	bool "SAMSUNG EXYNOS8"
@@ -258,25 +293,10 @@ config ARM_TRUSTZONE
 	  TrustZone software.
 
 	  If you don't know about TrustZone, say 'N'.
-
-config ZONE_DMA_ALLOW_CUSTOM_SIZE
-	bool "Enable Platform-settable Custom Size for ZONE_DMA"
-	default n
-	depends on ZONE_DMA
-	help
-	  Select Y if you need to allow setting ZONE_DMA size for platform.
-
-config ZONE_DMA_SIZE_MBYTES
-	int "ZONE_DMA Size in MBytes"
-	range 16 4096
-	default 4096
-	depends on ZONE_DMA && ZONE_DMA_ALLOW_CUSTOM_SIZE
-	help
-	  Set DMA-able size based on bits shift value. DMA-able size
-	  must be less than total DRAM size. This value may be used
-	  to limit DMA-able address space for ZONE_DMA.
-
 endmenu
+
+source "arch/arm64/mach-exynos/Kconfig"
+
 endmenu
 
 menu "Bus support"
@@ -433,58 +453,6 @@ config ARM64_ERRATUM_845719
 	  the kernel if an affected CPU is detected.
 
 	  If unsure, say Y.
-	  
-config TIMA
-	bool "Enable TIMA(Trustzone based Integrity Measurement Archtecture feature"
-	default n
-
-config TIMA_LKMAUTH
-	bool "Enable LKM authentication by TIMA"
-	help
-	  TIMA authenticates loaded kernel modules. Disable it if you don't
-	  want TIMA enabled.
-
-config TIMA_RKP
-	depends on TIMA
-	default n
-	bool "Samsung KNOX realtime kernel protection depends on TIMA"
-	select UH_RKP
-	help
-	  this enables realtime kernel protection
-
-config UH_RKP
-	bool "Enable RKP (Realtime Kernel Protection) UH feature"
-	help
-	  it protects a kernel text and etc.
-
-config TIMA_RKP_DEBUG
-	depends on TIMA_RKP
-	default n
-	bool "Support SS Sentinel for debugging"
-	help
-	  this enables to support sentinel
-
-config RKP_KDP
-	bool "Protection for cred structure"
-	depends on TIMA_RKP
-	depends on SAMSUNG_PRODUCT_SHIP
-	default n
-	help
-	  Prevents unauthorized cred modification.
-
-config RKP_NS_PROT
-	bool "Protection for namespace structure"
-	depends on RKP_KDP
-	default n
-	help
-	  Prevents unauthorized namespace modification.
-
-config RKP_DMAP_PROT
-	bool "Page Double Mapping protection"
-	depends on RKP_KDP
-	default n
-	help
-	  Prevents unauthorized mapping for page table.
 
 endmenu
 
@@ -655,14 +623,6 @@ config SCHED_HMP_LITTLE_PACKING
 	  packing_limit: runqueue load ratio where a RQ is considered
 	    to be full. Default is NICE_0_LOAD * 9/8.
 
-config SCHED_HMP_DOWN_MIGRATION_COMPENSATION
-	bool "(EXPERIMENTAL) HMP down migration compensation"
-	depends on SCHED_HMP
-	help
-	  Enables down migration compensation. The down-migration compensation
-	  guarantees proper performance to the down-migrated task by frequency
-	  qos lock.
-
 config NR_CPUS
 	int "Maximum number of CPUs (2-64)"
 	# These have to remain sorted largest to smallest
@@ -752,7 +712,7 @@ config FORCE_MAX_ZONEORDER
 
 config UNMAP_KERNEL_AT_EL0
 	bool "Unmap kernel when running in userspace (aka \"KAISER\")" if EXPERT
-	default y
+	default n
 	help
 	  Speculation attacks against some high-performance processors can
 	  be used to bypass MMU permission checks and leak kernel data to
@@ -761,15 +721,6 @@ config UNMAP_KERNEL_AT_EL0
 	  via a trampoline page in the vector table.
 
 	  If unsure, say Y.
-
-config REMOVE_M1_TLBI_ERRATUM_FOR_TVM
-	bool "Remove TLBI WA, if duplicated"
-	default n
-	depends on SOC_EXYNOS8890 && UNMAP_KERNEL_AT_EL0
-	help
-	  In some product, TLBI inst is executed in EL2. In this case, TLBI conflict
-	  WA is redundant and causes the poor performance. User can remove the TLBI WA
-	  with this config
 
 menuconfig ARMV8_DEPRECATED
 	bool "Emulate deprecated/obsolete ARMv8 instructions"
@@ -944,6 +895,52 @@ config EFI
 	  allow the kernel to be booted as an EFI application. This
 	  is only useful on systems that have UEFI firmware.
 
+config TIMA
+	bool "Enable TIMA(Trustzone based Integrity Measurement Archtecture feature"
+	default n
+
+config TIMA_LKMAUTH
+	bool "Enable LKM authentication by TIMA"
+	help
+	  TIMA authenticates loaded kernel modules. Disable it if you don't
+	  want TIMA enabled.
+
+config TIMA_RKP
+	bool "Enable RKP (Realtime Kernel Protection) TIMA feature"
+	depends on TIMA
+	select UH_RKP
+	default n
+
+config UH_RKP
+	bool "Enable RKP (Realtime Kernel Protection) UH feature"
+	help
+	  it protects a kernel text and etc.
+
+config TIMA_RKP_4G
+	bool "Support 4G model"
+	depends on TIMA_RKP
+	default n
+
+config RKP_KDP
+	bool "Protection for cred structure"
+	depends on TIMA_RKP
+	default n
+	help
+		Prevents unauthorized cred modification.
+
+config RKP_DMAP_PROT
+	bool "Page Double Mapping protection"
+	depends on (TIMA_RKP && RKP_KDP)
+	default n
+	help
+		Prevents unauthorized cred modification.
+
+config TIMA_TEST_INFRA
+	tristate "Testing infrastructure for TIMA"
+	default n
+	help
+	  Kernel bits of the TIMA test infrastructure
+
 config BUILD_ARM64_APPENDED_DTB_IMAGE
 	bool "Build a concatenated Image.gz/dtb by default"
 	depends on OF
@@ -998,9 +995,7 @@ config SYSVIPC_COMPAT
 config KEYS_COMPAT
 	def_bool y
 	depends on COMPAT && KEYS
-	help
-	  This option enables support for a 32-bit keyctl syscall callback function under
-	  a 64-bit kernel.
+
 endmenu
 
 menu "Power management options"
@@ -1014,16 +1009,6 @@ config ARM64_CPU_SUSPEND
 	def_bool PM_SLEEP
 
 endmenu
-
-config RELOCATABLE_KERNEL 
-	bool "set kernel to relocatable in both virtual and physical address"
-	default n
-	help 	
-	  This configuare will allow you to config the kernel into position independent kernel, with '--PIE' insert into LD script.
-
-config SAMSUNG_PRODUCT_SHIP
-	bool "set up for product shipping"
-	default n
 
 menu "CPU Power Management"
 
@@ -1048,73 +1033,6 @@ config ARM64_ERRATUM_843419
 	  If unsure, say Y.
 
 endmenu
-
-#
-# BEGIN RKP_CFP CONFIG OPTIONS
-#
-
-menu "Control Flow Protection"
-
-config RKP_CFP
-	bool "Hyperdrive ROP protection"
-	depends on TIMA_RKP
-	# Disable RKP for now, keep getting TIMA_RKP_VMM_PANIC when doing sleep.S code for saving/restoring x17.
-	default n
-	help
-        Static binary instrumentation of direct/indirect branches to prevent 
-        return-oriented programming (ROP) attacks and jump-oriented programming (JOP) attacks.
-
-config RKP_CFP_ROPP
-	bool "Hyperdrive: encrypt return-addresses"
-	depends on TIMA_RKP
-	select RKP_CFP
-	select RKP_CFP_FIX_SMC_BUG
-	default n
-
-choice
-	prompt "ROPP key"
-	default RKP_CFP_ROPP_RANDOM_KEY
-	depends on RKP_CFP && RKP_CFP_ROPP
-	help
-	  ROPP key configuration
-
-config RKP_CFP_ROPP_HYPKEY
-	bool "Use hypervisor for key secure storage"
-	help
-        if n, use random key or zero key
-
-config RKP_CFP_ROPP_RANDOM_KEY
-	bool "Hyperdrive: use pseudo random key for return-address encryption"
-	help
-        if n, use hyp key or zero key
-
-config RKP_CFP_ROPP_ZERO_KEY
-	bool "Hyperdrive: use zero key for return-address encryption"
-	help
-        if n, use hyp key or random key
-endchoice
-
-config RKP_CFP_JOPP
-	bool "Just to function entry only, Restrict BLR jump target to a valid function entry point and no br in C code"
-	depends on TIMA_RKP
-	select RKP_CFP
-	default n
-
-config RKP_CFP_JOPP_MAGIC
-	hex "Magic number put just above function labels to restrict BLR to function entry points"
-	# depends on RKP_CFP && RKP_CFP_JOPP
-	# basically it depends on above line but it's needed for avoiding a build break
-	default "0xb3ea3bad"
-
-config RKP_CFP_FIX_SMC_BUG
-	bool "Hyperdrive: [INSECURE] hack broken smc calls to save/restore RRK after it clobbers it"
-	depends on RKP_CFP_ROPP
-	default n
-endmenu
-
-#
-# END RKP_CFP CONFIG OPTIONS
-#
 
 source "net/Kconfig"
 

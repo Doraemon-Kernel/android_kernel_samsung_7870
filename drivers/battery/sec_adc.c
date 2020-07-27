@@ -31,7 +31,6 @@ static struct adc_list batt_adc_list[] = {
 	{.name = "adc-dischg-ntc"},
 	{.name = "adc-wpc-temp"},
 	{.name = "adc-slave-chg-temp"},
-	{.name = "adc-coil-temp"},
 };
 
 static void sec_bat_adc_ap_init(struct platform_device *pdev)

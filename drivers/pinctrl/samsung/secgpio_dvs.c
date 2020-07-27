@@ -156,8 +156,8 @@ void gpio_dvs_check_sleepgpio(void)
 
 #ifdef CONFIG_OF
 static const struct of_device_id secgpio_dvs_dt_match[] = {
-	{ .compatible = "samsung,exynos8890-secgpio-dvs",
-		.data = (void *)&exynos8890_secgpio_dvs },
+	{ .compatible = "samsung,exynos7870-secgpio-dvs",
+		.data = (void *)&exynos7870_secgpio_dvs },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, secgpio_dvs_dt_match);

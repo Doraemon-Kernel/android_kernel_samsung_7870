@@ -21,3 +21,7 @@ config GPS_BCM47531
 config GPS_BCM4773
 	bool "BROADCOM_GPS_CHIPSET_4773"
 	default n
+
+config GPS_LSI_S5N6420
+	bool "LSI_GPS_CHIPSET_HARRIER"
+	default n

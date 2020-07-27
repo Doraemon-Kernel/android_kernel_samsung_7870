@@ -2,7 +2,12 @@
  * include/linux/mfd/s2mu003.h
  *
  * Driver to Richtek S2MU003
- * Multi function device -- Charger / Battery Gauge / DCDC Converter / LED Flashlight
+ * Multi function device -- Charger / Battery Gauge /
+ *			DCDC Converter / LED Flashlight
+ *
+ * Copyright (c) 2015 Samsung Electronics Co., Ltd.
+ *		http://www.samsung.com
+ * Author: Junhan Bae <junhan84.bae@samsung.com>
  *
  * Copyright (C) 2013 Richtek Technology Corp.
  * Author: Patrick Chang <patrick_chang@richtek.com>
@@ -37,7 +42,11 @@
 #include <linux/workqueue.h>
 #include <linux/slab.h>
 
+#if defined(CONFIG_SEC_CHARGER_S2MU003)
+#include <linux/power/sec_charging_common.h>
+#else
 #include <linux/battery/sec_charging_common.h>
+#endif
 
 #define S2MU003_DRV_VER "1.1.8_S"
 
@@ -55,9 +64,9 @@
 #define S2MU003_PMIC_IRQ_REGS_NR 1
 
 #define S2MU003_IRQ_REGS_NR \
-    (S2MU003_CHG_IRQ_REGS_NR + \
-     S2MU003_LED_IRQ_REGS_NR + \
-     S2MU003_PMIC_IRQ_REGS_NR)
+	(S2MU003_CHG_IRQ_REGS_NR + \
+	S2MU003_LED_IRQ_REGS_NR + \
+	S2MU003_PMIC_IRQ_REGS_NR)
 
 #define S2MU003_DECLARE_IRQ(irq) { \
 	irq, irq, \
@@ -112,8 +121,18 @@ typedef struct s2mu003_charger_platform_data {
 	sec_charging_current_t *charging_current_table;
 	int chg_float_voltage;
 	char *charger_name;
-	uint32_t is_750kHz_switching:1;
+#ifdef CONFIG_SEC_FUELGAUGE_S2MU003
+	char *fuelgauge_name;
+#endif
+	uint32_t is_1MHz_switching:1;
 	uint32_t is_fixed_switching:1;
+
+	sec_bat_adc_table_data_t *temp_adc_table;
+	unsigned int temp_adc_table_size;
+	unsigned int temp_amb_adc_table_size;
+	unsigned int chg_temp_adc_table_size;
+	unsigned int inbat_adc_table_size;
+	sec_battery_thermal_source_t thermal_source;
 } s2mu003_charger_platform_data_t;
 
 struct s2mu003_mfd_platform_data {
@@ -122,9 +141,10 @@ struct s2mu003_mfd_platform_data {
 	int irq_gpio;
 	int irq_base;
 	int num_regulators;
+	int fuelgauge_reg;
 	s2mu003_regulator_platform_data_t *regulators;
 #ifdef CONFIG_CHARGER_S2MU003
-    s2mu003_charger_platform_data_t *charger_platform_data;
+	s2mu003_charger_platform_data_t *charger_platform_data;
 #endif
 };
 
@@ -135,20 +155,22 @@ struct s2mu003_charger_data;
 
 struct s2mu003_mfd_chip {
 	struct i2c_client *i2c_client;
+	struct i2c_client *fuelgauge_i2c;
 	struct device *dev;
 	s2mu003_mfd_platform_data_t *pdata;
-    int irq_base;
+	int irq_base;
 	struct mutex io_lock;
-    struct mutex irq_lock;
+	struct mutex irq_lock;
 	struct wake_lock irq_wake_lock;
 	/* prev IRQ status and now IRQ_status*/
 	s2mu003_irq_status_t irq_status[2];
 	/* irq_status_index ^= 0x01; after access irq*/
 	int irq_status_index;
 	int irq;
-    uint8_t irq_masks_cache[S2MU003_IRQ_REGS_NR];
+	uint8_t irq_masks_cache[S2MU003_IRQ_REGS_NR];
 	int suspend_flag;
 	struct s2mu003_charger_data *charger;
+	int dev_id;
 
 #ifdef CONFIG_FLED_S2MU003
 	struct s2mu003_fled_info *fled_info;
@@ -173,13 +195,14 @@ extern int s2mu003_assign_bits(struct i2c_client *i2c, int reg_addr, u8 mask,
 		u8 data);
 extern int s2mu003_set_bits(struct i2c_client *i2c, int reg_addr, u8 mask);
 extern int s2mu003_clr_bits(struct i2c_client *i2c, int reg_addr, u8 mask);
+extern int charger_led_ctl(bool on);
 
 typedef enum {
 	S2MU003_PREV_STATUS = 0,
 	S2MU003_NOW_STATUS } s2mu003_irq_status_sel_t;
 
-extern s2mu003_irq_status_t *s2mu003_get_irq_status(s2mu003_mfd_chip_t *mfd_chip,
-		s2mu003_irq_status_sel_t sel);
+extern s2mu003_irq_status_t *s2mu003_get_irq_status(
+	s2mu003_mfd_chip_t *mfd_chip, s2mu003_irq_status_sel_t sel);
 extern int s2mu003_init_irq(s2mu003_mfd_chip_t *chip);
 extern int s2mu003_exit_irq(s2mu003_mfd_chip_t *chip);
 

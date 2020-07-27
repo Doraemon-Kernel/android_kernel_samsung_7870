@@ -14,8 +14,6 @@
 #ifndef __LINUX_MFD_SEC_CORE_H
 #define __LINUX_MFD_SEC_CORE_H
 
-#include <linux/regulator/consumer.h>
-
 #define NUM_IRQ_REGS	4
 
 #define SEC_PMIC_REV(iodev)	(iodev)->rev_num
@@ -27,8 +25,9 @@ enum sec_device_type {
 	S2MPS11X,
 	S2MPS13X,
 	S2MPS15X,
-	S2MPS16X,
 	S2MPU03X,
+	S2MPS16X,
+	S2MPU05X,
 };
 
 /**
@@ -169,6 +168,10 @@ struct sec_platform_data {
 	/* ---- RTC ---- */
 	struct sec_wtsr_smpl *wtsr_smpl;
 	struct rtc_time *init_time;
+	int			osc_bias_up;
+	int			cap_sel;
+	int			osc_xin;
+	int			osc_xout;
 };
 
 int sec_irq_init(struct sec_pmic_dev *sec_pmic);
@@ -190,8 +193,6 @@ extern int sec_rtc_bulk_write(struct sec_pmic_dev *sec_pmic, u32 reg, int count,
 				u8 *buf);
 extern int sec_rtc_update(struct sec_pmic_dev *sec_pmic, u32 reg, u32 val,
 				u32 mask);
-
-extern int s2m_set_vth(struct regulator *reg, bool enable);
 extern void s2m_init_dvs(void);
 extern int s2m_get_dvs_is_enable(void);
 extern int s2m_get_dvs_is_on(void);

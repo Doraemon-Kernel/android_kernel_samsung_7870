@@ -17,75 +17,6 @@
 #include "fimc-is-video.h"
 #include "fimc-is-type.h"
 
-static int fimc_is_ischain_mcs_bypass(struct fimc_is_subdev *leader,
-	void *device_data,
-	struct fimc_is_frame *frame,
-	bool bypass)
-{
-	int ret = 0;
-	struct fimc_is_group *group;
-	struct param_mcs_output *output;
-	struct fimc_is_device_ischain *device;
-	u32 lindex = 0, hindex = 0, indexes = 0;
-	u32 param_out;
-
-	device = (struct fimc_is_device_ischain *)device_data;
-
-	BUG_ON(!leader);
-	BUG_ON(!device);
-
-	if (test_bit(FIMC_IS_ISCHAIN_REPROCESSING, &device->state)) {
-		mswarn("reprocessing cannot connect to VRA\n", device, leader);
-		goto p_err;
-	}
-
-	group = &device->group_mcs;
-
-	switch (group->junction->vid) {
-	case FIMC_IS_VIDEO_M0P_NUM:
-		param_out = PARAM_MCS_OUTPUT0;
-		break;
-	case FIMC_IS_VIDEO_M1P_NUM:
-		param_out = PARAM_MCS_OUTPUT1;
-		break;
-	case FIMC_IS_VIDEO_M2P_NUM:
-		param_out = PARAM_MCS_OUTPUT2;
-		break;
-	case FIMC_IS_VIDEO_M3P_NUM:
-		param_out = PARAM_MCS_OUTPUT3;
-		break;
-	case FIMC_IS_VIDEO_M4P_NUM:
-		param_out = PARAM_MCS_OUTPUT4;
-		break;
-	default:
-		merr("VRA is not connected\n", device);
-		ret = -EINVAL;
-		goto p_err;
-	}
-
-	output = fimc_is_itf_g_param(device, frame, param_out);
-
-	if (bypass)
-		output->otf_cmd = OTF_OUTPUT_COMMAND_DISABLE;
-	else
-		output->otf_cmd = OTF_OUTPUT_COMMAND_ENABLE;
-
-	lindex |= LOWBIT_OF(param_out);
-	hindex |= HIGHBIT_OF(param_out);
-	indexes++;
-
-	ret = fimc_is_itf_s_param(device, frame, lindex, hindex, indexes);
-	if (ret) {
-		mrerr("fimc_is_itf_s_param is fail(%d)", device, frame, ret);
-		goto p_err;
-	}
-
-	minfo("VRA is connected at %s\n", device, group->junction->name);
-
-p_err:
-	return ret;
-}
-
 static int fimc_is_ischain_mcs_cfg(struct fimc_is_subdev *leader,
 	void *device_data,
 	struct fimc_is_frame *frame,
@@ -101,7 +32,6 @@ static int fimc_is_ischain_mcs_cfg(struct fimc_is_subdev *leader,
 	struct param_mcs_input *input;
 	struct param_control *control;
 	struct fimc_is_device_ischain *device;
-	struct fimc_is_subdev *subdev;
 
 	device = (struct fimc_is_device_ischain *)device_data;
 
@@ -158,29 +88,6 @@ static int fimc_is_ischain_mcs_cfg(struct fimc_is_subdev *leader,
 	(*indexes)++;
 
 	leader->input.crop = *incrop;
-
-	switch (group->junction->vid) {
-	case FIMC_IS_VIDEO_M0P_NUM:
-		subdev = group->subdev[ENTRY_M0P];
-		break;
-	case FIMC_IS_VIDEO_M1P_NUM:
-		subdev = group->subdev[ENTRY_M1P];
-		break;
-	case FIMC_IS_VIDEO_M2P_NUM:
-		subdev = group->subdev[ENTRY_M2P];
-		break;
-	case FIMC_IS_VIDEO_M3P_NUM:
-		subdev = group->subdev[ENTRY_M3P];
-		break;
-	case FIMC_IS_VIDEO_M4P_NUM:
-		subdev = group->subdev[ENTRY_M4P];
-		break;
-	default:
-		mwarn("VRA is not connected\n", device);
-		goto p_err;
-	}
-
-	CALL_SOPS(subdev, cfg, device, frame, incrop, NULL, lindex, hindex, indexes);
 
 p_err:
 	return ret;
@@ -264,7 +171,7 @@ p_err:
 }
 
 const struct fimc_is_subdev_ops fimc_is_subdev_mcs_ops = {
-	.bypass			= fimc_is_ischain_mcs_bypass,
+	.bypass			= NULL,
 	.cfg			= fimc_is_ischain_mcs_cfg,
 	.tag			= fimc_is_ischain_mcs_tag,
 };

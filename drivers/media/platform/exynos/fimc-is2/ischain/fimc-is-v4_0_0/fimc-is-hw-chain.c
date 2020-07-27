@@ -527,7 +527,6 @@ int fimc_is_hw_get_address(void *itfc_data, void *pdev_data, int hw_id)
 			return -EINVAL;
 		}
 
-		info_itfc("[ID:%2d] (0x%p)\n", hw_id, itf_hwip->hw_ip);
 		info_itfc("[ID:%2d] SCP VA(0x%p)\n", hw_id, itf_hwip->hw_ip->regs);
 		break;
 	case DEV_HW_VRA:
@@ -807,7 +806,8 @@ int fimc_is_hw_request_irq(void *itfc_data, int hw_id)
 		itf_hwip->handler[INTR_HWIP2].valid = true;
 		break;
 	case DEV_HW_SCP:
-		snprintf(itf_hwip->irq_name[INTR_HWIP1], sizeof(itf_hwip->irq_name[INTR_HWIP1]), "fimcscp");
+		name_len = sizeof(itf_hwip->irq_name[INTR_HWIP1]);
+		snprintf(itf_hwip->irq_name[INTR_HWIP1], name_len, "fimcscp");
 		ret = request_irq(itf_hwip->irq[INTR_HWIP1], interface_scaler_isr,
 			FIMC_IS_HW_IRQ_FLAG,
 			itf_hwip->irq_name[INTR_HWIP1],

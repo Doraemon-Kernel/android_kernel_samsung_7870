@@ -66,6 +66,17 @@ enum kbase_pm_core_type {
  * struct kbasep_pm_metrics_data - Metrics data collected for use by the power
  *                                 management framework.
  *
+ *  @vsync_hit: indicates if a framebuffer update occured since the last vsync.
+ *          A framebuffer driver is expected to provide this information by
+ *          checking at each vsync if the framebuffer was updated and calling
+ *          kbase_pm_vsync_callback() if there was a change of status.
+ *  @utilisation: percentage indicating GPU load (0-100).
+ *          The utilisation is the fraction of time the GPU was powered up
+ *          and busy. This is based on the time_busy and time_idle metrics.
+ *  @util_gl_share: percentage of GPU load related to OpenGL jobs (0-100).
+ *          This is based on the busy_gl and time_busy metrics.
+ *  @util_cl_share: percentage of GPU load related to OpenCL jobs (0-100).
+ *          This is based on the busy_cl and time_busy metrics.
  *  @time_period_start: time at which busy/idle measurements started
  *  @time_busy: number of ns the GPU was busy executing jobs since the
  *          @time_period_start timestamp.
@@ -84,9 +95,14 @@ enum kbase_pm_core_type {
  *  @busy_gl: number of ns the GPU was busy executing GL jobs. Note that
  *           if two GL jobs were active for 400ns, this value would be updated
  *           with 800.
- *  @active_cl_ctx: number of CL jobs active on the GPU. Array is per-device.
- *  @active_gl_ctx: number of GL jobs active on the GPU. Array is per-slot. As
- *           GL jobs never run on slot 2 this slot is not recorded.
+ *  @active_cl_ctx: number of CL jobs active on the GPU. This is a portion of
+ *           the @nr_in_slots value.
+ *  @active_gl_ctx: number of GL jobs active on the GPU. This is a portion of
+ *           the @nr_in_slots value.
+ *  @nr_in_slots: Total number of jobs currently submitted to the GPU across
+ *           all job slots. Maximum value would be 2*BASE_JM_MAX_NR_SLOTS
+ *           (one in flight and one in the JSn_HEAD_NEXT register for each
+ *           job slot).
  *  @lock: spinlock protecting the kbasep_pm_metrics_data structure
  *  @timer: timer to regularly make DVFS decisions based on the power
  *           management metrics.
@@ -96,6 +112,10 @@ enum kbase_pm_core_type {
  *
  */
 struct kbasep_pm_metrics_data {
+	int vsync_hit;
+	int utilisation;
+	int util_gl_share;
+	int util_cl_share[2]; /* 2 is a max number of core groups we can have */
 	ktime_t time_period_start;
 	u32 time_busy;
 	u32 time_idle;
@@ -105,7 +125,8 @@ struct kbasep_pm_metrics_data {
 	u32 busy_cl[2];
 	u32 busy_gl;
 	u32 active_cl_ctx[2];
-	u32 active_gl_ctx[2]; /* GL jobs can only run on 2 of the 3 job slots */
+	u32 active_gl_ctx;
+	u8 nr_in_slots;
 	spinlock_t lock;
 
 /* MALI_SEC_INTEGRATION */
@@ -121,6 +142,24 @@ struct kbasep_pm_metrics_data {
 #ifdef MALI_SEC_CL_BOOST
 	atomic_t time_compute_jobs, time_vertex_jobs, time_fragment_jobs;
 #endif
+};
+
+/**
+ * enum kbase_pm_dvfs_action - Actions for DVFS.
+ *
+ * kbase_pm_get_dvfs_action() will return one of these enumerated values to
+ * describe the action that the DVFS system should take.
+ *
+ * @KBASE_PM_DVFS_NOP:        No change in clock frequency is requested
+ * @KBASE_PM_DVFS_CLOCK_UP:   The clock frequency should be increased if
+ *                            possible
+ * @KBASE_PM_DVFS_CLOCK_DOWN: The clock frequency should be decreased if
+ *                            possible
+ */
+enum kbase_pm_dvfs_action {
+	KBASE_PM_DVFS_NOP,
+	KBASE_PM_DVFS_CLOCK_UP,
+	KBASE_PM_DVFS_CLOCK_DOWN
 };
 
 union kbase_pm_policy_data {

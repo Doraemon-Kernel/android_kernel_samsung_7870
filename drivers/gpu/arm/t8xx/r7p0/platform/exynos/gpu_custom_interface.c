@@ -488,7 +488,6 @@ static ssize_t show_max_lock_dvfs(struct device *dev, struct device_attribute *a
 	ssize_t ret = 0;
 	unsigned long flags;
 	int locked_clock = -1;
-	int user_locked_clock = -1;
 	struct exynos_context *platform = (struct exynos_context *)pkbdev->platform_context;
 
 	if (!platform)
@@ -496,11 +495,10 @@ static ssize_t show_max_lock_dvfs(struct device *dev, struct device_attribute *a
 
 	spin_lock_irqsave(&platform->gpu_dvfs_spinlock, flags);
 	locked_clock = platform->max_lock;
-	user_locked_clock = platform->user_max_lock_input;
 	spin_unlock_irqrestore(&platform->gpu_dvfs_spinlock, flags);
 
 	if (locked_clock > 0)
-		ret += snprintf(buf+ret, PAGE_SIZE-ret, "%d / %d", locked_clock, user_locked_clock);
+		ret += snprintf(buf+ret, PAGE_SIZE-ret, "%d", locked_clock);
 	else
 		ret += snprintf(buf+ret, PAGE_SIZE-ret, "-1");
 
@@ -524,7 +522,6 @@ static ssize_t set_max_lock_dvfs(struct device *dev, struct device_attribute *at
 		return -ENODEV;
 
 	if (sysfs_streq("0", buf)) {
-		platform->user_max_lock_input = 0;
 		gpu_dvfs_clock_lock(GPU_DVFS_MAX_UNLOCK, SYSFS_LOCK, 0);
 	} else {
 		ret = kstrtoint(buf, 0, &clock);
@@ -532,10 +529,6 @@ static ssize_t set_max_lock_dvfs(struct device *dev, struct device_attribute *at
 			GPU_LOG(DVFS_WARNING, DUMMY, 0u, 0u, "%s: invalid value\n", __func__);
 			return -ENOENT;
 		}
-
-		platform->user_max_lock_input = clock;
-
-		clock = gpu_dvfs_get_level_clock(clock);
 
 		ret = gpu_dvfs_get_level(clock);
 		if ((ret < gpu_dvfs_get_level(platform->gpu_max_clock)) || (ret > gpu_dvfs_get_level(platform->gpu_min_clock))) {
@@ -557,7 +550,6 @@ static ssize_t show_min_lock_dvfs(struct device *dev, struct device_attribute *a
 	ssize_t ret = 0;
 	unsigned long flags;
 	int locked_clock = -1;
-	int user_locked_clock = -1;
 	struct exynos_context *platform = (struct exynos_context *)pkbdev->platform_context;
 
 	if (!platform)
@@ -565,11 +557,10 @@ static ssize_t show_min_lock_dvfs(struct device *dev, struct device_attribute *a
 
 	spin_lock_irqsave(&platform->gpu_dvfs_spinlock, flags);
 	locked_clock = platform->min_lock;
-	user_locked_clock = platform->user_min_lock_input;
 	spin_unlock_irqrestore(&platform->gpu_dvfs_spinlock, flags);
 
 	if (locked_clock > 0)
-		ret += snprintf(buf+ret, PAGE_SIZE-ret, "%d / %d", locked_clock, user_locked_clock);
+		ret += snprintf(buf+ret, PAGE_SIZE-ret, "%d", locked_clock);
 	else
 		ret += snprintf(buf+ret, PAGE_SIZE-ret, "-1");
 
@@ -593,7 +584,6 @@ static ssize_t set_min_lock_dvfs(struct device *dev, struct device_attribute *at
 		return -ENODEV;
 
 	if (sysfs_streq("0", buf)) {
-		platform->user_min_lock_input = 0;
 		gpu_dvfs_clock_lock(GPU_DVFS_MIN_UNLOCK, SYSFS_LOCK, 0);
 	} else {
 		ret = kstrtoint(buf, 0, &clock);
@@ -601,10 +591,6 @@ static ssize_t set_min_lock_dvfs(struct device *dev, struct device_attribute *at
 			GPU_LOG(DVFS_WARNING, DUMMY, 0u, 0u, "%s: invalid value\n", __func__);
 			return -ENOENT;
 		}
-
-		platform->user_min_lock_input = clock;
-
-		clock = gpu_dvfs_get_level_clock(clock);
 
 		ret = gpu_dvfs_get_level(clock);
 		if ((ret < gpu_dvfs_get_level(platform->gpu_max_clock)) || (ret > gpu_dvfs_get_level(platform->gpu_min_clock))) {
@@ -1356,7 +1342,7 @@ static ssize_t show_hwcnt_tripipe(struct device *dev, struct device_attribute *a
 	if (!platform)
 		return -ENODEV;
 
-	ret += snprintf(buf+ret, PAGE_SIZE-ret, "%d : (active, arith, ls, tex) = (%llu, %llu, %llu, %llu)",
+	ret += snprintf(buf+ret, PAGE_SIZE-ret, "%d : (active, arith, ls, tex) = (%u, %u, %u, %u)",
 		platform->hwcnt_gathering_status, kbdev->hwcnt.resources_log.tripipe_active, kbdev->hwcnt.resources_log.arith_words, kbdev->hwcnt.resources_log.ls_issues, kbdev->hwcnt.resources_log.tex_issues);
 
 	if (ret < PAGE_SIZE - 1) {

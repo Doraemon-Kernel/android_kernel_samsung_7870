@@ -275,6 +275,10 @@ static const char * const fw_path[] = {
 	"/lib/firmware/updates/" UTS_RELEASE,
 	"/lib/firmware/updates",
 	"/lib/firmware/" UTS_RELEASE,
+#ifdef CONFIG_QCOM_WIFI
+	"/etc/firmware",
+	"/etc/firmware/wlan",
+#endif /* CONFIG_QCOM_WIFI */
 	"/lib/firmware"
 };
 
@@ -1144,11 +1148,11 @@ _request_firmware(const struct firmware **firmware_p, const char *name,
 	ret = fw_get_filesystem_firmware(device, fw->priv);
 	if (ret) {
 		if (!(opt_flags & FW_OPT_NO_WARN))
-			dev_dbg(device,
+			dev_warn(device,
 				 "Direct firmware load for %s failed with error %d\n",
 				 name, ret);
 		if (opt_flags & FW_OPT_USERHELPER) {
-			dev_dbg(device, "Falling back to user helper\n");
+			dev_warn(device, "Falling back to user helper\n");
 			ret = fw_load_from_user_helper(fw, name, device,
 						       opt_flags, timeout);
 		}

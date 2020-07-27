@@ -24,6 +24,8 @@ struct exynos_platform_fimc_is_preproc {
 	u32 scenario;
 	u32 mclk_ch;
 	u32 id;
+	char *pinctrl_name;
+	char *int_pin_name;
 };
 
 int exynos_fimc_is_preproc_iclk_cfg(struct device *dev,

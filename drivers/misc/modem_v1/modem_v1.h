@@ -28,6 +28,10 @@
 #define MAX_NAME_LEN		64
 #define MAX_DUMP_LEN		20
 
+#define SMC_ID_CLK		0x82001011
+#define SSS_CLK_ENABLE	0
+#define SSS_CLK_DISABLE	1
+
 enum modem_t {
 	IMC_XMM6260,
 	IMC_XMM6262,
@@ -63,7 +67,7 @@ enum dev_format {
 
 enum legacy_ipc_map {
 	IPC_MAP_FMT = 0,
-#ifdef CONFIG_MODEM_IF_LEGACY_QOS
+#ifdef CONFIG_MODEM_IF_QOS
 	IPC_MAP_HPRIO_RAW,
 #endif
 	IPC_MAP_NORM_RAW,
@@ -233,6 +237,7 @@ enum read_write {
 #define STR_CP_FAIL	"cp_fail"
 #define STR_CP_WDT	"cp_wdt"	/* CP watchdog timer */
 
+
 /* You can define modem specific attribute here.
  * It could be all the different behaviour between many modem vendor.
  */
@@ -353,10 +358,6 @@ struct modem_mbox {
 	unsigned int mbx_cp2ap_wakeup;	/* AP_WAKEUP	*/
 	unsigned int mbx_ap2cp_status;	/* AP_STATUS	*/
 	unsigned int mbx_cp2ap_status;	/* CP_STATUS	*/
-	unsigned int mbx_ap2cp_sec;	/* AP Time(sec)	*/
-	unsigned int mbx_ap2cp_usec;	/* AP_Time(usec) */
-	unsigned int mbx_cp2ap_wakelock; /* Wakelock for VoLTE */
-	unsigned int mbx_cp2ap_pcie_l1ss_disable; /* Wakelock for pcie */
 
 	unsigned int int_ap2cp_msg;
 	unsigned int int_ap2cp_active;
@@ -367,8 +368,6 @@ struct modem_mbox {
 	unsigned int irq_cp2ap_active;
 	unsigned int irq_cp2ap_wakeup;
 	unsigned int irq_cp2ap_status;
-	unsigned int irq_cp2ap_wakelock;
-	unsigned int irq_cp2ap_pcie_l1ss_disable;
 
 	/* Performance request */
 	unsigned int mbx_ap2cp_perf_req;
@@ -383,7 +382,6 @@ struct modem_mbox {
 	unsigned int irq_cp2ap_perf_req_mif;
 	unsigned int irq_cp2ap_perf_req_int;
 
-	unsigned int mbx_ap2cp_et_dac_cal;
 	unsigned int mbx_ap2cp_lock_value;
 
 	unsigned int *ap_clk_table;
@@ -475,6 +473,8 @@ struct modem_data {
 	/* SIM Detect polarity */
 	bool sim_polarity;
 
+	u8 __iomem *ipc_base;
+
 	void (*gpio_revers_bias_clear)(void);
 	void (*gpio_revers_bias_restore)(void);
 };
@@ -533,6 +533,13 @@ struct modem_boot_spi {
 		if (of_property_read_u32(np, prop, &val)) \
 			return -EINVAL; \
 		dest = val; \
+	} while (0)
+
+#define mif_dt_read_u32_noerr(np, prop, dest) \
+	do { \
+		u32 val; \
+		if (!of_property_read_u32(np, prop, &val)) \
+			dest = val; \
 	} while (0)
 #endif
 

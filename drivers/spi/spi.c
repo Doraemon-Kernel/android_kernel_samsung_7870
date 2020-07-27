@@ -764,8 +764,6 @@ static int spi_map_msg(struct spi_master *master, struct spi_message *msg)
 		if (max_tx || max_rx) {
 			list_for_each_entry(xfer, &msg->transfers,
 					    transfer_list) {
-				if (!xfer->len)
-					continue;
 				if (!xfer->tx_buf)
 					xfer->tx_buf = master->dummy_tx;
 				if (!xfer->rx_buf)
@@ -950,14 +948,10 @@ static void spi_pump_messages(struct kthread_work *work)
 		ret = master->prepare_transfer_hardware(master);
 		if (ret) {
 			dev_err(&master->dev,
-				"failed to prepare transfer hardware: %d\n",
-				ret);
+				"failed to prepare transfer hardware\n");
 
 			if (master->auto_runtime_pm)
 				pm_runtime_put(master->dev.parent);
-
-			master->cur_msg->status = ret;
-			spi_finalize_current_message(master);
 			return;
 		}
 	}

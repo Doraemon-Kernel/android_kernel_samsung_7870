@@ -19,7 +19,7 @@
  * CONFIG - GLOBAL OPTIONS
  * =================================================================================================
  */
-#define FIMC_IS_SENSOR_COUNT	6
+#define FIMC_IS_SENSOR_COUNT	4
 #define FIMC_IS_STREAM_COUNT	4
 
 /*
@@ -90,8 +90,8 @@
 #define HW_SLOT_MAX		(7)
 #define valid_hw_slot_id(slot_id) \
 	(0 <= slot_id && slot_id < HW_SLOT_MAX)
-/* #define SETFILE_DISABLE */
-/* #define LIB_DISABLE */
+/* #define DISABLE_SETFILE */
+/* #define DISABLE_LIB */
 #endif
 #elif defined(CONFIG_SOC_EXYNOS7580)
 #define SOC_30S
@@ -147,16 +147,71 @@
 /* #define ENABLE_DNR */
 #define ENABLE_VRA
 
+#define USE_ONE_BINARY
 #define ENABLE_IRQ_MULTI_TARGET
+#define ENABLE_HOTPLUG_REQUEST
 /* #define USE_MCUCTL */
 
 #define SOC_3AAISP
-#define SOC_MCS_1x1
+/* #define SOC_MCS0 */
+/* #define SOC_MCS1 */
 #define HW_SLOT_MAX		(3)
 #define valid_hw_slot_id(slot_id) \
 	(0 <= slot_id && slot_id < HW_SLOT_MAX)
-/* #define SETFILE_DISABLE */
-/* #define LIB_DISABLE */
+/* #define DISABLE_SETFILE */
+/* #define DISABLE_LIB */
+
+#undef ENABLE_DVFS
+#undef ENABLE_CLOCK_GATE
+
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+/* init AWB */
+#define ENABLE_INIT_AWB
+#define WB_GAIN_COUNT		(4)
+#define INIT_AWB_COUNT_REAR	(3)
+#define INIT_AWB_COUNT_FRONT	(7)
+#endif
+
+#elif defined(CONFIG_SOC_EXYNOS7880)
+#define SOC_30S
+#define SOC_30C
+#define SOC_30P
+#define SOC_I0S
+#define SOC_I0C
+#define SOC_I0P
+/* #define SOC_31S */
+/* #define SOC_31C */
+/* #define SOC_31P */
+/* #define SOC_I1S */
+/* #define SOC_I1C */
+/* #define SOC_I1P */
+/* #define SOC_DRC */
+/* #define SOC_DIS */
+/* #define SOC_ODC */
+/* #define SOC_DNR */
+/* #define SOC_SCC */
+/* #define SOC_SCP */
+#define SOC_MCS
+#define SOC_VRA
+
+/* Post Processing Configruation */
+/* #define ENABLE_DRC */
+/* #define ENABLE_DIS */
+/* #define ENABLE_DNR */
+#define ENABLE_VRA
+
+#define USE_ONE_BINARY
+#define ENABLE_IRQ_MULTI_TARGET
+/* #define USE_MCUCTL */
+
+/* #define SOC_3AAISP */
+#define SOC_MCS0
+/* #define SOC_MCS1 */
+#define HW_SLOT_MAX		(4)
+#define valid_hw_slot_id(slot_id) \
+	(0 <= slot_id && slot_id < HW_SLOT_MAX)
+/* #define DISABLE_SETFILE */
+/* #define DISABLE_LIB */
 
 #undef ENABLE_DVFS
 #undef ENABLE_CLOCK_GATE
@@ -234,15 +289,11 @@
 /* #define ENABLE_CACHE */
 #define ENABLE_FULL_BYPASS
 #define ENABLE_ONE_SLOT
-
-/* disable the Fast Shot because of AF fluctuating issue when touch af */
 /* #define ENABLE_FAST_SHOT */
-
 #define ENABLE_FAULT_HANDLER
 #define ENABLE_PANIC_HANDLER
 /* #define ENABLE_MIF_400 */
 #define ENABLE_DTP
-#define ENABLE_SETFILE
 #define ENABLE_FLITE_OVERFLOW_STOP
 #define ENABLE_DBG_FS
 #define ENABLE_RESERVED_MEM
@@ -253,13 +304,18 @@
 #endif /* CONFIG_PM_DEVFREQ */
 
 /* Config related to control HW directly */
+#if defined(CONFIG_CAMERA_MC_SCALER_VER1_USE)
+#define MCS_USE_SCP_PARAM
+#else
+#undef MCS_USE_SCP_PARAM
+#endif
+
 #if defined(CONFIG_USE_DIRECT_IS_CONTROL)
 #undef ENABLE_IS_CORE
-#define ENABLE_RESERVED_INTERNAL_DMA
+#define ENABLE_FPSIMD_FOR_USER
 #else
 #define ENABLE_IS_CORE
-#undef ENABLE_RESERVED_INTERNAL_DMA
-/* #define ENABLE_FW_SHARE_DUMP */
+#undef ENABLE_FPSIMD_FOR_USER
 #endif
 
 #if defined(DEBUG)
@@ -290,6 +346,16 @@
 #define CAPTURE_NODE_MAX		5
 #define OTF_YUV_FORMAT			(OTF_INPUT_FORMAT_YUV422)
 
+#elif defined(CONFIG_SOC_EXYNOS7880)
+#if defined(CONFIG_ARM_EXYNOS7880_BUS_DEVFREQ)
+#define CONFIG_FIMC_IS_BUS_DEVFREQ
+#endif
+#define CAPTURE_NODE_MAX		5
+#define OTF_YUV_FORMAT			(OTF_INPUT_FORMAT_YUV422)
+#define ENABLE_SYNC_REPROCESSING
+#undef ENABLE_CLOCK_GATE
+#define ENABLE_DIRECT_CLOCK_GATE
+
 #elif defined(CONFIG_SOC_EXYNOS7890)
 #if defined(CONFIG_ARM_EXYNOS7890_BUS_DEVFREQ)
 #define CONFIG_FIMC_IS_BUS_DEVFREQ
@@ -303,12 +369,12 @@
 #endif
 #define CAPTURE_NODE_MAX		5
 #define OTF_YUV_FORMAT			(OTF_INPUT_FORMAT_YUV422)
+#define ENABLE_3AA_DMA_CROP
 #define ENABLE_FW_SYNC_LOG
 #define ENABLE_HWFC
-/* #define FW_SUSPEND_RESUME */
+#define FW_SUSPEND_RESUME
 #define TPU_COMPRESSOR
 #undef ENABLE_FULL_BYPASS
-#define ENABLE_ULTRA_FAST_SHOT
 
 #else
 #error fimc-is driver can NOT support this platform
@@ -326,8 +392,14 @@
 #if defined(CONFIG_USE_HOST_FD_LIBRARY)
 #ifndef ENABLE_FD_SW
 #define ENABLE_FD_SW
+#else
+#undef ENABLE_FD_SW
 #endif
 #endif
+
+/* BUG_ON | FIMC_BUG Macro control */
+#define USE_FIMC_BUG
+
 /*
  * =================================================================================================
  * CONFIG - DEBUG OPTIONS
@@ -340,6 +412,8 @@
 #define DBG_DEVICE
 #define DBG_PER_FRAME
 /* #define DBG_STREAMING */
+/* #define DEBUG_HW */
+/* #define DEBUG_HW_SIZE */
 #define DBG_STREAM_ID 0x3F
 /* #define DBG_JITTER */
 #define FW_PANIC_ENABLE
@@ -404,6 +478,9 @@
 
 /* sync log with HAL, FW */
 #define log_sync(sync_id) info("FIMC_IS_SYNC %d\n", sync_id)
+
+#define test_bit_variables(bit, var) \
+	test_bit(((bit)% BITS_PER_LONG), (var))
 
 #ifdef err
 #undef err
@@ -714,15 +791,28 @@
 /* FIMC-BNS isr log */
 #if (defined(DEBUG) && defined(DBG_FLITEISR))
 #define dbg_fliteisr(fmt, args...)	\
-	fimc_is_cont(fmt, args..)
+	fimc_is_cont(fmt, ##args)
 #else
 #define dbg_fliteisr(fmt, args...)
+#endif
+
+#ifdef USE_FIMC_BUG
+#define FIMC_BUG(condition)									\
+	{											\
+		if (unlikely(condition)) {							\
+			info("[BUG][%s] %s:%d(%s)\n", __FILE__, __func__, __LINE__, #condition);\
+			return -EINVAL;								\
+		}										\
+	}
+#else
+#define FIMC_BUG(condition)									\
+	BUG_ON(condition);
 #endif
 
 /* Tasklet Msg log */
 #if (defined(DEBUG) && defined(TASKLET_MSG))
 #define dbg_tasklet(fmt, args...)	\
-	fimc_is_cont(fmt, args..)
+	fimc_is_cont(fmt, ##args)
 #else
 #define dbg_tasklet(fmt, args...)
 #endif
@@ -756,6 +846,13 @@
 	err_common("[@][LIB][ERR]%d:", fmt "\n", __LINE__, ##args)
 #define warn_lib(fmt, args...) \
 	warn_common("[@][LIB][WARN]%d:", fmt "\n", __LINE__, ##args)
+#else
+#define err_itfc(fmt, args...) \
+	err_common("[@][ITFC][ERR]%d:", fmt "\n", __LINE__, ##args)
+#define warn_hw(fmt, args...) \
+		warn_common("[@][HW][WRN]%d:", fmt "\n", __LINE__, ##args)
+#define info_itfc(fmt, args...) \
+		info("[ITFC]" fmt, ##args)
 #endif
 
 #endif

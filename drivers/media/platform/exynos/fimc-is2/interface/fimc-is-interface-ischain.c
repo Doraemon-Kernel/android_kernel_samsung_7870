@@ -59,6 +59,7 @@ int fimc_is_interface_ischain_probe(struct fimc_is_interface_ischain *this,
 	else
 		this->regs_mcuctl = NULL;
 
+	this->minfo = &resourcemgr->minfo;
 #if defined(SOC_30S)
 	hw_id = DEV_HW_3AA0;
 	hw_slot = fimc_is_hw_slot_id(hw_id);
@@ -66,11 +67,6 @@ int fimc_is_interface_ischain_probe(struct fimc_is_interface_ischain *this,
 		err_itfc("invalid hw_slot (%d) ", hw_slot);
 		return -EINVAL;
 	}
-
-	this->itf_ip[hw_slot].kvaddr = resourcemgr->minfo.kvaddr;
-	this->itf_ip[hw_slot].dvaddr = resourcemgr->minfo.dvaddr;
-	this->itf_ip[hw_slot].fw_cookie = resourcemgr->minfo.fw_cookie;
-	this->itf_ip[hw_slot].alloc_ctx = resourcemgr->mem.alloc_ctx;
 
 	this->itf_ip[hw_slot].hw_ip = &(hardware->hw_ip[hw_slot]);
 	ret = fimc_is_interface_3aa_probe(this, hw_id, pdev);
@@ -88,11 +84,6 @@ int fimc_is_interface_ischain_probe(struct fimc_is_interface_ischain *this,
 		return -EINVAL;
 	}
 
-	this->itf_ip[hw_slot].kvaddr = resourcemgr->minfo.kvaddr;
-	this->itf_ip[hw_slot].dvaddr = resourcemgr->minfo.dvaddr;
-	this->itf_ip[hw_slot].fw_cookie = resourcemgr->minfo.fw_cookie;
-	this->itf_ip[hw_slot].alloc_ctx = resourcemgr->mem.alloc_ctx;
-
 	this->itf_ip[hw_slot].hw_ip = &(hardware->hw_ip[hw_slot]);
 	ret = fimc_is_interface_3aa_probe(this, hw_id, pdev);
 	if (ret) {
@@ -109,11 +100,6 @@ int fimc_is_interface_ischain_probe(struct fimc_is_interface_ischain *this,
 		return -EINVAL;
 	}
 
-	this->itf_ip[hw_slot].kvaddr = resourcemgr->minfo.kvaddr;
-	this->itf_ip[hw_slot].dvaddr = resourcemgr->minfo.dvaddr;
-	this->itf_ip[hw_slot].fw_cookie = resourcemgr->minfo.fw_cookie;
-	this->itf_ip[hw_slot].alloc_ctx = resourcemgr->mem.alloc_ctx;
-
 	this->itf_ip[hw_slot].hw_ip = &(hardware->hw_ip[hw_slot]);
 	ret = fimc_is_interface_isp_probe(this, hw_id, pdev);
 	if (ret) {
@@ -129,11 +115,6 @@ int fimc_is_interface_ischain_probe(struct fimc_is_interface_ischain *this,
 		err_itfc("invalid hw_slot (%d) ", hw_slot);
 		return -EINVAL;
 	}
-
-	this->itf_ip[hw_slot].kvaddr = resourcemgr->minfo.kvaddr;
-	this->itf_ip[hw_slot].dvaddr = resourcemgr->minfo.dvaddr;
-	this->itf_ip[hw_slot].fw_cookie = resourcemgr->minfo.fw_cookie;
-	this->itf_ip[hw_slot].alloc_ctx = resourcemgr->mem.alloc_ctx;
 
 	this->itf_ip[hw_slot].hw_ip = &(hardware->hw_ip[hw_slot]);
 	ret = fimc_is_interface_isp_probe(this, hw_id, pdev);
@@ -160,7 +141,7 @@ int fimc_is_interface_ischain_probe(struct fimc_is_interface_ischain *this,
 	}
 #endif
 
-#if (defined(SOC_SCP) && !defined(SOC_MCS_1x1))
+#if (defined(SOC_SCP) && !defined(MCS_USE_SCP_PARAM))
 	hw_id = DEV_HW_SCP;
 	hw_slot = fimc_is_hw_slot_id(hw_id);
 	if (!valid_hw_slot_id(hw_slot)) {
@@ -177,7 +158,7 @@ int fimc_is_interface_ischain_probe(struct fimc_is_interface_ischain *this,
 	}
 #endif
 
-#if (defined(SOC_SCP) && defined(SOC_MCS_1x1))
+#if (defined(SOC_SCP) && defined(MCS_USE_SCP_PARAM))
 	hw_id = DEV_HW_MCSC0;
 	hw_slot = fimc_is_hw_slot_id(hw_id);
 	if (!valid_hw_slot_id(hw_slot)) {
@@ -194,9 +175,25 @@ int fimc_is_interface_ischain_probe(struct fimc_is_interface_ischain *this,
 	}
 #endif
 
-#if defined(SOC_MCS)
-	/* TODO : it will re-implemented as MCSC(2x5) used */
+#if (defined(SOC_MCS) && defined(SOC_MCS0))
 	hw_id = DEV_HW_MCSC0;
+	hw_slot = fimc_is_hw_slot_id(hw_id);
+	if (!valid_hw_slot_id(hw_slot)) {
+		err_itfc("invalid hw_slot (%d)", hw_slot);
+		return -EINVAL;
+	}
+
+	this->itf_ip[hw_slot].hw_ip = &(hardware->hw_ip[hw_slot]);
+
+	ret = fimc_is_interface_scaler_probe(this, hw_id, pdev);
+	if (ret) {
+		err_itfc("interface probe fail (%d,%d)", hw_id, hw_slot);
+		return -EINVAL;
+	}
+#endif
+
+#if (defined(SOC_MCS) && defined(SOC_MCS1))
+	hw_id = DEV_HW_MCSC1;
 	hw_slot = fimc_is_hw_slot_id(hw_id);
 	if (!valid_hw_slot_id(hw_slot)) {
 		err_itfc("invalid hw_slot (%d)", hw_slot);
@@ -244,11 +241,19 @@ int fimc_is_interface_3aa_probe(struct fimc_is_interface_ischain *itfc,
 	struct fimc_is_interface_hwip *itf_3aa = NULL;
 	int i, ret = 0;
 	int hw_slot = -1;
+	int handler_id = 0;
 
 	BUG_ON(!itfc);
 	BUG_ON(!pdev);
 
-	if ((hw_id < DEV_HW_3AA0) || (hw_id >= DEV_HW_ISP0)) {
+	switch (hw_id) {
+	case DEV_HW_3AA0:
+		handler_id = ID_3AA_0;
+		break;
+	case DEV_HW_3AA1:
+		handler_id = ID_3AA_1;
+		break;
+	default:
 		err_itfc("invalid hw_id(%d)", hw_id);
 		return -EINVAL;
 	}
@@ -284,19 +289,23 @@ int fimc_is_interface_3aa_probe(struct fimc_is_interface_ischain *itfc,
 	for (i = 0; i < INTR_HWIP_MAX; i++) {
 		itf_3aa->handler[i].valid = false;
 
-		gPtr_lib_support.intr_handler_taaisp[hw_slot][i]
+		gPtr_lib_support.intr_handler_taaisp[handler_id][i]
 			= (struct hwip_intr_handler *)&itf_3aa->handler[i];
 	}
 
-	set_bit(IS_CHAIN_IF_STATE_INIT, &itf_3aa->state);
-
 	/* library data settings */
-	gPtr_lib_support.itfc      = itfc;
-	gPtr_lib_support.kvaddr    = itf_3aa->kvaddr;
-	gPtr_lib_support.dvaddr    = itf_3aa->dvaddr;
-	gPtr_lib_support.fw_cookie = itf_3aa->fw_cookie;
-	gPtr_lib_support.alloc_ctx = itf_3aa->alloc_ctx;
-	gPtr_lib_support.pdev = pdev;
+	if (!gPtr_lib_support.minfo) {
+		gPtr_lib_support.itfc		= itfc;
+		gPtr_lib_support.minfo		= itfc->minfo;
+
+		gPtr_lib_support.pdev		= pdev;
+
+		info_itfc("[ID:%2d] kvaddr for taaisp: 0x%lx\n", hw_id,
+			CALL_BUFOP(gPtr_lib_support.minfo->pb_taaisp, kvaddr,
+					gPtr_lib_support.minfo->pb_taaisp));
+	}
+
+	set_bit(IS_CHAIN_IF_STATE_INIT, &itf_3aa->state);
 
 	dbg_itfc("[ID:%2d] probe done\n", hw_id);
 
@@ -309,11 +318,19 @@ int fimc_is_interface_isp_probe(struct fimc_is_interface_ischain *itfc,
 	struct fimc_is_interface_hwip *itf_isp = NULL;
 	int i, ret = 0;
 	int hw_slot = -1;
+	int handler_id = 0;
 
 	BUG_ON(!itfc);
 	BUG_ON(!pdev);
 
-	if (hw_id != DEV_HW_ISP0 && hw_id != DEV_HW_ISP1) {
+	switch (hw_id) {
+	case DEV_HW_ISP0:
+		handler_id = ID_ISP_0;
+		break;
+	case DEV_HW_ISP1:
+		handler_id = ID_ISP_1;
+		break;
+	default:
 		err_itfc("invalid hw_id(%d)", hw_id);
 		return -EINVAL;
 	}
@@ -350,18 +367,23 @@ int fimc_is_interface_isp_probe(struct fimc_is_interface_ischain *itfc,
 		itf_isp->handler[i].valid = false;
 
 		/* TODO: this is not cool */
-		gPtr_lib_support.intr_handler_taaisp[hw_slot][i]
+		gPtr_lib_support.intr_handler_taaisp[handler_id][i]
 			= (struct hwip_intr_handler *)&itf_isp->handler[i];
 	}
 
-	set_bit(IS_CHAIN_IF_STATE_INIT, &itf_isp->state);
-
 	/* library data settings */
-	gPtr_lib_support.kvaddr    = itf_isp->kvaddr;
-	gPtr_lib_support.dvaddr    = itf_isp->dvaddr;
-	gPtr_lib_support.fw_cookie = itf_isp->fw_cookie;
-	gPtr_lib_support.alloc_ctx = itf_isp->alloc_ctx;
-	gPtr_lib_support.pdev = pdev;
+	if (!gPtr_lib_support.minfo) {
+		gPtr_lib_support.itfc		= itfc;
+		gPtr_lib_support.minfo		= itfc->minfo;
+
+		gPtr_lib_support.pdev		= pdev;
+
+		info_itfc("[ID:%2d] kvaddr for taaisp: 0x%lx\n", hw_id,
+			CALL_BUFOP(gPtr_lib_support.minfo->pb_taaisp, kvaddr,
+					gPtr_lib_support.minfo->pb_taaisp));
+	}
+
+	set_bit(IS_CHAIN_IF_STATE_INIT, &itf_isp->state);
 
 	dbg_itfc("[ID:%2d] probe done\n", hw_id);
 
@@ -404,6 +426,22 @@ int fimc_is_interface_tpu_probe(struct fimc_is_interface_ischain *itfc,
 	if (ret) {
 		err_itfc("[ID:%2d] hw_request_irq failed (%d)", hw_id, ret);
 		return -EINVAL;
+	}
+
+	/* library data settings */
+	if (!gPtr_lib_support.minfo) {
+		gPtr_lib_support.itfc		= itfc;
+		gPtr_lib_support.minfo		= itfc->minfo;
+
+		gPtr_lib_support.pdev		= pdev;
+
+		info_itfc("[ID:%2d] kvaddr for tpu: 0x%lx\n", hw_id,
+			CALL_BUFOP(gPtr_lib_support.minfo->pb_tpu, kvaddr,
+					gPtr_lib_support.minfo->pb_tpu));
+	} else {
+		info_itfc("[ID:%2d] kvaddr for tpu: 0x%lx\n", hw_id,
+			CALL_BUFOP(gPtr_lib_support.minfo->pb_tpu, kvaddr,
+					gPtr_lib_support.minfo->pb_tpu));
 	}
 
 	set_bit(IS_CHAIN_IF_STATE_INIT, &itf_tpu->state);
@@ -494,6 +532,22 @@ int fimc_is_interface_vra_probe(struct fimc_is_interface_ischain *itfc,
 	if (ret) {
 		err_itfc("[ID:%2d] hw_request_irq failed (%d)", hw_id, ret);
 		return -EINVAL;
+	}
+
+	/* library data settings */
+	if (!gPtr_lib_support.minfo) {
+		gPtr_lib_support.itfc		= itfc;
+		gPtr_lib_support.minfo		= itfc->minfo;
+
+		gPtr_lib_support.pdev		= pdev;
+
+		info_itfc("[ID:%2d] kvaddr for vra: 0x%lx\n", hw_id,
+			CALL_BUFOP(gPtr_lib_support.minfo->pb_vra, kvaddr,
+					gPtr_lib_support.minfo->pb_vra));
+	} else {
+		info_itfc("[ID:%2d] kvaddr for vra: 0x%lx\n", hw_id,
+			CALL_BUFOP(gPtr_lib_support.minfo->pb_vra, kvaddr,
+					gPtr_lib_support.minfo->pb_vra));
 	}
 
 	set_bit(IS_CHAIN_IF_STATE_INIT, &itf_vra->state);
@@ -604,6 +658,55 @@ static void init_work_list(struct fimc_is_work_list *this, u32 id, u32 count)
 
 	init_waitqueue_head(&this->wait_queue);
 }
+
+#ifdef ENABLE_SYNC_REPROCESSING
+static inline void fimc_is_sync_reprocessing_queue(struct fimc_is_groupmgr *groupmgr,
+	struct fimc_is_group *group)
+{
+	int i;
+	struct fimc_is_group_task *gtask;
+	struct fimc_is_group *rgroup;
+	struct fimc_is_framemgr *rframemgr;
+	struct fimc_is_frame *rframe;
+	ulong flags;
+
+	if (test_bit(FIMC_IS_ISCHAIN_REPROCESSING, &group->device->state))
+		return;
+
+	gtask = &groupmgr->gtask[group->id];
+
+	if (atomic_read(&gtask->rep_tick) < REPROCESSING_TICK_COUNT) {
+		if (atomic_read(&gtask->rep_tick) > 0)
+			atomic_dec(&gtask->rep_tick);
+
+		return;
+	}
+
+	for (i = 0; i < FIMC_IS_STREAM_COUNT; ++i) {
+		if (!groupmgr->group[i][group->slot])
+			continue;
+
+		if (test_bit(FIMC_IS_ISCHAIN_REPROCESSING, &groupmgr->group[i][group->slot]->device->state)) {
+			rgroup = groupmgr->group[i][group->slot];
+			break;
+		}
+	}
+
+	if (i == FIMC_IS_STREAM_COUNT) {
+		mgwarn("reprocessing group not exists", group, group);
+		return;
+	}
+
+	rframemgr = GET_FRAMEMGR(rgroup->leader.vctx);
+
+	framemgr_e_barrier_irqs(rframemgr, 0, flags);
+	rframe = peek_frame(rframemgr, FS_REQUEST);
+	framemgr_x_barrier_irqr(rframemgr, 0, flags);
+
+	if (rframe)
+		queue_kthread_work(&gtask->worker, &rframe->work);
+}
+#endif
 
 static inline void wq_func_schedule(struct fimc_is_interface *itf,
 	struct work_struct *work_wq)
@@ -1613,21 +1716,30 @@ static void wq_func_group_xxx(struct fimc_is_groupmgr *groupmgr,
 	BUG_ON(!framemgr);
 	BUG_ON(!frame);
 
+	/* perframe error control */
+	if (test_bit(FIMC_IS_SUBDEV_FORCE_SET, &group->leader.state)) {
+		if (!status) {
+			if (frame->lindex || frame->hindex)
+				clear_bit(FIMC_IS_SUBDEV_FORCE_SET, &group->leader.state);
+			else
+				status = SHOT_ERR_PERFRAME;
+		}
+	} else {
+		if (status && (frame->lindex || frame->hindex))
+			set_bit(FIMC_IS_SUBDEV_FORCE_SET, &group->leader.state);
+	}
+
 	if (status) {
 		mgrinfo("[ERR] NDONE(%d, E%X(L%X H%X))\n", group, group, frame, frame->index, status,
 			lindex, hindex);
 		done_state = VB2_BUF_STATE_ERROR;
-
-		/* specially force set is enabled when perframe control is fail */
-		if (lindex || hindex)
-			set_bit(FIMC_IS_SUBDEV_FORCE_SET, &group->leader.state);
 
 		if (status == IS_SHOT_OVERFLOW) {
 #ifdef OVERFLOW_PANIC_ENABLE
 			panic("G%d overflow", group->id);
 #else
 			err("G%d overflow", group->id);
-			/* fimc_is_resource_dump(); */
+			fimc_is_resource_dump();
 #endif
 		}
 	}
@@ -1635,6 +1747,12 @@ static void wq_func_group_xxx(struct fimc_is_groupmgr *groupmgr,
 #ifdef DBG_STREAMING
 	if (!status)
 		mgrinfo(" DONE(%d)\n", group, group, frame, frame->index);
+#endif
+
+#ifdef ENABLE_SYNC_REPROCESSING
+	/* Sync Reprocessing */
+	if (atomic_read(&groupmgr->gtask[group->id].refcount) > 1)
+		fimc_is_sync_reprocessing_queue(groupmgr, group);
 #endif
 
 	/* Cache Invalidation */
@@ -1768,11 +1886,6 @@ static void wq_func_shot(struct work_struct *data)
 			group = NULL;
 			vctx = NULL;
 			framemgr = NULL;
-			goto remain;
-		}
-
-		if (!group) {
-			merr("group is NULL", device);
 			goto remain;
 		}
 
@@ -1910,7 +2023,6 @@ int fimc_is_interface_probe(struct fimc_is_interface *this,
 	if (!this->workqueue)
 		probe_warn("failed to alloc own workqueue, will be use global one");
 
-	INIT_WORK(&this->work_wq[WORK_SHOT_DONE], wq_func_shot);
 	INIT_WORK(&this->work_wq[WORK_SHOT_DONE], wq_func_shot);
 	INIT_WORK(&this->work_wq[WORK_30C_FDONE], wq_func_30c);
 	INIT_WORK(&this->work_wq[WORK_30P_FDONE], wq_func_30p);

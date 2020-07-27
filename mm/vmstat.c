@@ -681,9 +681,6 @@ static char * const migratetype_names[MIGRATE_TYPES] = {
 	"Reserve",
 #ifdef CONFIG_CMA
 	"CMA",
-#ifdef CONFIG_RBIN
-	"RBIN",
-#endif
 #endif
 #ifdef CONFIG_MEMORY_ISOLATION
 	"Isolate",
@@ -799,7 +796,6 @@ const char * const vmstat_text[] = {
 	"workingset_nodereclaim",
 	"nr_anon_transparent_hugepages",
 	"nr_free_cma",
-	"nr_free_rbin",
 
 	/* enum writeback_stat_item counters */
 	"nr_dirty_threshold",
@@ -862,6 +858,12 @@ const char * const vmstat_text[] = {
 	"compact_stall",
 	"compact_fail",
 	"compact_success",
+#ifdef CONFIG_SEC_PHCOMP	
+	"compact_defered",
+	"compact_call_defer",
+	"phcomp_defered",
+	"phcomp_call_defer",
+#endif	
 #endif
 
 #ifdef CONFIG_HUGETLB_PAGE
@@ -1281,7 +1283,17 @@ static void vmstat_update(struct work_struct *w)
 		 * Defer the checking for differentials to the
 		 * shepherd thread on a different processor.
 		 */
-		cpumask_set_cpu(smp_processor_id(), cpu_stat_off);
+		int r;
+		/*
+		 * Shepherd work thread does not race since it never
+		 * changes the bit if its zero but the cpu
+		 * online / off line code may race if
+		 * worker threads are still allowed during
+		 * shutdown / startup.
+		 */
+		r = cpumask_test_and_set_cpu(smp_processor_id(),
+			cpu_stat_off);
+		VM_BUG_ON(r);
 	}
 }
 
@@ -1438,7 +1450,7 @@ static int __init setup_vmstat(void)
 #endif
 #ifdef CONFIG_PROC_FS
 	proc_create("buddyinfo", S_IRUGO, NULL, &fragmentation_file_operations);
-	proc_create("pagetypeinfo", 0400, NULL, &pagetypeinfo_file_ops);
+	proc_create("pagetypeinfo", S_IRUGO, NULL, &pagetypeinfo_file_ops);
 	proc_create("vmstat", S_IRUGO, NULL, &proc_vmstat_file_operations);
 	proc_create("zoneinfo", S_IRUGO, NULL, &proc_zoneinfo_file_operations);
 #endif

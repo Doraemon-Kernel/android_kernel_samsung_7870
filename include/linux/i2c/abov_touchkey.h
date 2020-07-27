@@ -52,6 +52,7 @@ struct abov_touchkey_platform_data {
 	u8 fw_checksum_h;
 	u8 fw_checksum_l;
 	bool boot_on_ldo;
+	bool ldo_always_on;
 	const char *regulator_avdd;
 	const char *regulator_dvdd;
 };

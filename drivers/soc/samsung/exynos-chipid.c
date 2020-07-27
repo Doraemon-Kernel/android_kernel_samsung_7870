@@ -66,6 +66,9 @@ static const char * __init product_id_to_name(unsigned int product_id)
 	case EXYNOS5800_SOC_ID:
 		soc_name = "EXYNOS5800";
 		break;
+	case EXYNOS7870_SOC_ID:
+		soc_name = "EXYNOS7870";
+		break;
 	case EXYNOS8890_SOC_ID:
 		soc_name = "EXYNOS8890";
 		break;
@@ -96,7 +99,7 @@ void __init exynos_chipid_early_init(struct device *dev)
 
 	if (!dev)
 		np = of_find_matching_node_and_match(NULL,
-				of_exynos_chipid_ids, &match);
+			of_exynos_chipid_ids, &match);
 	else
 		np = dev->of_node;
 
@@ -137,7 +140,7 @@ static int __init exynos_chipid_probe(struct platform_device *pdev)
 		goto free_soc;
 
 	soc_dev_attr->revision = kasprintf(GFP_KERNEL, "%d",
-					   exynos_soc_info.revision);
+					exynos_soc_info.revision);
 	if (!soc_dev_attr->revision)
 		goto free_soc;
 
@@ -185,7 +188,7 @@ static struct bus_type chipid_subsys = {
 };
 
 static ssize_t chipid_product_id_show(struct kobject *kobj,
-		struct kobj_attribute *attr, char *buf)
+			         struct kobj_attribute *attr, char *buf)
 {
 	return snprintf(buf, 10, "%08X\n", exynos_soc_info.product_id);
 }
@@ -204,26 +207,25 @@ static ssize_t chipid_unique_id_show(struct kobject *kobj,
 }
 
 static ssize_t chipid_lot_id_show(struct kobject *kobj,
-		struct kobj_attribute *attr, char *buf)
+			         struct kobj_attribute *attr, char *buf)
 {
 	return snprintf(buf, 14, "%08X\n", exynos_soc_info.lot_id);
 }
 
 static ssize_t chipid_revision_show(struct kobject *kobj,
-		struct kobj_attribute *attr, char *buf)
+			         struct kobj_attribute *attr, char *buf)
 {
 	return snprintf(buf, 14, "%08X\n", exynos_soc_info.revision);
 }
 
 static ssize_t chipid_evt_ver_show(struct kobject *kobj,
-		struct kobj_attribute *attr, char *buf)
+                                   struct kobj_attribute *attr, char *buf)
 {
-	return snprintf(buf, 14, "EVT%d.%d\n", exynos_soc_info.revision>>4,
-			exynos_soc_info.revision%16);
+         return snprintf(buf, 14, "EVT%d.%d\n", exynos_soc_info.revision>>4, exynos_soc_info.revision%16);
 }
 
 static struct kobj_attribute chipid_product_id_attr =
-	__ATTR(product_id, 0644, chipid_product_id_show, NULL);
+        __ATTR(product_id, 0644, chipid_product_id_show, NULL);
 
 static struct kobj_attribute chipid_ap_id_attr =
         __ATTR(ap_id, 0644, chipid_ap_id_show, NULL);
@@ -232,13 +234,13 @@ static struct kobj_attribute chipid_unique_id_attr =
         __ATTR(unique_id, 0644, chipid_unique_id_show, NULL);
 
 static struct kobj_attribute chipid_lot_id_attr =
-	__ATTR(lot_id, 0644, chipid_lot_id_show, NULL);
+        __ATTR(lot_id, 0644, chipid_lot_id_show, NULL);
 
 static struct kobj_attribute chipid_revision_attr =
-	__ATTR(revision, 0644, chipid_revision_show, NULL);
+        __ATTR(revision, 0644, chipid_revision_show, NULL);
 
 static struct kobj_attribute chipid_evt_ver_attr =
-	__ATTR(evt_ver, 0644, chipid_evt_ver_show, NULL);
+        __ATTR(evt_ver, 0644, chipid_evt_ver_show, NULL);
 
 static struct attribute *chipid_sysfs_attrs[] = {
 	&chipid_product_id_attr.attr,
@@ -283,19 +285,19 @@ void sysfs_create_svc_ap(void)
 		/* try to create svc kobject */
 		data = kobject_create_and_add("svc", &devices_kset->kobj);
 		if (IS_ERR_OR_NULL(data))
-			pr_info("Existing path sys/devices/svc : 0x%p\n", data);
+			pr_info("Existing path sys/devices/svc : 0x%pK\n", data);
 		else
-			pr_info("Created sys/devices/svc svc : 0x%p\n", data);
+			pr_info("Created sys/devices/svc svc : 0x%pK\n", data);
 	} else {
 		data = (struct kobject *)svc_sd->priv;
-		pr_info("Found svc_sd : 0x%p svc : 0x%p\n", svc_sd, data);
+		pr_info("Found svc_sd : 0x%pK svc : 0x%pK\n", svc_sd, data);
 	}
 
 	ap = kobject_create_and_add("AP", data);
 	if (IS_ERR_OR_NULL(ap))
-		pr_info("Failed to create sys/devices/svc/AP : 0x%p\n", ap);
+		pr_info("Failed to create sys/devices/svc/AP : 0x%pK\n", ap);
 	else
-		pr_info("Success to create sys/devices/svc/AP : 0x%p\n", ap);
+		pr_info("Success to create sys/devices/svc/AP : 0x%pK\n", ap);
 
 	if (sysfs_create_file(ap, &svc_ap_attr.attr) < 0) {
 		pr_err("failed to create sys/devices/svc/AP/SVC_AP, %s\n",

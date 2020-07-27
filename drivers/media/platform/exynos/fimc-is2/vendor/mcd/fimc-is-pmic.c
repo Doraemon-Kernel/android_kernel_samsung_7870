@@ -14,18 +14,6 @@ static const struct comp_pmic_vout evt0_vout_tables[] = {
 	{0, 850000, "0.850"}, /* defualt voltage for EVT0 */
 };
 #endif
-
-#if defined(CONFIG_COMPANION_C3_USE)
-static const struct comp_pmic_vout vout_tables[] = {
-	{0, 800000, "0.800"}, /* defualt voltage for EVT1 */
-	{1, 700000, "0.700"},
-	{2, 725000, "0.725"},
-	{3, 750000, "0.750"},
-	{4, 775000, "0.775"},
-	{5, 800000, "0.800"},
-	{6, 825000, "0.825"},
-};
-#else
 static const struct comp_pmic_vout vout_tables[] = {
 	{0, 800000, "0.800"}, /* defualt voltage for EVT1 */
 	{1, 675000, "0.675"},
@@ -36,8 +24,6 @@ static const struct comp_pmic_vout vout_tables[] = {
 	{6, 800000, "0.800"},
 	{7, 825000, "0.825"},
 };
-#endif
-
 
 /**
  * comp_pmic_get_default_vout_val: get i2c register value to set vout of dcdc regulator.
@@ -50,8 +36,8 @@ static int comp_pmic_get_default_vout_val(int *vout_val, const char **vout_str)
 	}
 
 	/* Return default vout for both EVT0 and EVT1, not in vout table */
-	*vout_val = COMP_DEFAULT_VOUT_VAL;
-	*vout_str = COMP_DEFAULT_VOUT_STR;
+	*vout_val = 850000;
+	*vout_str = "0.850";
 
 	return 0;
 }

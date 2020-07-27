@@ -39,6 +39,7 @@ enum s2m_rtc_reg {
 	S2M_ALARM1_DAY,
 	S2M_ALARM1_MON,
 	S2M_ALARM1_YEAR,
+	S2M_RTC_OSC_CTRL,
 };
 
 #define RTC_I2C_ADDR		(0x0C >> 1)
@@ -87,8 +88,24 @@ enum s2m_rtc_reg {
 #define RTCA0E				(1<<2)
 #define RTCA1E				(1<<1)
 
+#if defined(CONFIG_RTC_ALARM_BOOT)
+#define RTC_WAKE_SHIFT			3
+#define RTC_WAKE_MASK			(1 << RTC_WAKE_SHIFT)
+#endif
 #define WTSR_TIMER_BITS(v)		(((v) << WTSRT_SHIFT) & WTSRT_MASK)
 #define SMPL_TIMER_BITS(v)		(((v) << SMPLT_SHIFT) & SMPLT_MASK)
+
+#define OSC_BIAS_UP_SHIFT		2
+#define OSC_BIAS_UP_MASK		(1 << OSC_BIAS_UP_SHIFT)
+
+#define CAP_SEL_SHIFT			0
+#define CAP_SEL_MASK			0x03
+
+#define OSC_XIN_SHIFT			5
+#define OSC_XIN_MASK			0xE0
+
+#define OSC_XOUT_SHIFT			2
+#define OSC_XOUT_MASK			0x1C
 
 /* RTC Counter Register offsets */
 enum {

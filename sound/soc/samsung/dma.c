@@ -32,8 +32,6 @@
 #endif
 
 #include "dma.h"
-#include "lpass.h"
-
 #ifdef CONFIG_SND_SAMSUNG_SEIREN_DMA
 #include "seiren/seiren-dma.h"
 #endif
@@ -46,6 +44,7 @@
 #define RX_SRAM_SIZE		(0x2000)	/* 8 KB */
 #define MAX_DEEPBUF_SIZE	(0xA000)	/* 40 KB */
 
+static atomic_t dram_usage_cnt;
 static struct snd_dma_buffer  *sram_rx_buf = NULL;
 static struct snd_dma_buffer  *dram_uhqa_tx_buf = NULL;
 
@@ -79,7 +78,7 @@ struct runtime_data {
 	dma_addr_t dma_end;
 	struct s3c_dma_params *params;
 	struct snd_pcm_hardware hw;
-	bool cap_dram_used;
+	bool dram_used;
 	dma_addr_t irq_pos;
 	u32 irq_cnt;
 };
@@ -105,7 +104,7 @@ static void audio_buffdone(void *data);
  */
 int check_adma_status(void)
 {
-	return lpass_get_dram_usage_count() ? 1 : 0;
+	return atomic_read(&dram_usage_cnt) ? 1 : 0;
 }
 
 /* dma_enqueue
@@ -286,7 +285,7 @@ static int dma_hw_params(struct snd_pcm_substream *substream,
 	prtd->dma_start = runtime->dma_addr;
 	prtd->dma_pos = prtd->dma_start;
 	prtd->dma_end = prtd->dma_start + totbytes;
-	prtd->cap_dram_used = runtime->dma_addr < SRAM_END ? false : true;
+	prtd->dram_used = runtime->dma_addr < SRAM_END ? false : true;
 	while ((totbytes / prtd->dma_period) < PERIOD_MIN)
 		prtd->dma_period >>= 1;
 	spin_unlock_irq(&prtd->lock);
@@ -303,15 +302,18 @@ static int dma_hw_params(struct snd_pcm_substream *substream,
 static int dma_hw_free(struct snd_pcm_substream *substream)
 {
 	struct runtime_data *prtd = substream->runtime->private_data;
+	int ret;
 
-	pr_debug("Entered %s\n", __func__);
+	pr_info("Entered %s\n", __func__);
 
 	snd_pcm_set_runtime_buffer(substream, NULL);
 
 	if (prtd->params) {
-		prtd->params->ops->flush(prtd->params->ch);
-		prtd->params->ops->release(prtd->params->ch,
+		ret = prtd->params->ops->flush(prtd->params->ch);
+		pr_info("%s:DMA flush retrun value:%d\n", __func__, ret);
+		ret = prtd->params->ops->release(prtd->params->ch,
 					prtd->params->client);
+		pr_info("%s:DMA release retrun value:%d\n", __func__, ret);
 		prtd->params = NULL;
 	}
 
@@ -357,27 +359,16 @@ static int dma_trigger(struct snd_pcm_substream *substream, int cmd)
 		prtd->state |= ST_RUNNING;
 		lpass_dma_enable(true);
 		prtd->params->ops->trigger(prtd->params->ch);
-		if ((substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ||
-			(prtd->cap_dram_used)) {
-			lpass_inc_dram_usage_count();
-			lpass_update_lpclock(LPCLK_CTRLID_LEGACY, false);
-		} else {
-			lpass_update_lpclock(LPCLK_CTRLID_RECORD, true);
-		}
+		if (prtd->dram_used)
+			atomic_inc(&dram_usage_cnt);
 		break;
 
 	case SNDRV_PCM_TRIGGER_STOP:
 		prtd->state &= ~ST_RUNNING;
 		prtd->params->ops->stop(prtd->params->ch);
 		lpass_dma_enable(false);
-		if ((substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ||
-			(prtd->cap_dram_used)) {
-			lpass_dec_dram_usage_count();
-			lpass_update_lpclock(LPCLK_CTRLID_LEGACY, false);
-		} else {
-			lpass_update_lpclock(LPCLK_CTRLID_RECORD, false);
-			lpass_disable_mif_status(false);
-		}
+		if (prtd->dram_used)
+			atomic_dec(&dram_usage_cnt);
 		break;
 
 	default:
@@ -447,14 +438,14 @@ static int dma_close(struct snd_pcm_substream *substream)
 
 	pr_debug("Entered %s\n", __func__);
 
-	if (!prtd) {
+	if (!prtd)
 		pr_debug("dma_close called with prtd == NULL\n");
-		return 0;
-	}
-
-	pr_info("%s: prtd = %p, irq_cnt %u\n",
+	else
+	{
+		pr_info("%s: prtd = %p, irq_cnt %u\n",
 			__func__, prtd, prtd->irq_cnt);
-	kfree(prtd);
+		kfree(prtd);
+	}
 
 	return 0;
 }
@@ -512,6 +503,7 @@ static int preallocate_dma_buffer(struct snd_pcm *pcm, int stream)
 	return 0;
 }
 
+#ifndef CONFIG_SOC_EXYNOS7870
 static const char *dma_prop_addr[2] = {
 	[SNDRV_PCM_STREAM_PLAYBACK] = "samsung,tx-buf",
 	[SNDRV_PCM_STREAM_CAPTURE]  = "samsung,rx-buf"
@@ -520,6 +512,7 @@ static const char *dma_prop_size[2] = {
 	[SNDRV_PCM_STREAM_PLAYBACK] = "samsung,tx-size",
 	[SNDRV_PCM_STREAM_CAPTURE]  = "samsung,rx-size"
 };
+#endif
 static const char *dma_prop_iommu[2] = {
 	[SNDRV_PCM_STREAM_PLAYBACK] = "samsung,tx-iommu",
 	[SNDRV_PCM_STREAM_CAPTURE]  = "samsung,rx-iommu"
@@ -530,17 +523,21 @@ static int preallocate_dma_buffer_of(struct snd_pcm *pcm, int stream,
 {
 	struct snd_pcm_substream *substream = pcm->streams[stream].substream;
 	struct snd_dma_buffer *buf = &substream->dma_buffer;
-	dma_addr_t dma_addr;
 	size_t size;
+#ifndef CONFIG_SOC_EXYNOS7870
+	dma_addr_t dma_addr;
 	u32 val;
+#endif
 #ifdef CONFIG_SND_SAMSUNG_IOMMU
 	struct iommu_domain *domain = lpass_get_iommu_domain();
 	dma_addr_t dma_buf_pa;
 	struct dma_iova *di, *di_uhqa;
 	int ret;
 #endif
+
 	pr_debug("Entered %s\n", __func__);
 
+#ifndef CONFIG_SOC_EXYNOS7870
 	if (of_property_read_u32(np, dma_prop_addr[stream], &val))
 		return -ENOMEM;
 	dma_addr = (dma_addr_t)val;
@@ -548,42 +545,16 @@ static int preallocate_dma_buffer_of(struct snd_pcm *pcm, int stream,
 	if (of_property_read_u32(np, dma_prop_size[stream], &val))
 		return -ENOMEM;
 	size = (size_t)val;
-
+	buf->addr = dma_addr;
+#else
+	size = dma_hardware.buffer_bytes_max;
+	buf->area = dma_alloc_coherent(pcm->card->dev, size,
+					&buf->addr, GFP_KERNEL);
+#endif
 	buf->dev.type = SNDRV_DMA_TYPE_DEV;
 	buf->dev.dev = pcm->card->dev;
 	buf->private_data = NULL;
-	buf->addr = dma_addr;
 
-#ifdef CONFIG_SND_SAMSUNG_IOMMU
-	if (of_find_property(np, dma_prop_iommu[stream], NULL)) {
-		di = devm_kzalloc(pcm->card->dev,
-					sizeof(struct dma_iova), GFP_KERNEL);
-		if (!di)
-			return -ENOMEM;
-
-		buf->area = dma_alloc_coherent(pcm->card->dev, size,
-						&dma_buf_pa, GFP_KERNEL);
-		if (!buf->area)
-			return -ENOMEM;
-
-		ret = iommu_map(domain, dma_addr, dma_buf_pa, size, 0);
-		if (ret) {
-			dma_free_coherent(pcm->card->dev, size,
-						buf->area, dma_buf_pa);
-			pr_err("%s: Failed to iommu_map: %d\n", __func__, ret);
-			return -ENOMEM;
-		}
-
-		di->iova = buf->addr;
-		di->pa = dma_buf_pa;
-		di->va = buf->area;
-		list_add(&di->node, &iova_list);
-
-		pr_info("%s: DmaAddr-iommu %08X dma_buf_pa %08X\n",
-				__func__, (u32)dma_addr, (u32)dma_buf_pa);
-	} else {
-		buf->area = ioremap(buf->addr, size);
-	}
 
 	/*
 	 * With LPC Recording, Platform DAI driver should provide USER with SRAM
@@ -630,6 +601,37 @@ static int preallocate_dma_buffer_of(struct snd_pcm *pcm, int stream,
 		}
 	}
 
+
+#ifdef CONFIG_SND_SAMSUNG_IOMMU
+	if (of_find_property(np, dma_prop_iommu[stream], NULL)) {
+		di = devm_kzalloc(pcm->card->dev,
+					sizeof(struct dma_iova), GFP_KERNEL);
+		if (!di)
+			return -ENOMEM;
+
+		buf->area = dma_alloc_coherent(pcm->card->dev, size,
+						&dma_buf_pa, GFP_KERNEL);
+		if (!buf->area)
+			return -ENOMEM;
+
+		ret = iommu_map(domain, dma_addr, dma_buf_pa, size, 0);
+		if (ret) {
+			dma_free_coherent(pcm->card->dev, size,
+						buf->area, dma_buf_pa);
+			pr_err("%s: Failed to iommu_map: %d\n", __func__, ret);
+			return -ENOMEM;
+		}
+
+		di->iova = buf->addr;
+		di->pa = dma_buf_pa;
+		di->va = buf->area;
+		list_add(&di->node, &iova_list);
+
+		pr_info("%s: DmaAddr-iommu %08X dma_buf_pa %08X\n",
+				__func__, (u32)dma_addr, (u32)dma_buf_pa);
+	} else {
+		buf->area = ioremap(buf->addr, size);
+	}
 	/*
 	 * With UHQA Playback, Platform DAI driver should provide USER with DRAM
 	 * Buffer if UHQA buffer size is bigger than MAX_DEEPBUF_SIZE(40KB).
@@ -693,7 +695,9 @@ static int preallocate_dma_buffer_of(struct snd_pcm *pcm, int stream,
 	if (of_find_property(np, dma_prop_iommu[stream], NULL))
 		return -ENOMEM;
 	else
+#ifndef CONFIG_SOC_EXYNOS7870
 		buf->area = ioremap(buf->addr, size);
+#endif
 #endif
 
 	if (!buf->area)
@@ -721,7 +725,7 @@ static void dma_free_dma_buffers(struct snd_pcm *pcm)
 			continue;
 
 		prtd = substream->runtime->private_data;
-		if (prtd->cap_dram_used) {
+		if (prtd->dram_used) {
 			dma_free_coherent(pcm->card->dev, buf->bytes,
 						buf->area, buf->addr);
 		} else {

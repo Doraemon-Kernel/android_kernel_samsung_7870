@@ -29,8 +29,7 @@ enum fimc_is_subdev_state {
 	FIMC_IS_SUBDEV_OPEN,
 	FIMC_IS_SUBDEV_START,
 	FIMC_IS_SUBDEV_RUN,
-	FIMC_IS_SUBDEV_FORCE_SET,
-	FIMC_IS_SUBDEV_PARAM_ERR
+	FIMC_IS_SUBDEV_FORCE_SET
 };
 
 struct fimc_is_subdev_path {
@@ -72,10 +71,7 @@ enum fimc_is_ischain_subdev_id {
 };
 
 struct fimc_is_subdev_ops {
-	int (*bypass)(struct fimc_is_subdev *subdev,
-		void *device_data,
-		struct fimc_is_frame *frame,
-		bool bypass);
+	int (*bypass)(void);
 	int (*cfg)(struct fimc_is_subdev *subdev,
 		void *device_data,
 		struct fimc_is_frame *frame,

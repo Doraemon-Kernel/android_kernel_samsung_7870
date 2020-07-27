@@ -122,10 +122,11 @@ typedef enum {
 
 #ifdef TIMA_ON_MC20
 
-#include <../drivers/gud/gud-exynos8890/MobiCoreDriver/public/mobicore_driver_api.h>
+#include <../drivers/gud/gud-exynos7870/MobiCoreDriver/public/mobicore_driver_api.h>
 //#include <../drivers/gud/gud-exynos7420/MobiCoreKernelApi/public/mobicore_driver_cmd.h>
 
 #include <linux/fs.h>
+#include <linux/delay.h>
 #include <asm/uaccess.h>
 
 #define TL_TIMA_LKMAUTH_UUID {{ 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xb }}
@@ -211,7 +212,6 @@ typedef struct {
 #endif
 
 #endif /* End TIMA_LKM_AUTH_ENABLED */
-
 
 
 /*
@@ -1020,8 +1020,6 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 	strlcpy(last_unloaded_module, mod->name, sizeof(last_unloaded_module));
 
 	free_module(mod);
-	/* someone could wait for the module in add_unformed_module() */
-	wake_up_all(&module_wq);
 	return 0;
 out:
 	mutex_unlock(&module_mutex);
@@ -2864,7 +2862,13 @@ static int lkmauth(Elf_Ehdr * hdr, int len)
 			goto lkmauth_ret;
 		}
 
+retry1:
 		mc_ret = mc_wait_notification(&mchandle, -1);
+		if (MC_DRV_ERR_INTERRUPTED_BY_SIGNAL == mc_ret) {
+			usleep_range(1000, 5000);
+			goto retry1;
+		}
+
 		if (mc_ret != MC_DRV_OK) {
 			pr_err("TIMA: lkmauth--wait_notify failed.\n");
 			ret = RET_LKMAUTH_FAIL;
@@ -2947,7 +2951,13 @@ static int lkmauth(Elf_Ehdr * hdr, int len)
 			goto lkmauth_ret;
 		}
 
+retry2:
 		mc_ret = mc_wait_notification(&mchandle, -1);
+		if (MC_DRV_ERR_INTERRUPTED_BY_SIGNAL == mc_ret) {
+			usleep_range(1000, 5000);
+			goto retry2;
+		}
+
 		if (mc_ret != MC_DRV_OK) {
 			pr_err("TIMA: lkmauth--wait_notify failed.\n");
 			ret = RET_LKMAUTH_FAIL;
@@ -3013,7 +3023,6 @@ lkmauth_ret:
 #endif /* End TIMA_ON_MC20 -- lkmauth for MC 2.0 */
 
 #endif /* End TIMA_LKM_AUTH_ENABLED */
-
 
 static void dynamic_debug_setup(struct _ddebug *debug, unsigned int num)
 {
@@ -3141,7 +3150,8 @@ static int elf_header_check(struct load_info *info)
 		     info->len);
 		return -ENOEXEC;
 	}
-#endif		
+#endif
+
 	return 0;
 }
 
@@ -3653,7 +3663,8 @@ static bool finished_loading(const char *name)
 
 	mutex_lock(&module_mutex);
 	mod = find_module_all(name, strlen(name), true);
-	ret = !mod || mod->state == MODULE_STATE_LIVE;
+	ret = !mod || mod->state == MODULE_STATE_LIVE
+		|| mod->state == MODULE_STATE_GOING;
 	mutex_unlock(&module_mutex);
 
 	return ret;
@@ -3669,7 +3680,6 @@ static void do_mod_ctors(struct module *mod)
 		mod->ctors[i]();
 #endif
 }
-
 
 #ifdef	CONFIG_TIMA_LKMAUTH_CODE_PROT
 
@@ -3942,7 +3952,8 @@ again:
 	mutex_lock(&module_mutex);
 	old = find_module_all(mod->name, strlen(mod->name), true);
 	if (old != NULL) {
-		if (old->state != MODULE_STATE_LIVE) {
+		if (old->state == MODULE_STATE_COMING
+		    || old->state == MODULE_STATE_UNFORMED) {
 			/* Wait in case it fails to load. */
 			mutex_unlock(&module_mutex);
 			err = wait_event_interruptible(module_wq,

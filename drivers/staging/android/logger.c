@@ -37,8 +37,8 @@
 #define SUPPORT_GETLOG_TOOL
 #endif
 
-#ifdef CONFIG_SEC_BSP
-#include <linux/sec_bsp.h>
+#ifdef CONFIG_SEC_EXT
+#include <linux/sec_ext.h>
 #endif
 
 /**
@@ -432,11 +432,11 @@ static void fix_up_readers(struct logger_log *log, size_t len)
 #define ESS_MAX_TIMEBUF_SIZE	(20)
 
 static void (*func_hook_logger)(const char *name, const char *buf, size_t size);
-void register_hook_logger(void (*func)(const char *name, const char *buf, size_t size))
+void register_hook_logger_sec(void (*func)(const char *name, const char *buf, size_t size))
 {
 	func_hook_logger = func;
 }
-EXPORT_SYMBOL(register_hook_logger);
+EXPORT_SYMBOL(register_hook_logger_sec);
 
 static int reparse_hook_logger_header(struct logger_log *log,
 				      struct logger_entry *entry)
@@ -574,9 +574,9 @@ static ssize_t do_write_log_from_user(struct logger_log *log,
 						      count,
 						      log->ess_sync_size,
 						      ESS_MAX_SYNC_BUF_SIZE);
-#ifdef CONFIG_SEC_BSP
+#ifdef CONFIG_SEC_BOOTSTAT
 	if (strncmp(log->buffer + log->w_off, "!@Boot", 6) == 0) {
-		sec_boot_stat_add(log->buffer + log->w_off);
+		sec_bootstat_add(log->buffer + log->w_off);
 	}
 #endif
 	}
@@ -1009,7 +1009,7 @@ static int __init create_log(char *log_name, int size)
 		pr_err("failed to vmalloc ess_sync_buf %s log\n",
 				log->misc.name);
 
-	if (exynos_ss_get_enable(log->misc.name, false) == true) {
+	if (exynos_ss_get_enable(log->misc.name, true) == true) {
 		buffer = vmalloc(ESS_MAX_BUF_SIZE);
 		if (buffer)
 			log->ess_buf = buffer;
@@ -1091,7 +1091,7 @@ static int __init create_log(char *log_name, int size)
 		pr_err("failed to vmalloc ess_sync_buf %s log\n",
 				log->misc.name);
 
-	if (exynos_ss_get_enable(log->misc.name, false) == true) {
+	if (exynos_ss_get_enable(log->misc.name, true) == true) {
 		buffer = vmalloc(ESS_MAX_BUF_SIZE);
 		if (!buffer) {
 			pr_err("failed to use hooking platform %s log\n", log->misc.name);
@@ -1125,46 +1125,10 @@ out_free_buffer:
 #endif /* SUPPORT_GETLOG_TOOL */
 }
 
-#if defined(CONFIG_SEC_DUMP_SUMMARY)
-int sec_debug_summary_set_logger_info(
-	struct sec_debug_summary_logger_log_info *log_info)
-{
-	struct logger_log *log;
-
-	log_info->stinfo.buffer_offset = offsetof(struct logger_log, buffer);
-	log_info->stinfo.w_off_offset = offsetof(struct logger_log, w_off);
-	log_info->stinfo.head_offset = offsetof(struct logger_log, head);
-	log_info->stinfo.size_offset = offsetof(struct logger_log, size);
-	log_info->stinfo.size_t_typesize = sizeof(size_t);
-
-	list_for_each_entry(log, &log_list, logs)
-	{
-		if(!strcmp(log->misc.name,LOGGER_LOG_MAIN)) {
-			log_info->main.log_paddr = virt_to_phys(log);
-			log_info->main.buffer_paddr = virt_to_phys(log->buffer);
-		}
-		else if(!strcmp(log->misc.name,LOGGER_LOG_SYSTEM)) {
-			log_info->system.log_paddr = virt_to_phys(log);
-			log_info->system.buffer_paddr = virt_to_phys(log->buffer);
-		}
-		else if(!strcmp(log->misc.name,LOGGER_LOG_EVENTS)) {
-			log_info->events.log_paddr = virt_to_phys(log);
-			log_info->events.buffer_paddr = virt_to_phys(log->buffer);
-		}
-		else if(!strcmp(log->misc.name,LOGGER_LOG_RADIO)) {
-			log_info->radio.log_paddr = virt_to_phys(log);
-			log_info->radio.buffer_paddr = virt_to_phys(log->buffer);
-		}
-	}
-
-	return 0;
-}
-#endif
-
 static int __init logger_init(void)
 {
 	int ret;
-
+	
 	ret = create_log(LOGGER_LOG_MAIN, 2*1024*1024);
 	if (unlikely(ret))
 		goto out;

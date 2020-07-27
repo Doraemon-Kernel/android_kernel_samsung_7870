@@ -4,6 +4,17 @@
 
 struct pwrcal_clk_none clk_0;
 
+#ifdef PWRCAL_TARGET_LINUX
+unsigned int _cal_clk_get(char *name)
+{
+	return 0;
+}
+
+struct pwrcal_clk *cal_get_clk(unsigned int id)
+{
+	return NULL;
+}
+#else
 struct pwrcal_pll clk_pll_start, clk_pll_end;
 struct pwrcal_clk_fixed_rate clk_fixed_rate_start, clk_fixed_rate_end;
 struct pwrcal_clk_fixed_factor clk_fixed_factor_start, clk_fixed_factor_end;
@@ -72,7 +83,7 @@ struct pwrcal_clk *cal_get_clk(unsigned int id)
 
 	return ret;
 }
-
+#endif
 
 int pwrcal_gate_is_enabled(struct pwrcal_clk *clk)
 {

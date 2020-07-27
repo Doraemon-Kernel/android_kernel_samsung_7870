@@ -129,29 +129,12 @@ void kbase_backend_release_ctx_noirq(struct kbase_device *kbdev,
  * @kbdev:	Device pointer
  * @katom:	Pointer to the atom to complete
  *
- * This function should only be called from kbase_jd_done_worker() or
- * js_return_worker().
+ * This function should only be called from jd_done_worker().
  *
  * Return: true if atom has completed, false if atom should be re-submitted
  */
 void kbase_backend_complete_wq(struct kbase_device *kbdev,
 				struct kbase_jd_atom *katom);
-
-/**
- * kbase_backend_complete_wq_post_sched - Perform backend-specific actions
- *                                        required on completing an atom, after
- *                                        any scheduling has taken place.
- * @kbdev:         Device pointer
- * @core_req:      Core requirements of atom
- * @affinity:      Affinity of atom
- * @coreref_state: Coreref state of atom
- *
- * This function should only be called from kbase_jd_done_worker() or
- * js_return_worker().
- */
-void kbase_backend_complete_wq_post_sched(struct kbase_device *kbdev,
-		base_jd_core_req core_req, u64 affinity,
-		enum kbase_atom_coreref_state coreref_state);
 
 /**
  * kbase_backend_reset() - The GPU is being reset. Cancel all jobs on the GPU

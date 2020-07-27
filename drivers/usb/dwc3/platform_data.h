@@ -26,4 +26,5 @@ struct dwc3_platform_data {
 	bool tx_fifo_resize;
 	bool adj_sof_accuracy;
 	bool is_not_vbus_pad;
+	bool sparse_transfer_control;
 };

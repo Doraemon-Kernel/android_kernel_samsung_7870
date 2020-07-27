@@ -55,6 +55,7 @@ static int exynos_fimc_is_module_pin_control(struct device *dev,
 	case PIN_INPUT:
 		if (gpio_is_valid(pin)) {
 			gpio_request_one(pin, GPIOF_IN, "CAM_GPIO_INPUT");
+			usleep_range(delay, delay);
 			gpio_free(pin);
 		}
 		break;

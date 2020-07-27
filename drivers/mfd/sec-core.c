@@ -118,6 +118,14 @@ static struct mfd_cell s2mps16_devs[] = {
 	},
 };
 
+static struct mfd_cell s2mpu05_devs[] = {
+	{
+		.name = "s2mpu05-pmic",
+	}, {
+		.name = "s2m-rtc",
+	},
+};
+
 #ifdef CONFIG_OF
 static struct of_device_id sec_dt_match[] = {
 	{	.compatible = "samsung,s5m8767-pmic",
@@ -137,6 +145,9 @@ static struct of_device_id sec_dt_match[] = {
 	},
 	{	.compatible = "samsung,s2mps16-pmic",
 		.data = (void *)S2MPS16X,
+	},
+	{	.compatible = "samsung,s2mpu05-pmic",
+		.data = (void *)S2MPU05X,
 	},
 	{},
 };
@@ -526,6 +537,31 @@ static struct sec_platform_data *sec_pmic_i2c_parse_dt_pdata(
 	if (ret)
 		return ERR_PTR(ret);
 
+	/* rtc optimize */
+	ret = of_property_read_u32(np, "osc-bias-up", &val);
+	if (!ret)
+		pdata->osc_bias_up = val;
+	else
+		pdata->osc_bias_up = -1;
+
+	ret = of_property_read_u32(np, "rtc_cap_sel", &val);
+	if (!ret)
+		pdata->cap_sel = val;
+	else
+		pdata->cap_sel = -1;
+
+	ret = of_property_read_u32(np, "rtc_osc_xin", &val);
+	if (!ret)
+		pdata->osc_xin = val;
+	else
+		pdata->osc_xin = -1;
+
+	ret = of_property_read_u32(np, "rtc_osc_xout", &val);
+	if (!ret)
+		pdata->osc_xout = val;
+	else
+		pdata->osc_xout = -1;
+
 	return pdata;
 }
 #else
@@ -578,6 +614,9 @@ static int sec_pmic_probe(struct i2c_client *i2c,
 		pdata->device_type = sec_pmic->type;
 	}
 
+	if (pdata == NULL)
+		return -ENOMEM;
+
 	if (pdata) {
 		sec_pmic->device_type = pdata->device_type;
 		sec_pmic->ono = pdata->ono;
@@ -601,7 +640,7 @@ static int sec_pmic_probe(struct i2c_client *i2c,
 		return -ENODEV;
 	}
 
-	if (pdata && pdata->ten_bit_address)
+	if (pdata->ten_bit_address)
 		sec_pmic->rtc->flags |= I2C_CLIENT_TEN;
 
 	i2c_set_clientdata(sec_pmic->rtc, sec_pmic);
@@ -656,6 +695,10 @@ static int sec_pmic_probe(struct i2c_client *i2c,
 	case S2MPS16X:
 		ret = mfd_add_devices(sec_pmic->dev, -1, s2mps16_devs,
 				      ARRAY_SIZE(s2mps16_devs), NULL, 0, NULL);
+		break;
+	case S2MPU05X:
+		ret = mfd_add_devices(sec_pmic->dev, -1, s2mpu05_devs,
+				      ARRAY_SIZE(s2mpu05_devs), NULL, 0, NULL);
 		break;
 	default:
 		/* If this happens the probe function is problem */
@@ -732,42 +775,6 @@ static int sec_resume(struct device *dev)
 #define sec_resume	NULL
 #endif /* CONFIG_PM */
 
-#ifdef CONFIG_SEC_PM
-extern unsigned int get_smpl_warn_number(void);
-extern void clear_smpl_warn_number(void);
-
-static unsigned int smpl_warn_counts = 0;
-static int get_smpl_warn_count(char *val, const struct kernel_param *kp)
-{
-	smpl_warn_counts = get_smpl_warn_number();
-
-	pr_info("%s: smpl_warn_counts=0x%x\n", __func__, smpl_warn_counts);
-
-	return param_get_uint(val, kp);
-}
-
-static int clear_smpl_warn_count(const char *val, const struct kernel_param *kp)
-{
-
-	int rv = param_set_uint(val, kp);
-
-	if(*val=='c') {
-		clear_smpl_warn_number();  /* clear after reading */
-		pr_info("%s: smpl_warn_counts clear\n", __func__);
-	}
-
-	return rv;
-}
-
-static struct kernel_param_ops smpl_warn_count_param_ops = {
-	.get = get_smpl_warn_count,
-	.set = clear_smpl_warn_count,
-};
-
-module_param_cb(smpl_warn_count, &smpl_warn_count_param_ops, &smpl_warn_counts, 0660);
-MODULE_PARM_DESC(smpl_warn_count, "check smpl warn count");
-#endif
-
 const struct dev_pm_ops sec_pmic_apm = {
 	.suspend = sec_suspend,
 	.resume = sec_resume,
@@ -779,7 +786,6 @@ static struct i2c_driver sec_pmic_driver = {
 		   .owner = THIS_MODULE,
 		   .of_match_table = of_match_ptr(sec_dt_match),
 		   .pm = &sec_pmic_apm,
-		   .suppress_bind_attrs = true,
 	},
 	.probe = sec_pmic_probe,
 	.remove = sec_pmic_remove,

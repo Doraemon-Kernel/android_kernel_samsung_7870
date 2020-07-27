@@ -14,6 +14,16 @@
 #ifndef _DW_MMC_H_
 #define _DW_MMC_H_
 
+#define DW_MMC_MAX_TRANSFER_SIZE	4096
+#define DW_MMC_SECTOR_SIZE		512
+
+#ifdef CONFIG_MMC_DW_FMP_DM_CRYPT
+#define MMC_DW_IDMAC_MULTIPLIER	\
+	(DW_MMC_MAX_TRANSFER_SIZE / DW_MMC_SECTOR_SIZE)
+#else
+#define MMC_DW_IDMAC_MULTIPLIER	1
+#endif
+
 #define DW_MMC_240A		0x240a
 #define DW_MMC_260A		0x260a
 
@@ -230,16 +240,15 @@ enum dw_mci_misc_control {
 	CTRL_RESTORE_CLKSEL = 0,
 	CTRL_REQUEST_EXT_IRQ,
 	CTRL_CHECK_CD,
+	CTRL_SET_ETC_GPIO,
+	CTRL_ADD_SYSFS,
 };
 
 #define SDMMC_DATA_TMOUT_SHIFT		11
 #define SDMMC_RESP_TMOUT		0xFF
 #define SDMMC_DATA_TMOUT_CRT		8
-#define SDMMC_DATA_TMOUT_EXT		0x1
+#define SDMMC_DATA_TMOUT_EXT		0x7
 #define SDMMC_DATA_TMOUT_EXT_SHIFT	8
-#define SDMMC_DATA_TMOUT_MAX_CNT	0x1FFFFF
-#define SDMMC_DATA_TMOUT_MAX_EXT_CNT	0xFFFFFF
-#define SDMMC_HTO_TMOUT_SHIFT		8
 
 extern u32 dw_mci_calc_timeout(struct dw_mci *host);
 
@@ -249,131 +258,6 @@ extern void dw_mci_remove(struct dw_mci *host);
 extern int dw_mci_suspend(struct dw_mci *host);
 extern int dw_mci_resume(struct dw_mci *host);
 #endif
-
-/**
- * struct dw_mci_slot - MMC slot state
- * @mmc: The mmc_host representing this slot.
- * @host: The MMC controller this slot is using.
- * @quirks: Slot-level quirks (DW_MCI_SLOT_QUIRK_XXX)
- * @ctype: Card type for this slot.
- * @mrq: mmc_request currently being processed or waiting to be
- *	processed, or NULL when the slot is idle.
- * @queue_node: List node for placing this node in the @queue list of
- *	&struct dw_mci.
- * @clock: Clock rate configured by set_ios(). Protected by host->lock.
- * @__clk_old: The last updated clock with reflecting clock divider.
- *	Keeping track of this helps us to avoid spamming the console
- *	with CONFIG_MMC_CLKGATE.
- * @flags: Random state bits associated with the slot.
- * @id: Number of this slot.
- * @last_detect_state: Most recently observed card detect state.
- */
-struct dw_mci_slot {
-	struct mmc_host		*mmc;
-	struct dw_mci		*host;
-
-	int			quirks;
-
-	u32			ctype;
-
-	struct mmc_request	*mrq;
-	struct list_head	queue_node;
-
-	unsigned int		clock;
-	unsigned int		__clk_old;
-
-	unsigned long		flags;
-#define DW_MMC_CARD_PRESENT	0
-#define DW_MMC_CARD_NEED_INIT	1
-	int			id;
-	int			last_detect_state;
-};
-
-/**
- * struct dw_mci_debug_data - DwMMC debugging infomation
- * @host_count: a number of all hosts
- * @info_count: a number of set of debugging information
- * @info_index: index of debugging information for each host
- * @host: pointer of each dw_mci structure
- * @debug_info: debugging information structure
- */
-
-struct dw_mci_cmd_log {
-	u64	send_time;
-	u64	done_time;
-	u8	cmd;
-	u32	arg;
-	u8	data_size;
-	/* no data CMD = CD, data CMD = DTO */
-	/*
-	 * 0b1000 0000	: new_cmd with without send_cmd
-	 * 0b0000 1000	: error occurs
-	 * 0b0000 0100	: data_done : DTO(Data Transfer Over)
-	 * 0b0000 0010	: resp : CD(Command Done)
-	 * 0b0000 0001	: send_cmd : set 1 only start_command
-	 */
-	u8	seq_status;	/* 0bxxxx xxxx : error data_done resp send */
-#define DW_MCI_FLAG_SEND_CMD	BIT(0)
-#define DW_MCI_FLAG_CD		BIT(1)
-#define DW_MCI_FLAG_DTO		BIT(2)
-#define DW_MCI_FLAG_ERROR	BIT(3)
-#define DW_MCI_FLAG_NEW_CMD_ERR	BIT(7)
-
-	u16	rint_sts;	/* RINTSTS value in case of error */
-	u8	status_count;	/* TBD : It can be changed */
-};
-
-enum dw_mci_req_log_state {
-	STATE_REQ_START = 0,
-	STATE_REQ_CMD_PROCESS,
-	STATE_REQ_DATA_PROCESS,
-	STATE_REQ_END,
-};
-
-struct dw_mci_req_log {
-	u64				timestamp;
-	u32				info0;
-	u32				info1;
-	u32				info2;
-	u32				info3;
-	u32				pending_events;
-	u32				completed_events;
-	enum dw_mci_state		state;
-	enum dw_mci_state		state_cmd;
-	enum dw_mci_state		state_dat;
-	enum dw_mci_req_log_state	log_state;
-};
-
-#define DWMCI_LOG_MAX		0x80
-#define DWMCI_REQ_LOG_MAX	0x40
-struct dw_mci_debug_info {
-	struct dw_mci_cmd_log		cmd_log[DWMCI_LOG_MAX];
-	atomic_t			cmd_log_count;
-	struct dw_mci_req_log		req_log[DWMCI_REQ_LOG_MAX];
-	atomic_t			req_log_count;
-	unsigned char			en_logging;
-#define DW_MCI_DEBUG_ON_CMD	BIT(0)
-#define DW_MCI_DEBUG_ON_REQ	BIT(1)
-};
-
-#define DWMCI_DBG_NUM_HOST	3
-
-#define DWMCI_DBG_NUM_INFO	3			/* configurable */
-#define DWMCI_DBG_MASK_INFO	(BIT(0) | BIT(1) | BIT(2))	/* configurable */
-#define DWMCI_DBG_BIT_HOST(x)	BIT(x)
-
-struct dw_mci_debug_data {
-	unsigned char			host_count;
-	unsigned char			info_count;
-	unsigned char			info_index[DWMCI_DBG_NUM_HOST];
-	struct dw_mci			*host[DWMCI_DBG_NUM_HOST];
-	struct dw_mci_debug_info	debug_info[DWMCI_DBG_NUM_INFO];
-};
-
-struct dw_mci_tuning_data {
-	const u8 *blk_pattern;
-	unsigned int blksz;
-};
 
 /**
  * dw_mci driver data - dw-mshc implementation specific driver data.
@@ -451,8 +335,8 @@ struct dw_mci_sfe_ram_dump {
 	u32			mpsctrl;
 	u32			cmd_status;
 	u32			data_status;
-	u32			pending_events;
-	u32			completed_events;
+	unsigned long		pending_events;
+	unsigned long		completed_events;
 	u32			host_state;
 	u32			cmd_index;
 	u32			fifo_count;

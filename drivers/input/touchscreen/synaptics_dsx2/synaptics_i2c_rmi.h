@@ -24,7 +24,7 @@
 #include <linux/device.h>
 #include <linux/i2c/synaptics_rmi.h>
 #include <linux/cdev.h>
-
+#include <linux/input.h>
 #ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
 #endif
@@ -34,22 +34,30 @@
 #ifdef CONFIG_INPUT_BOOSTER
 #include <linux/input/input_booster.h>
 #endif
+#ifdef CONFIG_FB
+#include <linux/notifier.h>
+#include <linux/fb.h>
+#endif
 
 /**************************************/
 /* Define related with driver feature */
 #define FACTORY_MODE
-#define PROXIMITY_MODE
-//#define EDGE_SWIPE
 #define USE_SHUTDOWN_CB
+#define PALM_MODE
+#ifdef PALM_MODE
+#define INPUT_TOUCH_MAJOR_MAX	255
+#define INPUT_TOUCH_MINOR_MAX	255
+#define INPUT_PALM_MAX		1
+#endif
 
-#define CHECK_PR_NUMBER
+/*#define CHECK_PR_NUMBER*/
 #define REPORT_2D_W
 
 #ifdef CONFIG_SEC_FACTORY
 #define REPORT_2D_Z		/* only for CONFIG_SEC_FACTORY */
 #endif
 #ifdef REPORT_2D_Z
-#define DSX_PRESSURE_MAX	255
+#define INPUT_PRESSURE_MAX	255
 #endif
 
 #ifdef CONFIG_INPUT_BOOSTER
@@ -59,25 +67,14 @@
 #define GLOVE_MODE
 #endif
 
-//#define USE_STYLUS
-#define USE_ACTIVE_REPORT_RATE
-
 /* #define SKIP_UPDATE_FW_ON_PROBE */
 /* #define REPORT_ORIENTATION */
 /* #define USE_SENSOR_SLEEP */
-
-/* "HAS_ALTERNATER_R_R" feature have to check logic for using it. */
-/* #define HAS_ALTERNATER_R_R */
-
-/* only for V model feature*/
-//#define GESTURE_3FIN	// Disable 3 finger gesture scenario
-#define USE_LPGW_MODE
-
 /**************************************/
 /**************************************/
 
 /* Show TSP status information for debug */
-#define PRINT_DEBUG_INFO
+/*#define PRINT_DEBUG_INFO*/
 #ifdef PRINT_DEBUG_INFO
 #define F51_HAND_EDGE_DATA_SIZE 9
 #define F51_HAS_DELTA_INFO (1 << 3)
@@ -86,42 +83,6 @@
 #define F54_DATA14_ADDR 0X0109
 #define F54_DATA16_ADDR 0x010a
 #define F54_DATA17_ADDR 0x010bf
-#endif
-
-#ifdef CONFIG_SEC_DEBUG_TSP_LOG
-#define tsp_debug_dbg(mode, dev, fmt, ...)	\
-({								\
-	if (mode) {					\
-		dev_dbg(dev, fmt, ## __VA_ARGS__);	\
-		sec_debug_tsp_log(fmt, ## __VA_ARGS__);		\
-	}				\
-	else					\
-		dev_dbg(dev, fmt, ## __VA_ARGS__);	\
-})
-
-#define tsp_debug_info(mode, dev, fmt, ...)	\
-({								\
-	if (mode) {							\
-		dev_info(dev, fmt, ## __VA_ARGS__);		\
-		sec_debug_tsp_log(fmt, ## __VA_ARGS__);		\
-	}				\
-	else					\
-		dev_info(dev, fmt, ## __VA_ARGS__);	\
-})
-
-#define tsp_debug_err(mode, dev, fmt, ...)	\
-({								\
-	if (mode) {					\
-		dev_err(dev, fmt, ## __VA_ARGS__);	\
-		sec_debug_tsp_log(fmt, ## __VA_ARGS__);	\
-	}				\
-	else					\
-		dev_err(dev, fmt, ## __VA_ARGS__); \
-})
-#else
-#define tsp_debug_dbg(mode, dev, fmt, ...)	dev_dbg(dev, fmt, ## __VA_ARGS__)
-#define tsp_debug_info(mode, dev, fmt, ...)	dev_info(dev, fmt, ## __VA_ARGS__)
-#define tsp_debug_err(mode, dev, fmt, ...)	dev_err(dev, fmt, ## __VA_ARGS__)
 #endif
 
 #define SYNAPTICS_DEVICE_NAME	"SYNAPTICS"
@@ -135,12 +96,14 @@
 #define TSP_FACTEST_RESULT_PASS		2
 #define TSP_FACTEST_RESULT_FAIL		1
 #define TSP_FACTEST_RESULT_NONE		0
+#define REPORT_DATA_OFFSET 3
 
 #define SYNAPTICS_MAX_FW_PATH	64
 
-#define SYNAPTICS_DEFAULT_UMS_FW "/sdcard/synaptics.fw"
+#define SYNAPTICS_DEFAULT_UMS_FW "/sdcard/Firmware/TSP/synaptics.fw"
 
 #define DEFAULT_DEVICE_NUM	1
+#define MAX_UTILITY_PARAMS 20
 
 /* Define for Firmware file image format */
 #define FIRMWARE_IMG_HEADER_MAJOR_VERSION_OFFSET	(0x07)
@@ -152,7 +115,7 @@
 
 #define PDT_PROPS (0X00EF)
 #define PDT_START (0x00E9)
-#define PDT_END (0x000A)
+#define PDT_END (0x00D0)
 #define PDT_ENTRY_SIZE (0x0006)
 #define PAGES_TO_SERVICE (10)
 #define PAGE_SELECT_LEN (2)
@@ -162,6 +125,7 @@
 #define SYNAPTICS_RMI4_F12 (0x12)
 #define SYNAPTICS_RMI4_F1A (0x1a)
 #define SYNAPTICS_RMI4_F34 (0x34)
+#define SYNAPTICS_RMI4_F35 (0x35)
 #define SYNAPTICS_RMI4_F51 (0x51)
 #define SYNAPTICS_RMI4_F54 (0x54)
 #define SYNAPTICS_RMI4_F55 (0x55)
@@ -174,6 +138,17 @@
 #define SYNAPTICS_RMI4_BUILD_ID_SIZE 3
 #define SYNAPTICS_RMI4_PRODUCT_ID_LENGTH 10
 #define SYNAPTICS_RMI4_PACKAGE_ID_SIZE 4
+
+#define F35_ERROR_CODE_OFFSET 0
+#define F35_FLASH_STATUS_OFFSET 5
+#define F35_CHUNK_NUM_LSB_OFFSET 0
+#define F35_CHUNK_NUM_MSB_OFFSET 1
+#define F35_CHUNK_DATA_OFFSET 2
+#define F35_CHUNK_COMMAND_OFFSET 18
+
+#define F35_CHUNK_SIZE 16
+#define F35_ERASE_ALL_WAIT_MS 5000
+#define F35_RESET_WAIT_MS 250
 
 #define MAX_NUMBER_OF_BUTTONS 4
 #define MAX_INTR_REGISTERS 4
@@ -248,99 +223,13 @@
 #define CLEAR_COVER_MODE_EN	(CLOSED_COVER_EN | GLOVE_DETECTION_EN)
 #define FLIP_COVER_MODE_EN	(CLOSED_COVER_EN)
 
-#ifdef PROXIMITY_MODE
-#define F51_FINGER_TIMEOUT 50 /* ms */
-#define HOVER_Z_MAX (255)
-
-#define F51_PROXIMITY_ENABLES_OFFSET (0)
-/* Define for proximity enables(F51_CUSTOM_CTRL00) */
-#define FINGER_HOVER_EN (1 << 0)
-#define AIR_SWIPE_EN (1 << 1)
-#define LARGE_OBJ_EN (1 << 2)
-#define HOVER_PINCH_EN (1 << 3)
-#define LARGE_OBJ_WAKEUP_GESTURE_EN (1 << 4)
-/* Reserved 5 */
-#define ENABLE_HANDGRIP_RECOG (1 << 6)
-#define SLEEP_PROXIMITY (1 << 7)
-
 #define F51_GENERAL_CONTROL_OFFSET (1)
 /* Define for General Control(F51_CUSTOM_CTRL01) */
-#define JIG_TEST_EN		(1 << 0)
-#define JIG_COMMAND_EN	(1 << 1)
-#define DEAD_ZONE_EN	(1 << 2)
-#define EN_GHOST_FINGER_STATUS_REPORT	(1 << 3)
-//#define RESERVED		(1 << 4)
-#define EDGE_SWIPE_EN	(1 << 5)
-//#define RESERVED		(1 << 6)
-//#define RESERVED		(1 << 7)
+#define DEAD_ZONE_EN	(1 << 0)
 
 #define F51_GENERAL_CONTROL_2_OFFSET (2)
-/* Define for General Control(F51_CUSTOM_CTRL02) */
-/* Reserved 0 ~ 7 */
 
-/* Define for proximity Controls(F51_CUSTOM_QUERY04) */
-//#define HAS_FINGER_HOVER (1 << 0)
-//#define HAS_AIR_SWIPE (1 << 1)
-//#define HAS_LARGE_OBJ (1 << 2)
-//#define HAS_HOVER_PINCH (1 << 3)
-#define HAS_EDGE_SWIPE (1 << 4)
-//#define HAS_SINGLE_FINGER (1 << 5)
-//#define HAS_GRIP_SUPPRESSION (1 << 6)
-//#define HAS_PALM_REJECTION (1 << 7)
-
-/* Define for proximity Controls 2(F51_CUSTOM_QUERY05) */
-#define HAS_PROFILE_HANDEDNESS (1 << 0)
-#define HAS_LOWG (1 << 1)
-#define HAS_FACE_DETECTION (1 << 2)
-#define HAS_SIDE_BUTTONS (1 << 3)
-#define HAS_CAMERA_GRIP_DETECTION (1 << 4)
-/* Reserved 5 ~ 7 */
-
-/* Define for Detection flag 2(F51_CUSTOM_DATA06) */
-#define HAS_HAND_EDGE_SWIPE_DATA (1 << 0)
-#define SIDE_BUTTON_DETECTED (1 << 1)
-/* Reserved 2 ~ 7 */
-
-#define F51_DATA_RESERVED_SIZE	(1)
-#define F51_DATA_1_SIZE (4)	/* FINGER_HOVER */
-#define F51_DATA_2_SIZE (1)	/* HOVER_PINCH */
-#define F51_DATA_3_SIZE (1)	/* AIR_SWIPE | LARGE_OBJ */
-#define F51_DATA_4_SIZE (2)	/* SIDE_BUTTON */
-#define F51_DATA_5_SIZE	(1)	/* CAMERA_GRIP_DETECTION */
-#define F51_DATA_6_SIZE (2)	/* DETECTION_FLAG2 */
-
-#ifdef EDGE_SWIPE
-#define EDGE_SWIPE_WIDTH_MAX	255
-#define EDGE_SWIPE_PALM_MAX		1
-
-#define EDGE_SWIPE_WITDH_X_OFFSET	5
-#define EDGE_SWIPE_AREA_OFFSET	7
-#endif
-#define F51_EDGE_SWIPE_DATA_SIZE 10
-
-#ifdef GESTURE_3FIN
-#define	GESTURE_RIGHT	1
-#define	GESTURE_LEFT	2
-#define	GESTURE_UP		3
-#define	GESTURE_DOWN	4
-#endif
-
-#ifdef USE_LPGW_MODE
-#define	GESTURE_SWIPE			0x07
-#endif
-
-#define	ORIENTATION_0	0
-#define	ORIENTATION_90	1
-#define	ORIENTATION_180	2
-#define	ORIENTATION_270	3
-
-#ifdef SIDE_TOUCH
-#define MAX_SIDE_BUTTONS	8
-#define NUM_OF_ACTIVE_SIDE_BUTTONS	6
-#endif
-#endif
-
-#define SYN_I2C_RETRY_TIMES 3
+#define SYN_I2C_RETRY_TIMES 10
 #define MAX_F11_TOUCH_WIDTH 15
 
 #define CHECK_STATUS_TIMEOUT_MS 200
@@ -356,6 +245,7 @@
 #define STATUS_CONFIG_CRC_FAILURE 0x04
 #define STATUS_FIRMWARE_CRC_FAILURE 0x05
 #define STATUS_CRC_IN_PROGRESS 0x06
+#define STATUS_DISPLAY_FAILURE 0x09
 
 /* Define for Device Control(F01_RMI_CTRL00) */
 #define NORMAL_OPERATION (0 << 0)
@@ -398,12 +288,6 @@
  * If it is possible to replace that getting address from IC,
  * I recommend the latter than former.
  */
-#ifdef PROXIMITY_MODE
-#define MANUAL_DEFINED_OFFSET_GRIP_EDGE_EXCLUSION_RX	(32)
-#endif
-#ifdef SIDE_TOUCH
-#define MANUAL_DEFINED_OFFSET_SIDEKEY_THRESHOLD	(47)
-#endif
 #ifdef USE_STYLUS
 #define MANUAL_DEFINED_OFFSET_FORCEFINGER_ON_EDGE	(61)
 #endif
@@ -412,8 +296,10 @@ enum synaptics_product_ids {
 	SYNAPTICS_PRODUCT_ID_NONE = 0,
 	SYNAPTICS_PRODUCT_ID_S5807,
 	SYNAPTICS_PRODUCT_ID_S5806,
-	SYNAPTICS_PRODUCT_ID_S5300,
-	SYNAPTICS_PRODUCT_ID_MAX
+	SYNAPTICS_PRODUCT_ID_TD4100,
+	SYNAPTICS_PRODUCT_ID_TD4300,
+	SYNAPTICS_PRODUCT_ID_TD4310,
+	SYNAPTICS_PRODUCT_ID_MAX,
 };
 
 /* Define for Revision of IC */
@@ -452,49 +338,17 @@ struct synaptics_rmi4_f1a_handle {
 	struct synaptics_rmi4_f1a_control button_control;
 };
 
-#ifdef PROXIMITY_MODE
-#ifdef EDGE_SWIPE
-struct synaptics_rmi4_edge_swipe {
-	int sumsize;
-	int palm;
-	int wx;
-	int wy;
-};
-#endif
-
 struct synaptics_rmi4_f51_handle {
 /* CTRL */
-	unsigned char proximity_enables;		/* F51_CUSTOM_CTRL00 */
-	unsigned short proximity_enables_addr;
+	unsigned short custom_control_addr; /* CUSTOM CTRL BASE */
 	unsigned char general_control;			/* F51_CUSTOM_CTRL01 */
 	unsigned short general_control_addr;
 	unsigned char general_control_2;		/* F51_CUSTOM_CTRL02 */
 	unsigned short general_control_2_addr;
-#ifdef PROXIMITY_MODE
-	unsigned short grip_edge_exclusion_rx_addr;
-#endif
-#ifdef SIDE_TOUCH
-	unsigned short sidebutton_tapthreshold_addr;
-#endif
 #ifdef USE_STYLUS
 	unsigned short forcefinger_onedge_addr;
 #endif
-/* QUERY */
-	unsigned char proximity_controls;		/* F51_CUSTOM_QUERY04 */
-	unsigned char proximity_controls_2;		/* F51_CUSTOM_QUERY05 */
-/* DATA */
-	unsigned short detection_flag_2_addr;	/* F51_CUSTOM_DATA06 */
-	unsigned short edge_swipe_data_addr;	/* F51_CUSTOM_DATA07 */
-#ifdef GESTURE_3FIN
-	unsigned short gesture_3finger_data_addr;	/* F51_CUSTOM_DATA49~50 */
-#endif
-#ifdef EDGE_SWIPE
-	struct synaptics_rmi4_edge_swipe edge_swipe_data;
-#endif
-	unsigned short side_button_data_addr;	/* F51_CUSTOM_DATA04 */
-	bool finger_is_hover;	/* To print hover log */
 };
-#endif
 
 /*
  * struct synaptics_rmi4_fn_desc - function descriptor fields in PDT
@@ -616,6 +470,19 @@ struct synaptics_finger {
 	int print_type;
 
 };
+enum v7_status {
+	SUCCESS = 0x00,
+	DEVICE_NOT_IN_BOOTLOADER_MODE,
+	INVALID_PARTITION,
+	INVALID_COMMAND,
+	INVALID_BLOCK_OFFSET,
+	INVALID_TRANSFER,
+	NOT_ERASED,
+	FLASH_PROGRAMMING_KEY_INCORRECT,
+	BAD_PARTITION_TABLE,
+	CHECKSUM_FAILED,
+	FLASH_HARDWARE_FAILURE = 0x1f,
+};
 
 enum {
 	TOUCH_NONE = 0,
@@ -625,16 +492,21 @@ enum {
 	TOUCH_CHANGE,
 };
 
+enum utility_parameter_id {
+	UNUSED = 0,
+	FORCE_PARAMETER,
+	ANTI_BENDING_PARAMETER,
+};
+
+
 struct synaptics_rmi4_f12_handle {
 /* CTRL */
 	unsigned short ctrl11_addr;		/* F12_2D_CTRL11 : for jitter level*/
 	unsigned short ctrl15_addr;		/* F12_2D_CTRL15 : for finger amplitude threshold */
 	unsigned short ctrl23_addr;		/* F12_2D_CTRL23 : object report enable */
 	unsigned char obj_report_enable;	/* F12_2D_CTRL23 */
-	unsigned short ctrl20_addr;		/* F12_2D_CTRL20 : for lpwg mode */
 	unsigned short ctrl26_addr;		/* F12_2D_CTRL26 : for glove mode */
 	unsigned char feature_enable;	/* F12_2D_CTRL26 */
-	unsigned short ctrl27_addr;		/* F12_2D_CTRL26 : for lpwg mode - report rate */
 	unsigned short ctrl28_addr;		/* F12_2D_CTRL28 : for report data */
 	unsigned char report_enable;	/* F12_2D_CTRL28 */
 /* QUERY */
@@ -654,6 +526,7 @@ enum bl_version {
 	BL_V5 = 5,
 	BL_V6 = 6,
 	BL_V7 = 7,
+	BL_V8 = 8,
 };
 
 #define IMAGE_HEADER_VERSION_05 0x05
@@ -663,7 +536,22 @@ enum bl_version {
 #define IMAGE_AREA_OFFSET 0x100
 #define LOCKDOWN_SIZE 0x50
 
-enum v7_flash_command2 {
+enum v5v6_flash_command {
+	CMD_V5V6_IDLE = 0x0,
+	CMD_V5V6_WRITE_FW = 0x2,
+	CMD_V5V6_ERASE_ALL = 0x3,
+	CMD_V5V6_WRITE_LOCKDOWN = 0x4,
+	CMD_V5V6_READ_CONFIG = 0x5,
+	CMD_V5V6_WRITE_CONFIG = 0x6,
+	CMD_V5V6_ERASE_UI_CONFIG = 0x7,
+	CMD_V5V6_ERASE_BL_CONFIG = 0x9,
+	CMD_V5V6_ERASE_DISP_CONFIG = 0xa,
+	CMD_V5V6_ERASE_GUEST_CODE = 0xb,
+	CMD_V5V6_WRITE_GUEST_CODE = 0xc,
+	CMD_V5V6_ENABLE_FLASH_PROG = 0xf,
+};
+
+enum v7_flash_command {
 	CMD_V7_IDLE = 0x00,
 	CMD_V7_ENTER_BL,
 	CMD_V7_READ,
@@ -673,29 +561,13 @@ enum v7_flash_command2 {
 	CMD_V7_SENSOR_ID,
 };
 
-enum v7_flash_command {
-	v7_CMD_IDLE = 0,
-	v7_CMD_WRITE_FW,
-	v7_CMD_WRITE_CONFIG,
-	v7_CMD_WRITE_LOCKDOWN,
-	v7_CMD_WRITE_GUEST_CODE,
-	v7_CMD_READ_CONFIG,
-	v7_CMD_ERASE_ALL,
-	v7_CMD_ERASE_UI_FIRMWARE,
-	v7_CMD_ERASE_UI_CONFIG,
-	v7_CMD_ERASE_BL_CONFIG,
-	v7_CMD_ERASE_DISP_CONFIG,
-	v7_CMD_ERASE_FLASH_CONFIG,
-	v7_CMD_ERASE_GUEST_CODE,
-	v7_CMD_ENABLE_FLASH_PROG,
-};
-
-enum v7_config_area {
-	v7_UI_CONFIG_AREA = 0,
-	v7_PM_CONFIG_AREA,
-	v7_BL_CONFIG_AREA,
-	v7_DP_CONFIG_AREA,
-	v7_FLASH_CONFIG_AREA,
+enum config_area {
+	UI_CONFIG_AREA = 0,
+	PM_CONFIG_AREA,
+	BL_CONFIG_AREA,
+	DP_CONFIG_AREA,
+	FLASH_CONFIG_AREA,
+	UPP_AREA,
 };
 
 enum v7_partition_id {
@@ -709,6 +581,16 @@ enum v7_partition_id {
 	CORE_CONFIG_PARTITION,
 	GUEST_CODE_PARTITION,
 	DISPLAY_CONFIG_PARTITION,
+	EXTERNAL_TOUCH_AFE_CONFIG_PARTITION,
+	UTILITY_PARAMETER_PARTITION,
+};
+
+enum f35_flash_command {
+	CMD_F35_IDLE = 0x0,
+	CMD_F35_RESERVED = 0x1,
+	CMD_F35_WRITE_CHUNK = 0x2,
+	CMD_F35_ERASE_ALL = 0x3,
+	CMD_F35_RESET = 0x10,
 };
 
 struct partition_table {
@@ -727,6 +609,12 @@ struct physical_address {
 	unsigned short ui_firmware;
 	unsigned short ui_config;
 	unsigned short dp_config;
+	unsigned short pm_config;
+	unsigned short fl_config;
+	unsigned short bl_image;
+	unsigned short bl_config;
+	unsigned short utility_param;
+	unsigned short lockdown;
 	unsigned short guest_code;
 };
 
@@ -734,11 +622,14 @@ struct block_count {
 	unsigned short ui_firmware;
 	unsigned short ui_config;
 	unsigned short dp_config;
-	unsigned short fl_config;
 	unsigned short pm_config;
+	unsigned short fl_config;
+	unsigned short bl_image;
 	unsigned short bl_config;
+	unsigned short utility_param;
 	unsigned short lockdown;
 	unsigned short guest_code;
+	unsigned short total_count;
 };
 
 struct f34_v7_query_0 {
@@ -865,19 +756,24 @@ enum update_mode {
 };
 
 enum flash_command {
-	CMD_IDLE = 0x0,
-	CMD_WRITE_FW_BLOCK = 0x2,
-	CMD_ERASE_ALL = 0x3,
-	CMD_WRITE_LOCKDOWN_BLOCK = 0x4,
-	CMD_READ_CONFIG_BLOCK = 0x5,
-	CMD_WRITE_CONFIG_BLOCK = 0x6,
-	CMD_ERASE_CONFIG = 0x7,
-	CMD_READ_SENSOR_ID = 0x8,
-	CMD_ERASE_BL_CONFIG = 0x9,
-	CMD_ERASE_DISP_CONFIG = 0xA,
-	CMD_ERASE_GUEST_CODE = 0xB,
-	CMD_WRITE_GUEST_CODE = 0xC,
-	CMD_ENABLE_FLASH_PROG = 0xF
+	CMD_IDLE = 0,
+	CMD_WRITE_FW,
+	CMD_WRITE_CONFIG,
+	CMD_WRITE_LOCKDOWN,
+	CMD_WRITE_GUEST_CODE,
+	CMD_WRITE_BOOTLOADER,
+	CMD_WRITE_UTILITY_PARAM,
+	CMD_READ_CONFIG,
+	CMD_ERASE_ALL,
+	CMD_ERASE_UI_FIRMWARE,
+	CMD_ERASE_UI_CONFIG,
+	CMD_ERASE_BL_CONFIG,
+	CMD_ERASE_DISP_CONFIG,
+	CMD_ERASE_FLASH_CONFIG,
+	CMD_ERASE_GUEST_CODE,
+	CMD_ERASE_BOOTLOADER,
+	CMD_ERASE_UTILITY_PARAMETER,
+	CMD_ENABLE_FLASH_PROG,
 };
 
 struct img_x0x6_header {
@@ -926,9 +822,8 @@ enum img_x10_container_id {
 };
 
 struct block_data {
-	// for v7
-	unsigned char *data;
-	int size;
+	const unsigned char *data;
+	unsigned int size;
 };
 
 #define PRODUCT_INFO_SIZE 2
@@ -1033,9 +928,11 @@ struct image_header_10 {
 struct image_metadata {
 	bool contains_firmware_id;
 	bool contains_bootloader;
-	bool contains_disp_config;
 	bool contains_guest_code;
+	bool contains_disp_config;
+	bool contains_perm_config;
 	bool contains_flash_config;
+	bool contains_utility_param;
 	unsigned int firmware_id;
 	unsigned int checksum;
 	unsigned int bootloader_size;
@@ -1043,12 +940,17 @@ struct image_metadata {
 	unsigned char bl_version;
 	unsigned char product_id[PRODUCT_ID_SIZE + 1];
 	unsigned char cstmr_product_id[PRODUCT_ID_SIZE + 1];
+	unsigned char utility_param_id[MAX_UTILITY_PARAMS];
 	struct block_data bootloader;
+	struct block_data utility;
 	struct block_data ui_firmware;
 	struct block_data ui_config;
 	struct block_data dp_config;
+	struct block_data pm_config;
 	struct block_data fl_config;
+	struct block_data bl_image;
 	struct block_data bl_config;
+	struct block_data utility_param[MAX_UTILITY_PARAMS];
 	struct block_data guest_code;
 	struct block_data lockdown;
 	struct block_count blkcount;
@@ -1117,6 +1019,31 @@ struct pdt_properties {
 		unsigned char data[1];
 	};
 };
+struct f34_v5v6_flash_properties_2 {
+	union {
+		struct {
+			unsigned char has_guest_code:1;
+			unsigned char reserved:7;
+		} __packed;
+		unsigned char data[1];
+	};
+};
+
+struct f34_v5v6_flash_properties {
+	union {
+		struct {
+			unsigned char reg_map:1;
+			unsigned char unlocked:1;
+			unsigned char has_config_id:1;
+			unsigned char has_pm_config:1;
+			unsigned char has_bl_config:1;
+			unsigned char has_disp_config:1;
+			unsigned char has_ctrl1:1;
+			unsigned char has_query4:1;
+		} __packed;
+		unsigned char data[1];
+	};
+};
 
 struct synaptics_rmi4_fwu_handle {
 	enum bl_version bl_version;
@@ -1126,7 +1053,9 @@ struct synaptics_rmi4_fwu_handle {
 	bool has_bl_config;
 	bool has_disp_config;
 	bool has_guest_code;
+	bool has_utility_param;
 	bool force_update;
+	bool in_ub_mode;
 	bool in_flash_prog_mode;
 	bool do_lockdown;
 	bool can_guest_bootloader;
@@ -1137,6 +1066,7 @@ struct synaptics_rmi4_fwu_handle {
 	unsigned char command;
 	unsigned char bootloader_id[4];
 	unsigned char bootloader_id_ic[2];
+	unsigned char config_id[32];
 	unsigned char flash_status;
 	unsigned char productinfo1;
 	unsigned char productinfo2;
@@ -1157,13 +1087,16 @@ struct synaptics_rmi4_fwu_handle {
 	unsigned short guest_code_block_count;
 	unsigned short config_size;
 	unsigned short config_area;
+	bool write_bootloader;
 	char product_id[SYNAPTICS_RMI4_PRODUCT_ID_SIZE + 1];
 
-	struct synaptics_rmi4_f34_query_01 flash_properties;
+//	struct synaptics_rmi4_f34_query_01 flash_properties;
+	struct f34_v5v6_flash_properties flash_properties;
 	struct workqueue_struct *fwu_workqueue;
 	struct delayed_work fwu_work;
 	struct synaptics_rmi4_fn_desc f01_fd;
 	struct synaptics_rmi4_fn_desc f34_fd;
+	struct synaptics_rmi4_fn_desc f35_fd;
 	struct synaptics_rmi4_data *rmi4_data;
 	struct img_file_content img;
 	bool polling_mode;
@@ -1171,18 +1104,20 @@ struct synaptics_rmi4_fwu_handle {
 
 	unsigned short flash_config_length;
 	unsigned short payload_length;
+	unsigned char payload_off;
 	struct register_offset off;
 	unsigned char partitions;
 	unsigned short partition_table_bytes;
 	unsigned short read_config_buf_size;
 	struct block_count blkcount;
 	struct physical_address phyaddr;
-	struct image_metadata v7_img;
+	struct image_metadata img_data;
 	bool new_partition_table;
+	bool incompatible_partition_tables;
 	const unsigned char *config_data;
-//	const unsigned char *image;
 	unsigned char *image;
 	bool in_bl_mode;
+	bool bl_mode_device;
 };
 
 #ifdef FACTORY_MODE
@@ -1246,30 +1181,36 @@ enum f54_report_types {
 	F54_16BIT_IMAGE = 2,
 	F54_RAW_16BIT_IMAGE = 3,
 	F54_HIGH_RESISTANCE = 4,
-	F54_TX_TO_TX_SHORT = 5,
-	F54_RX_TO_RX1 = 7,
+	F54_TX_TO_TX_SHORTS = 5,
+	F54_RX_TO_RX_SHORTS_1 = 7,
 	F54_TRUE_BASELINE = 9,
 	F54_FULL_RAW_CAP_MIN_MAX = 13,
-	F54_RX_OPENS1 = 14,
-	F54_TX_OPEN = 15,
-	F54_TX_TO_GROUND = 16,
-	F54_RX_TO_RX2 = 17,
-	F54_RX_OPENS2 = 18,
+	F54_RX_OPENS_1 = 14,
+	F54_TX_OPENS = 15,
+	F54_TX_TO_GND_SHORTS = 16,
+	F54_RX_TO_RX_SHORTS_2 = 17,
+	F54_RX_OPENS_2 = 18,
 	F54_FULL_RAW_CAP = 19,
-	F54_FULL_RAW_CAP_RX_COUPLING_COMP = 20,
+	F54_FULL_RAW_CAP_NO_RX_COUPLING = 20,
 	F54_SENSOR_SPEED = 22,
 	F54_ADC_RANGE = 23,
-	F54_TREX_OPENS = 24,
-	F54_TREX_TO_GND = 25,
-	F54_TREX_SHORTS = 26,
-	F54_ABS_CAP = 38,
-	F54_ABS_DELTA = 40,
-	F54_ABS_ADC = 42,
+	F54_TRX_OPENS = 24,
+	F54_TRX_TO_GND_SHORTS = 25,
+	F54_TRX_SHORTS = 26,
+	F54_ABS_RAW_CAP = 38,
+	F54_ABS_DELTA_CAP = 40,
+	F54_ABS_HYBRID_DELTA_CAP = 59,
+	F54_ABS_HYBRID_RAW_CAP = 63,
+	F54_AMP_FULL_RAW_CAP = 78,
+	F54_AMP_RAW_ADC = 83,
+	F54_FULL_RAW_CAP_TDDI = 92,
+	F54_TRX_SHORT_TDDI = 95,
 	INVALID_REPORT_TYPE = -1,
 };
 
 struct synaptics_rmi4_f54_handle {
 	bool no_auto_cal;
+	bool skip_preparation;
 	unsigned char status;
 	unsigned char intr_mask;
 	unsigned char intr_reg_num;
@@ -1283,6 +1224,10 @@ struct synaptics_rmi4_f54_handle {
 	unsigned short fifoindex;
 	unsigned int report_size;
 	unsigned int data_buffer_size;
+	unsigned int data_pos;
+	unsigned char swap_sensor_side;
+	unsigned char left_mux_size;
+	unsigned char right_mux_size;
 	enum f54_report_types report_type;
 	struct mutex status_mutex;
 	struct mutex data_mutex;
@@ -1293,12 +1238,14 @@ struct synaptics_rmi4_f54_handle {
 	struct f54_query_16 query_16;
 	struct f54_query_21 query_21;
 	struct f54_query_22 query_22;
+	struct f54_query_23 query_23;
 	struct f54_query_25 query_25;
 	struct f54_query_27 query_27;
 	struct f54_query_29 query_29;
 	struct f54_query_30 query_30;
 	struct f54_query_32 query_32;
 	struct f54_query_33 query_33;
+	struct f54_query_35 query_35;
 	struct f54_query_36 query_36;
 	struct f54_query_38 query_38;
 	struct f54_query_39 query_39;
@@ -1309,7 +1256,7 @@ struct synaptics_rmi4_f54_handle {
 	struct f54_query_49 query_49;
 	struct f54_query_50 query_50;
 	struct f54_query_51 query_51;
-	struct f54_query_55 query_55;
+	struct f54_data_31 data_31;
 	struct f54_control control;
 #ifdef FACTORY_MODE
 	struct factory_data *factory_data;
@@ -1322,6 +1269,35 @@ struct synaptics_rmi4_f54_handle {
 	struct synaptics_rmi4_data *rmi4_data;
 };
 
+struct synaptics_rmi4_f55_handle {
+	bool amp_sensor;
+	bool extended_amp;
+	bool has_force;
+	unsigned char size_of_column2mux;
+	unsigned char afe_mux_offset;
+	unsigned char force_tx_offset;
+	unsigned char force_rx_offset;
+	unsigned char *tx_assignment;
+	unsigned char *rx_assignment;
+	unsigned char *force_tx_assignment;
+	unsigned char *force_rx_assignment;
+	unsigned short query_base_addr;
+	unsigned short control_base_addr;
+	unsigned short data_base_addr;
+	unsigned short command_base_addr;
+	struct f55_query query;
+	struct f55_query_3 query_3;
+	struct f55_query_5 query_5;
+	struct f55_query_17 query_17;
+	struct f55_query_18 query_18;
+	struct f55_query_22 query_22;
+	struct f55_query_23 query_23;
+	struct f55_query_28 query_28;
+	struct f55_query_30 query_30;
+	struct f55_query_33 query_33;
+	struct synaptics_rmi4_data *rmi4_data;
+};
+
 struct rmidev_data {
 	int ref_count;
 	struct cdev main_dev;
@@ -1331,11 +1307,16 @@ struct rmidev_data {
 
 struct rmidev_handle {
 	dev_t dev_no;
+	pid_t pid;
 	struct device dev;
 	struct kobject *attr_dir;
 	struct rmidev_data dev_data;
+	unsigned char intr_mask;
 	bool irq_enabled;
+	struct siginfo interrupt_signal;
+	struct siginfo terminate_signal;
 	struct synaptics_rmi4_data *rmi4_data;
+	struct task_struct *task;
 };
 
 #ifdef PRINT_DEBUG_INFO
@@ -1410,15 +1391,23 @@ struct synaptics_rmi4_data {
 	struct mutex rmi4_reset_mutex;
 	struct mutex rmi4_io_ctrl_mutex;
 	struct mutex rmi4_reflash_mutex;
+	struct mutex rmi4_irq_enable_mutex;
 	struct timer_list f51_finger_timer;
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	struct early_suspend early_suspend;
 #endif
+#ifdef CONFIG_FB
+	struct notifier_block fb_notifier;
+	struct work_struct reset_work;
+	struct workqueue_struct *reset_workqueue;
+#endif
 	const char *firmware_name;
-
+#ifdef CONFIG_FB
+	bool fb_ready;
+#endif
 	struct completion init_done;
 	struct synaptics_finger finger[MAX_NUMBER_OF_FINGERS];
-
+	unsigned short i2c_addr;
 	unsigned char button_0d_enabled;
 	unsigned char full_pm_cycle;
 	unsigned char num_of_rx;
@@ -1426,6 +1415,7 @@ struct synaptics_rmi4_data {
 	unsigned int num_of_node;
 	unsigned char num_of_fingers;
 	unsigned char max_touch_width;
+	unsigned char no_sleep_setting;
 	unsigned char intr_mask[MAX_INTR_REGISTERS];
 	unsigned short num_of_intr_regs;
 	unsigned char *button_txrx_mapping;
@@ -1456,6 +1446,10 @@ struct synaptics_rmi4_data {
 #ifdef USE_ACTIVE_REPORT_RATE
 	int tsp_change_report_rate;
 #endif
+#ifdef CONFIG_SEC_INCELL
+	bool is_esd;
+	struct delayed_work incell_reset_work;
+#endif
 
 	enum synaptics_product_ids product_id;			/* product id of ic */
 	unsigned char product_id_string_of_bin[SYNAPTICS_RMI4_PRODUCT_ID_SIZE + 1];
@@ -1480,18 +1474,15 @@ struct synaptics_rmi4_data {
 
 	struct synaptics_rmi4_f12_handle f12;
 	struct synaptics_rmi4_fwu_handle *fwu;
-#ifdef PROXIMITY_MODE
 	struct synaptics_rmi4_f51_handle *f51;
-#endif
 	struct synaptics_rmi4_f54_handle *f54;
+	struct synaptics_rmi4_f55_handle *f55;
 	struct rmidev_handle *rmidev;
 
 	struct delayed_work rezero_work;
 
 	struct mutex rmi4_device_mutex;
-#ifdef SIDE_TOUCH
-	unsigned char sidekey_data;
-#endif
+
 	bool use_stylus;
 #ifdef SYNAPTICS_RMI_INFORM_CHARGER
 	int ta_status;
@@ -1499,22 +1490,13 @@ struct synaptics_rmi4_data {
 	struct synaptics_rmi_callbacks callbacks;
 #endif
 	bool use_deepsleep;
-#ifdef USE_LPGW_MODE
-	bool use_lpwg_sleep;
-	struct mutex rmi4_lpgw_mutex;
-	unsigned char scrub_id;
-#endif
-#ifdef GESTURE_3FIN
-	int gesture_3fin_code;
-#endif
-	int orientation;
 	struct pinctrl *pinctrl;
 
 	int (*i2c_read)(struct synaptics_rmi4_data *pdata, unsigned short addr,
 			unsigned char *data, unsigned short length);
 	int (*i2c_write)(struct synaptics_rmi4_data *pdata, unsigned short addr,
 			unsigned char *data, unsigned short length);
-	int (*irq_enable)(struct synaptics_rmi4_data *rmi4_data, bool enable);
+	int (*irq_enable)(struct synaptics_rmi4_data *rmi4_data, bool enable, bool attn_only);
 	int (*reset_device)(struct synaptics_rmi4_data *rmi4_data);
 	int (*stop_device)(struct synaptics_rmi4_data *rmi4_data);
 	int (*start_device)(struct synaptics_rmi4_data *rmi4_data);
@@ -1568,6 +1550,7 @@ int rmi_guest_module_register(struct synaptics_rmi4_data *rmi4_data);
 int synaptics_fw_updater(struct synaptics_rmi4_data *rmi4_data, unsigned char *fw_data);
 int synaptics_rmi4_fw_update_on_probe(struct synaptics_rmi4_data *rmi4_data);
 void fwu_parse_image_header_10_simple(struct synaptics_rmi4_data *rmi4_data, unsigned char *image);
+void fwu_parse_image_header_0506_simple(struct synaptics_rmi4_data *rmi4_data);
 
 int synaptics_rmi4_f12_ctrl11_set(struct synaptics_rmi4_data *rmi4_data, unsigned char data);
 int synaptics_rmi4_set_tsp_test_result_in_config(struct synaptics_rmi4_data *rmi4_data, int value);
@@ -1576,17 +1559,11 @@ int synaptics_rmi4_access_register(struct synaptics_rmi4_data *rmi4_data,
 				bool mode, unsigned short address, int length, unsigned char *value);
 void synpatics_rmi4_release_all_event(struct synaptics_rmi4_data *rmi4_data, unsigned char type);
 
-#ifdef PROXIMITY_MODE
-int synaptics_rmi4_proximity_enables(struct synaptics_rmi4_data *rmi4_data, unsigned char enables);
-#endif
 #ifdef GLOVE_MODE
 int synaptics_rmi4_glove_mode_enables(struct synaptics_rmi4_data *rmi4_data);
 #endif
 #ifdef SYNAPTICS_RMI_INFORM_CHARGER
 extern void synaptics_tsp_register_callback(struct synaptics_rmi_callbacks *cb);
-#endif
-#ifdef USE_LPGW_MODE
-int set_lpgw_mode(struct synaptics_rmi4_data *rmi4_data, int on);
 #endif
 #ifdef USE_ACTIVE_REPORT_RATE
 int change_report_rate(struct synaptics_rmi4_data *rmi4_data, int mode);

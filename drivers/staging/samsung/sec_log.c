@@ -1,3 +1,14 @@
+/*
+ * Copyright (c) 2014 Samsung Electronics Co., Ltd.
+ *      http://www.samsung.com
+ *
+ * Samsung TN debugging code
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/bootmem.h>
@@ -6,15 +17,13 @@
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/proc_fs.h>
-
-#include <linux/sec_debug.h>
-//#include <plat/map-base.h>
-//#include <asm/mach/map.h>
-#include <asm/tlbflush.h>
-////#include <mach/regs-pmu.h>
-//#include <mach/regs-clock.h>
 #ifdef CONFIG_NO_BOOTMEM
 #include <linux/memblock.h>
+#endif
+#include <linux/sec_debug.h>
+
+#ifdef CONFIG_KNOX_KAP
+extern int boot_mode_security;
 #endif
 
 /*
@@ -25,6 +34,7 @@
  * (base - 8).
  */
 #define LOG_MAGIC 0x4d474f4c	/* "LOGM" */
+
 
 #ifdef CONFIG_SEC_AVC_LOG
 static unsigned *sec_avc_log_ptr;
@@ -202,6 +212,7 @@ late_initcall(sec_avc_log_late_init);
 
 #endif /* CONFIG_SEC_AVC_LOG */
 
+
 #ifdef CONFIG_SEC_DEBUG_TSP_LOG
 static unsigned *sec_tsp_log_ptr;
 static char *sec_tsp_log_buf;
@@ -248,7 +259,7 @@ out:
 }
 __setup("sec_tsp_log=", sec_tsp_log_setup);
 
-static int sec_tsp_log_timestamp(unsigned int idx)
+static int sec_tsp_log_timestamp(unsigned long idx)
 {
 	/* Add the current time stamp */
 	char tbuf[50];
@@ -307,8 +318,8 @@ void sec_debug_tsp_log(char *fmt, ...)
 	va_list args;
 	char buf[TSP_BUF_SIZE];
 	int len = 0;
-	unsigned int idx;
-	unsigned int size;
+	unsigned long idx;
+	unsigned long size;
 
 	/* In case of sec_tsp_log_setup is failed */
 	if (!sec_tsp_log_size)
@@ -325,10 +336,10 @@ void sec_debug_tsp_log(char *fmt, ...)
 	/* Overflow buffer size */
 	if (idx + size > sec_tsp_log_size - 1) {
 		len = scnprintf(&sec_tsp_log_buf[0],
-						size + 1, "%s", buf);
+						size + 1, "%s\n", buf);
 		*sec_tsp_log_ptr = len;
 	} else {
-		len = scnprintf(&sec_tsp_log_buf[idx], size + 1, "%s", buf);
+		len = scnprintf(&sec_tsp_log_buf[idx], size + 1, "%s\n", buf);
 		*sec_tsp_log_ptr += len;
 	}
 }
@@ -616,6 +627,9 @@ static int __init __init_sec_tsp_raw_data(void)
 	sec_tsp_raw_data_size = SEC_TSP_RAW_DATA_BUF_SIZE;
 	vaddr = kmalloc(sec_tsp_raw_data_size, GFP_KERNEL);
 
+	pr_info("%s: vaddr=0x%lx size=0x%x\n", __func__,
+		(unsigned long)vaddr, sec_tsp_raw_data_size);
+
 	if (!vaddr) {
 		pr_info("%s: ERROR! init failed!\n", __func__);
 		return -ENOMEM;
@@ -630,3 +644,36 @@ static int __init __init_sec_tsp_raw_data(void)
 fs_initcall(__init_sec_tsp_raw_data);	/* earlier than device_initcall */
 
 #endif /* CONFIG_SEC_DEBUG_TSP_LOG */
+
+#ifdef CONFIG_SEC_DEBUG_TIMA_LOG
+
+static int __init sec_tima_log_setup(char *str)
+{
+	unsigned size = memparse(str, &str);
+	unsigned long base = 0;
+	/* If we encounter any problem parsing str ... */
+	if (!size || size != roundup_pow_of_two(size) || *str != '@'
+		|| kstrtoul(str + 1, 0, &base))
+			goto out;
+
+#ifdef CONFIG_NO_BOOTMEM
+	if (memblock_is_region_reserved(base, size) ||
+		memblock_reserve(base, size)) {
+#else
+	if (reserve_bootmem(base , size, BOOTMEM_EXCLUSIVE)) {
+#endif
+			pr_err("%s: failed reserving size %d " \
+						"at base 0x%lx\n", __func__, size, base);
+			goto out;
+	}
+	pr_info("tima :%s, base:%lx, size:%x \n", __func__,base, size);
+#ifdef CONFIG_KNOX_KAP
+	if (!boot_mode_security) goto out;
+#endif
+
+	return 1;
+out:
+	return 0;
+}
+__setup("sec_tima_log=", sec_tima_log_setup);
+#endif /* CONFIG_SEC_DEBUG_TIMA_LOG */

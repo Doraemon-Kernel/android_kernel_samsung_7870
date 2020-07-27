@@ -30,7 +30,7 @@
 #include <linux/host_notify.h>
 
 #include <linux/muic/muic.h>
-#include <linux/mfd/muic_mfd.h>
+#include <linux/muic/muic_afc.h>
 
 #if defined(CONFIG_MUIC_NOTIFIER)
 #include <linux/muic/muic_notifier.h>
@@ -40,7 +40,7 @@
 #include <linux/vbus_notifier.h>
 #endif /* CONFIG_VBUS_NOTIFIER */
 
-#if defined (CONFIG_OF)
+#if defined(CONFIG_OF)
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #endif /* CONFIG_OF */
@@ -54,66 +54,62 @@
 #include "muic_debug.h"
 #include "muic_dt.h"
 #include "muic_regmap.h"
-#include "muic_coagent.h"
+#include "muic_state.h"
 
-#if defined(CONFIG_MUIC_HV)
-#include "muic_hv.h"
-#include "muic_hv_max77854.h"
-#endif
-
-#if defined(CONFIG_MUIC_SUPPORT_CCIC)
+#if defined(CONFIG_MUIC_UNIVERSAL_CCIC)
 #include "muic_ccic.h"
-#endif
-
-#if defined(CONFIG_USB_EXTERNAL_NOTIFY)
-#include "muic_usb.h"
 #endif
 
 #define MUIC_INT_DETACH_MASK	(0x1 << 1)
 #define MUIC_INT_ATTACH_MASK	(0x1 << 0)
+#if !defined(CONFIG_MUIC_UNIVERSAL_SM5504)
 #define MUIC_INT_OVP_EN_MASK	(0x1 << 5)
+#define MUIC_INT_VBUS_OFF_MASK	(0x1 << 0)
+#else
+#define MUIC_INT_OVP_EN_MASK	(0x1 << 7)
+#endif
+
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5504)
+#define MUIC_REG_CTRL_RESET_VALUE	(0xE5)
+#else
+#define MUIC_REG_CTRL_RESET_VALUE	(0x1F)
+#endif
 
 #define MUIC_REG_CTRL	0x02
 #define MUIC_REG_INT1	0x03
 #define MUIC_REG_INT2	0x04
+#define MUIC_REG_INT3	0x05
 
-/* Interrupt type */
-enum {
-	INT_REQ_ATTACH = 1<<0,
-	INT_REQ_DETACH = 1<<1,
-	INT_REQ_OVP = 1<<2,
-	INT_REQ_RESET = 1<<3,
-	INT_REQ_DONE = 1<<4,
-	INT_REQ_DISCARD = 1<<5,
-};
-
+static muic_data_t *tmp_pmuic;
 extern struct muic_platform_data muic_pdata;
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705_AFC)
+/* SM5705 Interrupt 3  AFC register */
+#define INT3_AFC_ERROR_SHIFT         5
+#define INT3_AFC_STA_CHG_SHIFT       4
+#define INT3_AFC_MULTI_BYTE_SHIFT    3
+#define INT3_AFC_VBUS_UPDATE_SHIFT   2
+#define INT3_AFC_ACCEPTED_SHIFT      1
+#define INT3_AFC_TA_ATTACHED_SHIFT   0
 
-extern void muic_send_dock_intent(int type);
+#define INT3_AFC_ERROR_MASK          (1 << INT3_AFC_ERROR_SHIFT)
+#define INT3_AFC_STA_CHG_MASK        (1 << INT3_AFC_STA_CHG_SHIFT)
+#define INT3_AFC_MULTI_BYTE_MASK     (1 << INT3_AFC_MULTI_BYTE_SHIFT)
+#define INT3_AFC_VBUS_UPDATE_MASK    (1 << INT3_AFC_VBUS_UPDATE_SHIFT)
+#define INT3_AFC_ACCEPTED_MASK       (1 << INT3_AFC_ACCEPTED_SHIFT)
+#define INT3_AFC_TA_ATTACHED_MASK    (1 << INT3_AFC_TA_ATTACHED_SHIFT)
 
-static bool muic_online = false;
-
-/*
- * 0 : normal, 1: abnormal
- * This flag is set by USB for an abnormal HMT and
- * cleared by MUIC on detachment.
- */
-static int muic_hmt_status;
-
-bool muic_is_online(void)
-{
-	return muic_online;
-}
-static int muic_irq_handler(muic_data_t *pmuic, int irq)
+static int muic_irq_handler_afc(muic_data_t *pmuic, int irq)
 {
 	struct i2c_client *i2c = pmuic->i2c;
-	int intr1, intr2;
+	struct afc_ops *afcops = pmuic->regmapdesc->afcops;
+	int intr1, intr2, intr3, ret;
 
 	pr_info("%s:%s irq(%d)\n", pmuic->chip_name, __func__, irq);
 
 	/* read and clear interrupt status bits */
 	intr1 = muic_i2c_read_byte(i2c, MUIC_REG_INT1);
 	intr2 = muic_i2c_read_byte(i2c, MUIC_REG_INT2);
+	intr3 = muic_i2c_read_byte(i2c, MUIC_REG_INT3);
 
 	if ((intr1 < 0) || (intr2 < 0)) {
 		pr_err("%s: err read interrupt status [1:0x%x, 2:0x%x]\n",
@@ -133,13 +129,16 @@ static int muic_irq_handler(muic_data_t *pmuic, int irq)
 		}
 		intr1 |= intr_tmp;
 	}
+	if (intr1 & MUIC_INT_DETACH_MASK) {
+		cancel_delayed_work(&pmuic->afc_retry_work);
+	}
 
-	pr_info("%s:%s intr[1:0x%x, 2:0x%x]\n", pmuic->chip_name, __func__,
-			intr1, intr2);
+	pr_info("%s:%s intr[1:0x%x, 2:0x%x, 3:0x%x]\n", pmuic->chip_name, __func__,
+			intr1, intr2, intr3);
 
 	/* check for muic reset and recover for every interrupt occurred */
 	if ((intr1 & MUIC_INT_OVP_EN_MASK) ||
-		((intr1 == 0) && (intr2 == 0) && (irq != -1)))
+		((intr1 == 0) && (intr2 == 0) && (intr3 == 0) && (irq != -1)))
 	{
 		int ctrl;
 		ctrl = muic_i2c_read_byte(i2c, MUIC_REG_CTRL);
@@ -163,87 +162,47 @@ static int muic_irq_handler(muic_data_t *pmuic, int irq)
 
 	pmuic->intr.intr1 = intr1;
 	pmuic->intr.intr2 = intr2;
+	pmuic->intr.intr3 = intr3;
+
+	if ((irq == -1) && (intr3 & INT3_AFC_TA_ATTACHED_MASK))
+	{
+		ret = muic_i2c_write_byte(i2c, 0x0F, 0x01);
+		if(ret < 0){
+			pr_err("%s: err write register value \n", __func__);
+			return INT_REQ_DISCARD;
+		}
+		return INT_REQ_DONE;
+	}
+
+	if ((intr1 & MUIC_INT_DETACH_MASK) && (intr2 & MUIC_INT_VBUS_OFF_MASK))
+		return INT_REQ_DONE;
+
+	if (intr3 & INT3_AFC_TA_ATTACHED_MASK) {  /*AFC_TA_ATTACHED*/
+		return afcops->afc_ta_attach(pmuic->regmapdesc);
+	} else if (intr3 & INT3_AFC_ACCEPTED_MASK) {  /*AFC_ACCEPTED*/
+		return afcops->afc_ta_accept(pmuic->regmapdesc);
+	} else if (intr3 & INT3_AFC_VBUS_UPDATE_MASK) {  /*AFC_VBUS_UPDATE*/
+		return afcops->afc_vbus_update(pmuic->regmapdesc);
+	} else if (intr3 & INT3_AFC_MULTI_BYTE_MASK) {  /*AFC_MULTI_BYTE*/
+		return afcops->afc_multi_byte(pmuic->regmapdesc);
+	} else if (intr3 & INT3_AFC_ERROR_MASK) {  /*AFC_ERROR*/
+		cancel_delayed_work(&pmuic->afc_retry_work);
+		return afcops->afc_error(pmuic->regmapdesc);
+	} else if (intr3 & INT3_AFC_STA_CHG_MASK) {  /*AFC_STA_CHG*/
+		return 0;
+	}
 
 	return INT_REQ_DONE;
 }
-
-enum max_intr_bits{
-	INTR1_ADC1K_MASK = (1<<3),
-	INTR1_ADCERR_MASK = (1<<2),
-	INTR1_ADC_MASK   = (1<<0),
-
-	INTR2_VBVOLT_MASK    = (1<<4),
-	INTR2_OVP_MASK       = (1<<3),
-	INTR2_DCTTMR_MASK    = (1<<2),
-	INTR2_CHGDETRUN_MASK = (1<<1),
-	INTR2_CHGTYP_MASK    = (1<<0),
-};
-
-/* Fixme. */
-enum irq_num {
-	MAX77854_MUIC_IRQ_BASE = 10,
-	/* MUIC INT1 */
-	MAX77854_MUIC_IRQ_INT1_ADC,
-	MAX77854_MUIC_IRQ_INT1_ADCERR,
-	MAX77854_MUIC_IRQ_INT1_ADC1K,
-	/* MUIC INT2 */
-	MAX77854_MUIC_IRQ_INT2_CHGTYP,
-	MAX77854_MUIC_IRQ_INT2_CHGDETREUN,
-	MAX77854_MUIC_IRQ_INT2_DCDTMR,
-	MAX77854_MUIC_IRQ_INT2_DXOVP,
-	MAX77854_MUIC_IRQ_INT2_VBVOLT,
-};
-
-#define MAX77854_REG_INT1 (0x01)
-#define MAX77854_REG_INT2 (0x02)
-
-static inline bool muis_is_vbus_int(muic_data_t *pmuic, int irq)
-{
-	int local_irq;
-
-	if(irq < 0)
-		return false;
-
-	local_irq = irq - pmuic->pdata->irq_gpio;
-	if (local_irq == MAX77854_MUIC_IRQ_INT2_VBVOLT)
-		return true;
-
-	return false;
-}
-
-void muic_set_hmt_status(int status)
-{
-	
-	pr_info("%s:%s hmt_status=[%s]\n", MUIC_DEV_NAME, __func__,
-		status ? "abnormal" : "normal");
-
-	muic_hmt_status = status;
-
-	if (status)
-		muic_send_dock_intent(MUIC_DOCK_ABNORMAL);
-}
-
-static int muic_get_hmt_status(void)
-{
-	return muic_hmt_status;
-}
-
+#else
 #if defined(CONFIG_VBUS_NOTIFIER)
 static void muic_handle_vbus(muic_data_t *pmuic)
 {
-	vbus_status_t status = pmuic->vps.t.vbvolt ?
-			STATUS_VBUS_HIGH: STATUS_VBUS_LOW;
+	vbus_status_t status;
 
-	pr_info("%s:%s <%d>\n", MUIC_DEV_NAME, __func__, pmuic->vps.t.vbvolt);
+	status = pmuic->vps.s.vbvolt ? STATUS_VBUS_HIGH: STATUS_VBUS_LOW;
 
-
-	if (pmuic->attached_dev == ATTACHED_DEV_HMT_MUIC) {
-		if (muic_get_hmt_status()) {
-			pr_info("%s:%s Abnormal HMT -> VBUS_UNKNOWN Noti.\n",
-				MUIC_DEV_NAME, __func__);
-			status = STATUS_VBUS_UNKNOWN;
-		}
-	}
+	pr_info("%s:%s <%d>\n", MUIC_DEV_NAME, __func__, status);
 
 	vbus_notifier_handle(status);
 
@@ -257,31 +216,117 @@ static void muic_handle_vbus(muic_data_t *pmuic)
 }
 #endif
 
-static irqreturn_t max77854_muic_irq_handler(muic_data_t *pmuic, int irq)
+static int muic_irq_handler(muic_data_t *pmuic, int irq)
 {
-	int local_irq;
+	struct i2c_client *i2c = pmuic->i2c;
+	int intr1, intr2, intr3, ctrl = 0;
+
+	pr_info("%s:%s irq(%d)\n", pmuic->chip_name, __func__, irq);
+
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5504)
+	/* SM5504 needs 100ms delay */
+	msleep(100);
+#endif
+
+	/* read and clear interrupt status bits */
+	intr1 = muic_i2c_read_byte(i2c, MUIC_REG_INT1);
+	intr2 = muic_i2c_read_byte(i2c, MUIC_REG_INT2);
+	intr3 = muic_i2c_read_byte(i2c, MUIC_REG_INT3);
+
+	if ((intr1 < 0) || (intr2 < 0)) {
+		pr_err("%s: err read interrupt status [1:0x%x, 2:0x%x]\n",
+				__func__, intr1, intr2);
+		return INT_REQ_DISCARD;
+	}
+
+	if (intr1 & MUIC_INT_ATTACH_MASK) {
+		int intr_tmp;
+		intr_tmp = muic_i2c_read_byte(i2c, MUIC_REG_INT1);
+		if (intr_tmp & 0x2) {
+			pr_info("%s:%s attach/detach interrupt occurred\n",
+				pmuic->chip_name, __func__);
+			intr1 &= 0xFE;
+		}
+		intr1 |= intr_tmp;
+	}
+
+	pr_info("%s:%s intr[1:0x%x, 2:0x%x, 3:0x%x]\n", pmuic->chip_name, __func__,
+			intr1, intr2, intr3);
+
+	ctrl = muic_i2c_read_byte(i2c, MUIC_REG_CTRL);
+
+	/* check for muic reset and recover for every interrupt occurred */
+	if ((intr1 & MUIC_INT_OVP_EN_MASK) ||
+		((ctrl == MUIC_REG_CTRL_RESET_VALUE) && (irq != -1))) {
+		if (ctrl == MUIC_REG_CTRL_RESET_VALUE) {
+			/* CONTROL register is reset to 1F */
+			muic_print_reg_log();
+			muic_print_reg_dump(pmuic);
+			pr_err("%s: err muic could have been reseted. Initilize!!\n",
+				__func__);
+			muic_reg_init(pmuic);
+			muic_print_reg_dump(pmuic);
+
+			/* MUIC Interrupt On */
+			set_int_mask(pmuic, false);
+		}
+
+		if ((intr1 & MUIC_INT_ATTACH_MASK) == 0)
+			return INT_REQ_DISCARD;
+	}
+
+	pmuic->intr.intr1 = intr1;
+	pmuic->intr.intr2 = intr2;
+	pmuic->intr.intr3 = intr3;
+
+	return INT_REQ_DONE;
+}
+#endif
+
+enum max_intr_bits {
+	INTR1_ADC1K_MASK = (1<<3),
+	INTR1_ADCERR_MASK = (1<<2),
+	INTR1_ADC_MASK   = (1<<0),
+
+	INTR2_VBVOLT_MASK    = (1<<4),
+	INTR2_OVP_MASK       = (1<<3),
+	INTR2_DCTTMR_MASK    = (1<<2),
+	INTR2_CHGDETRUN_MASK = (1<<1),
+	INTR2_CHGTYP_MASK    = (1<<0),
+};
+
+#define MAX77849_REG_INT1 (0x01)
+#define MAX77849_REG_INT2 (0x02)
+
+static irqreturn_t max77849_muic_irq_handler(muic_data_t *pmuic, int irq)
+{
+	u8 intr1, intr2;
 
 	pr_info("%s:%s irq:%d\n", MUIC_DEV_NAME, __func__, irq);
 
-	if (irq < 0)
-		return INT_REQ_DONE;
+	intr1 = muic_i2c_read_byte(pmuic->i2c, MAX77849_REG_INT1);
+	intr2 = muic_i2c_read_byte(pmuic->i2c, MAX77849_REG_INT2);
 
-	local_irq = irq - pmuic->pdata->irq_gpio;
+	if (intr1 & INTR1_ADC1K_MASK)
+		pr_info("%s ADC1K interrupt occured\n", __func__);
 
-	switch (local_irq) {
-	case MAX77854_MUIC_IRQ_INT2_DXOVP:
-		pr_info("%s OVP interrupt occured\n",__func__);
-		return INT_REQ_OVP;
+	if (intr1 & INTR1_ADCERR_MASK)
+		pr_info("%s ADC1K interrupt occured\n", __func__);
 
-	case MAX77854_MUIC_IRQ_INT2_DCDTMR:
-		pr_info("%s DCTTMR interrupt occured\n",__func__);
-#ifndef CONFIG_SEC_FACTORY
-		pmuic->is_dcdtmr_intr = true;
-#endif
-		break;
-	default:
-		break;
-	}
+	if (intr1 & INTR1_ADCERR_MASK)
+		pr_info("%s ADCERR interrupt occured\n", __func__);
+
+	if (intr2 & INTR2_VBVOLT_MASK)
+		pr_info("%s VBVOLT interrupt occured\n", __func__);
+
+	if (intr2 & INTR2_OVP_MASK)
+		pr_info("%s OVP interrupt occured\n", __func__);
+
+	if (intr2 & INTR2_DCTTMR_MASK)
+		pr_info("%s DCTTMR interrupt occured\n", __func__);
+
+	if (intr2 & INTR2_CHGTYP_MASK)
+		pr_info("%s DCTTMR interrupt occured\n", __func__);
 
 	return INT_REQ_DONE;
 }
@@ -291,16 +336,22 @@ static irqreturn_t muic_irq_thread(int irq, void *data)
 	muic_data_t *pmuic = data;
 
 	mutex_lock(&pmuic->muic_mutex);
-
-	if(pmuic->vps_table == VPS_TYPE_TABLE) {
-		if(max77854_muic_irq_handler(pmuic, irq) & INT_REQ_DONE) {
-			muic_detect_dev(pmuic, irq);
-			if (muis_is_vbus_int(pmuic, irq))
-				muic_handle_vbus(pmuic);
+	pmuic->irq_n = irq;
+	if (pmuic->vps_table == VPS_TYPE_TABLE) {
+		if (max77849_muic_irq_handler(pmuic, irq) & INT_REQ_DONE) {
+			muic_detect_dev(pmuic);
+			muic_handle_vbus(pmuic);
 		}
 	} else{
-		if (muic_irq_handler(pmuic, irq) & INT_REQ_DONE)
-			muic_detect_dev(pmuic, irq);
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705_AFC)
+		if (muic_irq_handler_afc(pmuic, irq) & INT_REQ_DONE)
+			muic_detect_dev(pmuic);
+#else
+		if (muic_irq_handler(pmuic, irq) & INT_REQ_DONE) {
+			muic_detect_dev(pmuic);
+			muic_handle_vbus(pmuic);
+		}
+#endif
 	}
 
 	mutex_unlock(&pmuic->muic_mutex);
@@ -308,16 +359,22 @@ static irqreturn_t muic_irq_thread(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static void muic_init_detect(muic_data_t *pmuic)
+static void muic_init_detect(struct work_struct *work)
 {
+	muic_data_t *pmuic =
+		container_of(work, muic_data_t, init_work.work);
+
 	pr_info("%s:%s\n", pmuic->chip_name, __func__);
 
-	pmuic->is_muic_ready = true;
+	/* MUIC Interrupt On */
+	set_int_mask(pmuic, false);
+
 	muic_irq_thread(-1, pmuic);
 }
 
 static int muic_irq_init(muic_data_t *pmuic)
 {
+	struct i2c_client *i2c = pmuic->i2c;
 	struct muic_platform_data *pdata = pmuic->pdata;
 	int ret = 0;
 
@@ -329,98 +386,32 @@ static int muic_irq_init(muic_data_t *pmuic)
 		return -ENXIO;
 	}
 
-	if(!strcmp(pmuic->chip_name,"max,max77854")) {
-		int irq_adc1k, irq_adcerr, irq_adc, irq_chgtyp, irq_vbvolt;
-#if defined(CONFIG_MUIC_SUPPORT_CCIC)
-		/* type C needs checking dcd tmr interrupt */
-		int irq_dcdtmr;
-#endif
+	i2c->irq = gpio_to_irq(pdata->irq_gpio);
 
-		irq_adc1k = pdata->irq_gpio + MAX77854_MUIC_IRQ_INT1_ADC1K;
-		printk(" %s requesting irq no = %d\n",__func__,irq_adc1k);
-		ret = request_threaded_irq(irq_adc1k, NULL,
-                        muic_irq_thread, (IRQF_TRIGGER_FALLING | IRQF_ONESHOT),
-                        "muic-irq", pmuic);
-
-		irq_adcerr = pdata->irq_gpio + MAX77854_MUIC_IRQ_INT1_ADCERR;
-		printk(" %s requesting irq no = %d\n",__func__,irq_adcerr);
-		ret = request_threaded_irq(irq_adcerr, NULL,
-                        muic_irq_thread, (IRQF_TRIGGER_FALLING | IRQF_ONESHOT),
-                        "muic-irq", pmuic);
-		irq_adc = pdata->irq_gpio + MAX77854_MUIC_IRQ_INT1_ADC;
-		printk(" %s requesting irq no = %d\n",__func__,irq_adc);
-		ret = request_threaded_irq(irq_adc, NULL,
-                        muic_irq_thread, (IRQF_TRIGGER_FALLING | IRQF_ONESHOT),
-                        "muic-irq", pmuic);
-		irq_chgtyp = pdata->irq_gpio + MAX77854_MUIC_IRQ_INT2_CHGTYP;
-		printk(" %s requesting irq no = %d\n",__func__,irq_chgtyp);
-		ret = request_threaded_irq(irq_chgtyp, NULL,
-                        muic_irq_thread, (IRQF_TRIGGER_FALLING | IRQF_ONESHOT),
-                        "muic-irq", pmuic);
-		irq_vbvolt = pdata->irq_gpio + MAX77854_MUIC_IRQ_INT2_VBVOLT;
-		printk(" %s requesting irq no = %d\n",__func__,irq_vbvolt);
-		ret = request_threaded_irq(irq_vbvolt, NULL,
-                        muic_irq_thread, (IRQF_TRIGGER_FALLING | IRQF_ONESHOT),
-                        "muic-irq", pmuic);
-#if defined(CONFIG_MUIC_SUPPORT_CCIC)
-		irq_dcdtmr = pdata->irq_gpio + MAX77854_MUIC_IRQ_INT2_DCDTMR;
-		printk(" %s requesting irq no = %d\n",__func__,irq_dcdtmr);
-		ret = request_threaded_irq(irq_dcdtmr, NULL,
-                        muic_irq_thread, (IRQF_TRIGGER_FALLING | IRQF_ONESHOT),
-                        "muic-irq", pmuic);
-#endif
-
-		pmuic->irqs.irq_adc1k = irq_adc1k;
-		pmuic->irqs.irq_adcerr = irq_adcerr;
-		pmuic->irqs.irq_adc = irq_adc;
-		pmuic->irqs.irq_chgtyp = irq_chgtyp;
-		pmuic->irqs.irq_vbvolt = irq_vbvolt;
-#if defined(CONFIG_MUIC_SUPPORT_CCIC)
-		pmuic->irqs.irq_dcdtmr = irq_dcdtmr;
-#endif
-
-	}
-	else
-		ret = request_threaded_irq(pdata->irq_gpio, NULL,
+	if (i2c->irq) {
+		ret = request_threaded_irq(i2c->irq, NULL,
 				muic_irq_thread,
 				(IRQF_TRIGGER_FALLING | IRQF_ONESHOT),
 				"muic-irq", pmuic);
-	if (ret < 0) {
-		pr_err("%s:%s failed to reqeust IRQ(%d)\n",
-				pmuic->chip_name, __func__, pdata->irq_gpio);
-		return ret;
+		if (ret < 0) {
+			pr_err("%s:%s failed to reqeust IRQ(%d)\n",
+					pmuic->chip_name, __func__, i2c->irq);
+			return ret;
+		}
+
+		ret = enable_irq_wake(i2c->irq);
+		if (ret < 0)
+			pr_err("%s:%s failed to enable wakeup src\n",
+					pmuic->chip_name, __func__);
 	}
 
 	return ret;
 }
 
-#define FREE_IRQ(_irq, _dev_id, _name)					\
-do {									\
-	if (_irq) {							\
-		free_irq(_irq, _dev_id);				\
-		pr_info("%s:%s IRQ(%d):%s free done\n", MUIC_DEV_NAME,	\
-				__func__, _irq, _name);			\
-	}								\
-} while (0)
-static void muic_free_irqs(muic_data_t *pmuic)
+static int muic_probe(struct i2c_client *i2c,
+				const struct i2c_device_id *id)
 {
-	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
-
-	/* free MUIC IRQ */
-	FREE_IRQ(pmuic->irqs.irq_vbvolt, pmuic, "muic-vbvolt");
-	FREE_IRQ(pmuic->irqs.irq_chgtyp, pmuic, "muic-chgtyp");
-	FREE_IRQ(pmuic->irqs.irq_adc, pmuic, "muic-adc");
-	FREE_IRQ(pmuic->irqs.irq_adcerr, pmuic, "muic-adcerr");
-	FREE_IRQ(pmuic->irqs.irq_adc1k, pmuic, "muic-adc1k");
-#if defined(CONFIG_MUIC_SUPPORT_CCIC)
-	FREE_IRQ(pmuic->irqs.irq_dcdtmr, pmuic, "muic-dcdtmr");
-#endif
-}
-
-static int muic_probe(struct platform_device *pdev)
-{
-	struct muic_mfd_dev *pmfd = dev_get_drvdata(pdev->dev.parent);
-	struct muic_mfd_platform_data *mfd_pdata = dev_get_platdata(pmfd->dev);
+	struct i2c_adapter *adapter = to_i2c_adapter(i2c->dev.parent);
 	struct muic_platform_data *pdata = &muic_pdata;
 	muic_data_t *pmuic;
 	struct regmap_desc *pdesc = NULL;
@@ -429,6 +420,12 @@ static int muic_probe(struct platform_device *pdev)
 
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
 
+	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA)) {
+		pr_err("%s: i2c functionality check error\n", __func__);
+		ret = -EIO;
+		goto err_return;
+	}
+
 	pmuic = kzalloc(sizeof(muic_data_t), GFP_KERNEL);
 	if (!pmuic) {
 		pr_err("%s: failed to allocate driver data\n", __func__);
@@ -436,18 +433,29 @@ static int muic_probe(struct platform_device *pdev)
 		goto err_return;
 	}
 
+	i2c->dev.platform_data = pdata;
+
+	i2c_set_clientdata(i2c, pmuic);
 
 #if defined(CONFIG_OF)
-	ret = of_muic_dt(pmfd->i2c, pdata, pmuic);
+	ret = of_muic_dt(i2c, pdata);
 	if (ret < 0) {
 		pr_err("%s:%s Failed to get device of_node \n",
 				MUIC_DEV_NAME, __func__);
 		goto err_io;
 	}
 
-	of_update_supported_list(pmfd->i2c, pdata);
-	vps_show_table();
+#if defined(CONFIG_MUIC_PINCTRL)
+	ret = of_muic_pinctrl(i2c);
+	if (ret < 0) {
+		pr_err("%s:%s Failed to set pinctrl\n",
+				MUIC_DEV_NAME, __func__);
+		goto err_io;
+	}
+#endif
 
+	of_update_supported_list(i2c, pdata);
+	vps_show_table();
 #endif /* CONFIG_OF */
 	if (!pdata) {
 		pr_err("%s: failed to get i2c platform data\n", __func__);
@@ -457,23 +465,16 @@ static int muic_probe(struct platform_device *pdev)
 
 	mutex_init(&pmuic->muic_mutex);
 
+	tmp_pmuic = pmuic;
 	pmuic->pdata = pdata;
-
-	pdata->irq_gpio = mfd_pdata->irq_base;
-	pr_info("%s:  muic irq_gpio = %d\n", __func__, pdata->irq_gpio);
-	pr_info("%s:  muic i2c client %s at 0x%02x\n", __func__, pmfd->muic->name, pmfd->muic->addr);
-	pr_info("%s: mfd i2c client %s at 0x%02x\n", __func__, pmfd->i2c->name, pmfd->i2c->addr);
-	pr_info("%s: fuel i2c client %s at 0x%02x\n", __func__, pmfd->fuel->name, pmfd->fuel->addr);
-	pr_info("%s: chg  i2c client %s at 0x%02x\n", __func__, pmfd->chg->name, pmfd->chg->addr);
-	pmuic->i2c = pmfd->muic;
-
+	pmuic->i2c = i2c;
 	pmuic->is_factory_start = false;
 	pmuic->is_otg_test = false;
 	pmuic->attached_dev = ATTACHED_DEV_UNKNOWN_MUIC;
-	pmuic->is_gamepad = false;
+	pmuic->is_usb_ready = false;
 	pmuic->is_dcdtmr_intr = false;
-
-	if(!strcmp(pmuic->chip_name,"max,max77854"))
+	pmuic->is_rescanned = false;
+	if (!strcmp(pmuic->chip_name, "max,max77849"))
 		pmuic->vps_table = VPS_TYPE_TABLE;
 	else
 		pmuic->vps_table = VPS_TYPE_SCATTERED;
@@ -499,8 +500,6 @@ static int muic_probe(struct platform_device *pdev)
 	if (pmuic->pdata->init_switch_dev_cb)
 		pmuic->pdata->init_switch_dev_cb();
 
-	pr_info("  switch_sel : 0x%04x\n", get_switch_sel());
-
 	if (!(get_switch_sel() & SWITCH_SEL_RUSTPROOF_MASK)) {
 		pr_info("  Enable rustproof mode\n");
 		pmuic->is_rustproof = true;
@@ -509,35 +508,25 @@ static int muic_probe(struct platform_device *pdev)
 		pmuic->is_rustproof = false;
 	}
 
-	if (get_afc_mode() == CH_MODE_AFC_DISABLE_VAL) {
-		pr_info("  AFC mode disabled\n");
-		pmuic->pdata->afc_disable = true;
-	} else {
-		pr_info("  AFC mode enabled\n");
-		pmuic->pdata->afc_disable = false;
-	}
-
 	/* Register chipset register map. */
 	muic_register_regmap(&pdesc, pmuic);
 	pdesc->muic = pmuic;
 	pops = pdesc->regmapops;
 	pmuic->regmapdesc = pdesc;
 
-#if defined(CONFIG_MUIC_SUPPORT_CCIC)
+#if defined(CONFIG_MUIC_UNIVERSAL_CCIC)
+	pmuic->rprd = false;
+
 	pmuic->opmode = get_ccic_info() & 0x0F;
-	pmuic->afc_water_disable = false;
-	pmuic->afc_tsub_disable = false;
-	pmuic->is_ccic_attach = false;
-	pmuic->is_ccic_afc_enable = 0;
-	pmuic->is_ccic_rp56_enable = false;
 #endif
+
 	/* set switch device's driver_data */
 	dev_set_drvdata(switch_device, pmuic);
-	dev_set_drvdata(&pdev->dev, pmuic);
+
 	/* create sysfs group */
 	ret = sysfs_create_group(&switch_device->kobj, &muic_sysfs_group);
 	if (ret) {
-		pr_err("%s: failed to create max77854 muic attribute group\n",
+		pr_err("%s: failed to create sm5703 muic attribute group\n",
 			__func__);
 		goto fail;
 	}
@@ -558,34 +547,24 @@ static int muic_probe(struct platform_device *pdev)
 	pops->update(pdesc);
 	pops->show(pdesc);
 
-#if defined(CONFIG_MUIC_HV)
-	hv_initialize(pmuic, &pmuic->phv);
-	of_muic_hv_dt(pmuic);
-	hv_configure_AFC(pmuic->phv);
+	ret = muic_irq_init(pmuic);
+	if (ret) {
+		pr_err("%s: failed to init muic irq(%d)\n", __func__, ret);
+		goto fail_init_irq;
+	}
+
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705_AFC)
+	muic_init_afc_state(pmuic);
 #endif
-
-	coagent_update_ctx(pmuic);
-
-	muic_irq_init(pmuic);
-
 	/* initial cable detection */
-	muic_init_detect(pmuic);
-
-#if defined(CONFIG_MUIC_HV)
-	pmuic->phv->is_muic_ready = true;
-
-	printk("%s: is_afc_muic_ready=%d\n", __func__, pmuic->phv->is_afc_muic_ready);
-	if (pmuic->phv->is_afc_muic_ready)
-		max77854_hv_muic_init_detect(pmuic->phv);
-#endif
-
+	INIT_DELAYED_WORK(&pmuic->init_work, muic_init_detect);
+	schedule_delayed_work(&pmuic->init_work, msecs_to_jiffies(300));
 #ifdef DEBUG_MUIC
 	INIT_DELAYED_WORK(&pmuic->usb_work, muic_show_debug_info);
 	schedule_delayed_work(&pmuic->usb_work, msecs_to_jiffies(10000));
 #endif
 
-
-#if defined(CONFIG_MUIC_SUPPORT_CCIC)
+#if defined(CONFIG_MUIC_UNIVERSAL_CCIC)
 	muic_is_ccic_supported_jig(pmuic, pmuic->attached_dev);
 
 	if (pmuic->opmode & OPMODE_CCIC)
@@ -594,13 +573,11 @@ static int muic_probe(struct platform_device *pdev)
 		pr_info("%s: OPMODE_MUIC. CCIC is not used.\n", __func__);
 #endif
 
-#if defined(CONFIG_USB_EXTERNAL_NOTIFY)
-	muic_register_usb_notifier(pmuic);
-#endif
-	muic_online =  true;
-
 	return 0;
 
+fail_init_irq:
+	if (i2c->irq)
+		free_irq(i2c->irq, pmuic);
 fail:
 	if (pmuic->pdata->cleanup_switch_dev_cb)
 		pmuic->pdata->cleanup_switch_dev_cb();
@@ -608,24 +585,38 @@ fail:
 	mutex_unlock(&pmuic->muic_mutex);
 	mutex_destroy(&pmuic->muic_mutex);
 fail_init_gpio:
-
+	i2c_set_clientdata(i2c, NULL);
 err_io:
 	kfree(pmuic);
 err_return:
 	return ret;
 }
 
-static int __devexit muic_remove(struct platform_device *pdev)
+void muic_detect_dev_for_wcin(void)
 {
-	muic_data_t *pmuic = platform_get_drvdata(pdev);
+	pr_info("%s:%s wcin irq\n", MUIC_DEV_NAME, __func__);
+	tmp_pmuic->is_dcdtmr_intr = false;
+	tmp_pmuic->is_rescanned = false;
+	muic_detect_dev(tmp_pmuic);
+}
+
+void muic_detect_dev_for_nobat(void)
+{
+	pr_info("%s:%s nobat irq\n", MUIC_DEV_NAME, __func__);
+	tmp_pmuic->attached_dev = ATTACHED_DEV_NONE_MUIC;
+	detach_ta(tmp_pmuic);
+	muic_notifier_detach_attached_dev(tmp_pmuic->attached_dev);
+	muic_detect_dev(tmp_pmuic);
+}
+
+static int muic_remove(struct i2c_client *i2c)
+{
+	muic_data_t *pmuic = i2c_get_clientdata(i2c);
+
 	sysfs_remove_group(&switch_device->kobj, &muic_sysfs_group);
 
 	if (pmuic) {
 		pr_info("%s:%s\n", pmuic->chip_name, __func__);
-
-#if defined(CONFIG_MUIC_HV)
-		max77854_hv_muic_remove(pmuic->phv);
-#endif
 		cancel_delayed_work(&pmuic->init_work);
 		cancel_delayed_work(&pmuic->usb_work);
 		disable_irq_wake(pmuic->i2c->irq);
@@ -634,57 +625,34 @@ static int __devexit muic_remove(struct platform_device *pdev)
 		if (pmuic->pdata->cleanup_switch_dev_cb)
 			pmuic->pdata->cleanup_switch_dev_cb();
 
-#if defined(CONFIG_USB_EXTERNAL_NOTIFY)
-		muic_unregister_usb_notifier(pmuic);
-#endif
 		mutex_destroy(&pmuic->muic_mutex);
 		i2c_set_clientdata(pmuic->i2c, NULL);
 		kfree(pmuic);
 	}
-	muic_online = false;
 	return 0;
 }
 
-#if defined(CONFIG_OF)
-static struct of_device_id muic_i2c_dt_ids[] = {
-        { .compatible = "muic-universal" },
-        { },
+static const struct i2c_device_id muic_i2c_id[] = {
+	{ MUIC_DEV_NAME, 0 },
+	{}
 };
+MODULE_DEVICE_TABLE(i2c, muic_i2c_id);
+
+#if defined(CONFIG_OF)
 MODULE_DEVICE_TABLE(of, muic_i2c_dt_ids);
 #endif /* CONFIG_OF */
 
-static void muic_shutdown(struct device *dev)
+static void muic_shutdown(struct i2c_client *i2c)
 {
-	muic_data_t *pmuic = dev_get_drvdata(dev);
+	muic_data_t *pmuic = i2c_get_clientdata(i2c);
 	int ret;
-	if(pmuic == NULL)
-	{
-		printk("sabin pmuic is NULL\n");
-		return;
-	}
-	printk("sabin muic_shutdown start\n");
+
 	pr_info("%s:%s\n", pmuic->chip_name, __func__);
 	if (!pmuic->i2c) {
 		pr_err("%s:%s no muic i2c client\n", pmuic->chip_name, __func__);
 		return;
 	}
 
-	muic_free_irqs(pmuic);
-
-#if defined(CONFIG_MUIC_HV)
-	max77854_hv_muic_remove(pmuic->phv);
-#endif
-
-	if (cancel_delayed_work(&pmuic->usb_work))
-		pr_info("%s: usb_work canceled.\n", __func__);
-	else
-		pr_info("%s: usb_work is not pending.\n", __func__);
-
-
-	if (cancel_delayed_work(&pmuic->init_work))
-		pr_info("%s: init_work canceled.\n", __func__);
-	else
-		pr_info("%s: init_work is not pending.\n", __func__);
 	pr_info("%s:%s open D+,D-\n", pmuic->chip_name, __func__);
 	ret = com_to_open_with_vbus(pmuic);
 	if (ret < 0)
@@ -694,21 +662,21 @@ static void muic_shutdown(struct device *dev)
 	/* set auto sw mode before shutdown to make sure device goes into */
 	/* LPM charging when TA or USB is connected during off state */
 	pr_info("%s:%s muic auto detection enable\n", pmuic->chip_name, __func__);
-	set_switch_mode(pmuic,SWMODE_AUTO);
+	set_switch_mode(pmuic, SWMODE_AUTO);
 
 	if (pmuic->pdata && pmuic->pdata->cleanup_switch_dev_cb)
 		pmuic->pdata->cleanup_switch_dev_cb();
 
-	muic_online =  false;
 	pr_info("%s:%s -\n", MUIC_DEV_NAME, __func__);
 }
-
 #if defined(CONFIG_PM)
+
 static int muic_suspend(struct device *dev)
 {
 	muic_data_t *pmuic = dev_get_drvdata(dev);
+	struct i2c_client *i2c = pmuic->i2c;
 
-	cancel_delayed_work(&pmuic->usb_work);
+	disable_irq_nosync(i2c->irq);
 
 	return 0;
 }
@@ -716,8 +684,9 @@ static int muic_suspend(struct device *dev)
 static int muic_resume(struct device *dev)
 {
 	muic_data_t *pmuic = dev_get_drvdata(dev);
+	struct i2c_client *i2c = pmuic->i2c;
 
-	schedule_delayed_work(&pmuic->usb_work, msecs_to_jiffies(1000));
+	enable_irq(i2c->irq);
 
 	return 0;
 }
@@ -728,11 +697,9 @@ const struct dev_pm_ops muic_pm = {
 };
 #endif /* CONFIG_PM */
 
-static struct platform_driver muic_driver = {
+static struct i2c_driver muic_driver = {
 	.driver		= {
 		.name	= MUIC_DEV_NAME,
-		.owner	= THIS_MODULE,
-		.shutdown = muic_shutdown,
 #if defined(CONFIG_OF)
 		.of_match_table	= muic_i2c_dt_ids,
 #endif /* CONFIG_OF */
@@ -742,19 +709,21 @@ static struct platform_driver muic_driver = {
 	},
 	.probe		= muic_probe,
 	.remove		= muic_remove,
+	.shutdown	= muic_shutdown,
+	.id_table	= muic_i2c_id,
 };
 
 static int __init muic_init(void)
 {
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
-	return platform_driver_register(&muic_driver);
+	return i2c_add_driver(&muic_driver);
 }
 module_init(muic_init);
 
 static void muic_exit(void)
 {
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
-	platform_driver_unregister(&muic_driver);
+	i2c_del_driver(&muic_driver);
 }
 module_exit(muic_exit);
 

@@ -13,8 +13,7 @@
  */
 
 #include <soc/samsung/pm_domains-cal.h>
-#include <soc/samsung/bts.h>
-#include <linux/apm-exynos.h>
+#include <sound/exynos-audmixer.h>
 
 static int exynos_pd_status(struct exynos_pm_domain *pd)
 {
@@ -37,10 +36,8 @@ static void exynos_genpd_power_on_pre(struct exynos_pm_domain *pd)
 {
 	exynos_update_ip_idle_status(pd->idle_ip_index, 0);
 
-	if (!strcmp("pd-cam0", pd->name)) {
+	if (!strcmp("pd-cam0", pd->name))
 		exynos_devfreq_sync_voltage(DEVFREQ_CAM, true);
-		exynos_bts_scitoken_setting(true);
-	}
 }
 
 static void exynos_genpd_power_on_post(struct exynos_pm_domain *pd)
@@ -49,21 +46,19 @@ static void exynos_genpd_power_on_post(struct exynos_pm_domain *pd)
 
 static void exynos_genpd_power_off_pre(struct exynos_pm_domain *pd)
 {
-#ifdef CONFIG_EXYNOS_CL_DVFS_G3D
+#if 0 // HACK_APM
 	if (!strcmp(pd->name, "pd-g3d")) {
 		exynos_g3d_power_down_noti_apm();
 	}
-#endif /* CONFIG_EXYNOS_CL_DVFS_G3D */
+#endif
 }
 
 static void exynos_genpd_power_off_post(struct exynos_pm_domain *pd)
 {
 	exynos_update_ip_idle_status(pd->idle_ip_index, 1);
 
-	if (!strcmp("pd-cam0", pd->name)) {
+	if (!strcmp("pd-cam0", pd->name))
 		exynos_devfreq_sync_voltage(DEVFREQ_CAM, false);
-		exynos_bts_scitoken_setting(false);
-	}
 }
 
 static void prepare_forced_off(struct exynos_pm_domain *pd)
@@ -80,7 +75,14 @@ static int exynos_genpd_power_on(struct generic_pm_domain *genpd)
 		pr_debug(PM_DOMAIN_PREFIX "%s is Logical sub power domain, dose not have to power on control\n", pd->name);
 		return 0;
 	}
-
+#if defined(CONFIG_SOC_EXYNOS7870)
+	if (!strcmp(genpd->name ,"pd-dispaud")) {
+		if (is_cp_aud_enabled()) {
+			printk("%s is not performed because of CP call. \n",__func__);
+			return 0;
+		}
+	}
+#endif
 	mutex_lock(&pd->access_lock);
 
 	exynos_genpd_power_on_pre(pd);
@@ -95,6 +97,10 @@ static int exynos_genpd_power_on(struct generic_pm_domain *genpd)
 	}
 
 	exynos_genpd_power_on_post(pd);
+
+	/* enable bts features if exists */
+	if (pd->bts)
+		bts_initialize(pd->name, true);
 
 	mutex_unlock(&pd->access_lock);
 
@@ -114,7 +120,19 @@ static int exynos_genpd_power_off(struct generic_pm_domain *genpd)
 		return 0;
 	}
 
+#if defined(CONFIG_SOC_EXYNOS7870)
+	if (!strcmp(genpd->name ,"pd-dispaud")) {
+		if (is_cp_aud_enabled()) {
+			printk("%s is not performed because of CP call. \n",__func__);
+			return 0;
+		}
+	}
+#endif
 	mutex_lock(&pd->access_lock);
+
+	/* disable bts features if exists */
+	if (pd->bts)
+		bts_initialize(pd->name, false);
 
 	exynos_genpd_power_off_pre(pd);
 
@@ -143,6 +161,32 @@ acc_unlock:
 }
 
 #ifdef CONFIG_OF
+
+/**
+ *  of_device_bts_is_available - check if bts feature is enabled or not
+ *
+ *  @device: Node to check for availability, with locks already held
+ *
+ *  Returns 1 if the status property is "enabled" or "ok",
+ *  0 otherwise
+ */
+static int of_device_bts_is_available(const struct device_node *device)
+{
+	const char *status;
+	int statlen;
+
+	status = of_get_property(device, "bts-status", &statlen);
+	if (status == NULL)
+		return 0;
+
+	if (statlen > 0) {
+		if (!strcmp(status, "enabled") || !strcmp(status, "ok"))
+			return 1;
+	}
+
+	return 0;
+}
+
 static void exynos_genpd_init(struct exynos_pm_domain *pd, int state)
 {
 	pd->genpd.name = pd->name;
@@ -152,6 +196,18 @@ static void exynos_genpd_init(struct exynos_pm_domain *pd, int state)
 	/* pd power on/off latency is less than 1ms */
 	pd->genpd.power_on_latency_ns = 1000000;
 	pd->genpd.power_off_latency_ns = 1000000;
+
+	do {
+		int ret;
+
+		/* bts feature is enabled if exists */
+		ret = of_device_bts_is_available(pd->of_node);
+		if (ret) {
+			pd->bts = 1;
+			bts_initialize(pd->name, true);
+			DEBUG_PRINT_INFO("%s - bts feature is enabled\n", pd->name);
+		}
+	} while(0);
 
 	pm_genpd_init(&pd->genpd, NULL, state ? false : true);
 }
@@ -175,7 +231,9 @@ static void show_power_domain(void)
 			pr_info("   %-9s - %-3s\n", pd->genpd.name,
 					cal_pd_status(pd->cal_pdid) ? "on" : "off");
 		} else
-			pr_info("   %-9s - %s\n", np->name, "on,  always");
+			pr_info("   %-9s - %s\n",
+						kstrdup(np->name, GFP_KERNEL),
+						"on,  always");
 	}
 
 	return;

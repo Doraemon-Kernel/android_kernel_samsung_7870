@@ -564,6 +564,8 @@ int fimc_is_csi_probe(void *parent, u32 instance)
 		goto err_get_resource;
 	}
 
+	csi->regs_start = mem_res->start;
+	csi->regs_end = mem_res->end;
 	csi->base_reg =  devm_ioremap_nocache(&pdev->dev, mem_res->start, resource_size(mem_res));
 	if (!csi->base_reg) {
 		probe_err("Failed to remap io region(%p)", csi->base_reg);

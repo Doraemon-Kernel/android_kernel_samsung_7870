@@ -262,7 +262,8 @@ struct fimc_is_video_ctx {
 	struct fimc_is_video		*video;
 
 	const struct vb2_ops		*vb2_ops;
-	const struct vb2_mem_ops	*mem_ops;
+	const struct vb2_mem_ops	*vb2_mem_ops;
+	const struct fimc_is_vb2_buf_ops *fimc_is_vb2_buf_ops;
 	struct fimc_is_video_ops	vops;
 };
 
@@ -275,7 +276,8 @@ struct fimc_is_video {
 	struct video_device		vd;
 	struct media_pad		pads;
 	struct fimc_is_resourcemgr	*resourcemgr;
-	const struct fimc_is_vb2	*vb2;
+	const struct vb2_mem_ops	*vb2_mem_ops;
+	const struct fimc_is_vb2_buf_ops *fimc_is_vb2_buf_ops;
 	void				*alloc_ctx;
 
 	struct semaphore		smp_multi_input;
@@ -300,6 +302,7 @@ int fimc_is_queue_setup(struct fimc_is_queue *queue,
 	void *allocators[]);
 int fimc_is_queue_buffer_queue(struct fimc_is_queue *queue,
 	struct vb2_buffer *vb);
+int fimc_is_buffer_init(struct vb2_buffer *vb);
 int fimc_is_queue_prepare(struct vb2_buffer *vb);
 void fimc_is_queue_wait_prepare(struct vb2_queue *vbq);
 void fimc_is_queue_wait_finish(struct vb2_queue *vbq);
@@ -391,8 +394,8 @@ extern int fimc_is_ssxvc1_video_probe(void *data);
 extern int fimc_is_ssxvc2_video_probe(void *data);
 extern int fimc_is_ssxvc3_video_probe(void *data);
 
-#define GET_VIDEO(vctx)			(vctx ? (vctx)->video : NULL)
-#define GET_QUEUE(vctx)			(vctx ? &(vctx)->queue : NULL)
+#define GET_VIDEO(vctx) 		(vctx ? (vctx)->video : NULL)
+#define GET_QUEUE(vctx) 		(vctx ? &(vctx)->queue : NULL)
 #define GET_FRAMEMGR(vctx)		(vctx ? &(vctx)->queue.framemgr : NULL)
 #define GET_DEVICE(vctx)		(vctx ? (vctx)->device : NULL)
 #define CALL_QOPS(q, op, args...)	(((q)->qops->op) ? ((q)->qops->op(args)) : 0)

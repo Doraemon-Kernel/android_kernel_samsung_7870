@@ -128,7 +128,7 @@ static void __do_kernel_fault(struct mm_struct *mm, unsigned long addr,
 	bust_spinlocks(1);
 
 #ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
-	sec_debug_set_extra_info_fault(KERNEL_FAULT, addr, regs);
+	sec_debug_set_extra_info_fault(addr, regs);
 #endif
 
 	pr_auto(ASL1, "Unable to handle kernel %s at virtual address %08lx\n",
@@ -436,16 +436,6 @@ static int __kprobes do_translation_fault(unsigned long addr,
 	return 0;
 }
 
-static int __kprobes do_tlb_conflict(unsigned long addr,
-                                         unsigned int esr,
-                                         struct pt_regs *regs)
-{
-	asm volatile("tlbi vmalle1");
-	asm volatile("dsb nsh");
-
-	return 0;
-}
-
 /*
  * This abort handler always returns "fault".
  */
@@ -508,7 +498,7 @@ static const struct fault_info {
 	{ do_bad,		SIGBUS,  0,		"unknown 45"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 46"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 47"			},
-	{ do_tlb_conflict,      SIGBUS,  0,             "TLB conflict"                  },
+	{ do_bad,		SIGBUS,  0,		"unknown 48"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 49"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 50"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 51"			},
@@ -544,16 +534,15 @@ asmlinkage void __exception do_mem_abort(unsigned long addr, unsigned int esr,
 	if (!inf->fn(addr, esr, regs))
 		return;
 
-	if (unhandled_signal(current, inf->sig)
-	    && show_unhandled_signals_ratelimited()) {
-		pr_auto(ASL1, "Unhandled fault: %s (0x%08x) at 0x%016lx\n",
-			inf->name, esr, addr);
+	if (show_unhandled_signals && unhandled_signal(current, inf->sig) &&
+	    printk_ratelimit()) {
+		pr_auto(ASL1, "Unhandled fault: %s (0x%08x) at 0x%016lx -- %s\n",
+			inf->name, esr, addr, esr_get_class_string(esr));
 	}
+
 #ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
-	if (!user_mode(regs)) {
-		sec_debug_set_extra_info_fault(MEM_ABORT_FAULT, addr, regs);
-		sec_debug_set_extra_info_esr(esr);
-	}
+	if (!user_mode(regs))
+		sec_debug_set_extra_info_fault(addr, regs);
 #endif
 
 	info.si_signo = inf->sig;
@@ -574,7 +563,7 @@ asmlinkage void __exception do_sp_pc_abort(unsigned long addr,
 
 #ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
 	if (!user_mode(regs)) {
-		sec_debug_set_extra_info_fault(SP_PC_ABORT_FAULT, addr, regs);
+		sec_debug_set_extra_info_fault(addr, regs);
 		sec_debug_set_extra_info_esr(esr);
 	}
 #endif
@@ -619,8 +608,8 @@ asmlinkage int __exception do_debug_exception(unsigned long addr,
 	if (!inf->fn(addr, esr, regs))
 		return 1;
 
-	if (unhandled_signal(current, inf->sig)
-	    && show_unhandled_signals_ratelimited())
+	if (show_unhandled_signals && unhandled_signal(current, inf->sig) &&
+	    printk_ratelimit())
 		pr_alert("Unhandled debug exception: %s (0x%08x) at 0x%016lx\n",
 			 inf->name, esr, addr);
 

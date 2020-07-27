@@ -586,24 +586,20 @@ config MMC_DW
 	  block, this provides host support for SD and MMC interfaces, in both
 	  PIO and external DMA modes.
 
-config FMP
-	bool "Flash Memory Protector Support"
-	depends on MMC_DW
-	help
-	  The flash memory protector feature of the eMMC controller
-	  provides a on-the-fly data decryption/encryption during flash
-	  read/write.
-
 config MMC_DW_FMP_DM_CRYPT
 	bool "FMP acceleration for DM_CRYPT"
-	depends on DM_CRYPT && FMP
+	depends on DM_CRYPT
+	select FMP_MMC
+	select FMP_DM_CRYPT
 	help
 	  This option accelerates dm-crypt by using the flash
 	  memory protector feature of the eMMC controller.
 
 config MMC_DW_FMP_ECRYPT_FS
 	bool "FMP acceleration for eCrypt filesystem"
-	depends on ECRYPT_FS && FMP
+	depends on ECRYPT_FS
+	select FMP_MMC
+	select FMP_ECRYPT_FS
 	help
 	  This option activates flash memory protector of the eMMC controller to
 	  accelerate eCryptfs.
@@ -646,6 +642,14 @@ config MMC_DW_EXYNOS
 	  This selects support for Samsung Exynos SoC specific extensions to the
 	  Synopsys DesignWare Memory Card Interface driver. Select this option
 	  for platforms based on Exynos4 and Exynos5 SoC's.
+
+config MMC_DW_EXYNOS_EMMC_SHUTDOWN_POWERCTRL
+	tristate "Exynos specific extensions for Synopsys DWMCI needed eMMC shutdown power off"
+	depends on MMC_DW_EXYNOS
+	select MMC_DW_PLTFM
+	help
+	  This selects support for Samsung Exynos SoC specific extensions to the
+	  Synopsys DesignWare Memory Card Interface driver.
 
 config MMC_DW_DEBUG
 	bool "Samsung DWMCI debug feature"
@@ -793,3 +797,10 @@ config MMC_SUNXI
 	help
 	  This selects support for the SD/MMC Host Controller on
 	  Allwinner sunxi SoCs.
+	  
+config MMC_TUNING_ALL_PASS_QUIRK
+    bool "Check if all passed before for tuning fail case"
+    default n
+    help
+      If tuning failed with lowest driver strength but passed for all phase with previous driver strength,
+      do not treat the card as tuning failed. Select timing based on all pass case.

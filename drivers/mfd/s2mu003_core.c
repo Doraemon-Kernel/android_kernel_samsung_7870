@@ -1,6 +1,10 @@
-/* drivers/mfd/s2mu003_core.c
+/*
  * S2MU003 Multifunction Device Driver
  * Charger / Buck / LDOs / FlashLED
+ *
+ * Copyright (c) 2015 Samsung Electronics Co., Ltd.
+ *		http://www.samsung.com
+ * Author: Junhan Bae <junhan84.bae@samsung.com>
  *
  * Copyright (C) 2014 Samsung Technology Corp.
  * Author: Patrick Chang <patrick_chang@samsung.com>
@@ -26,15 +30,22 @@
 #include <linux/mfd/samsung/s2mu003.h>
 #include <linux/mfd/samsung/s2mu003_irq.h>
 #include <linux/mfd/core.h>
+
 #ifdef CONFIG_CHARGER_S2MU003
 #include <linux/battery/charger/s2mu003_charger.h>
+#endif
+
+#ifdef CONFIG_SEC_CHARGER_S2MU003
+#include <linux/power/s2mu003_charger.h>
 #endif
 
 #if defined(CONFIG_MFD_S2MU003_USE_DT)
 #define S2MU003_USE_NEW_MFD_DT_API
 #endif
 
-#ifdef CONFIG_CHARGER_S2MU003
+static int led_ctl;
+
+#if defined(CONFIG_CHARGER_S2MU003) || defined(CONFIG_SEC_CHARGER_S2MU003)
 const static struct resource s2mu003_charger_res[] = {
 	S2MU003_DECLARE_IRQ(S2MU003_EOC_IRQ),
 	S2MU003_DECLARE_IRQ(S2MU003_CINIR_IRQ),
@@ -69,8 +80,19 @@ static struct mfd_cell s2mu003_charger_devs[] = {
 #endif
 	},
 };
-#endif /*CONFIG_CHARGER_S2MU003*/
-
+#endif /* CONFIG_CHARGER_S2MU003 || CONFIG_SEC_CHARGER_S2MU003 */
+#if 0
+#ifdef CONFIG_SEC_FUELGAUGE_S2MU003
+static struct mfd_cell s2mu003_fuelgauge_devs[] = {
+	{
+		.name		= "s2mu003-fuelgauge",
+#ifdef CONFIG_OF
+	.of_compatible		= "samsung,s2mu003-fuelgauge"
+#endif
+	},
+};
+#endif
+#endif
 #ifdef CONFIG_LEDS_S2MU003
 static struct mfd_cell s2mu003_fled_devs[] = {
 	{
@@ -225,6 +247,78 @@ int s2mu003_clr_bits(struct i2c_client *i2c, int reg,
 }
 EXPORT_SYMBOL(s2mu003_clr_bits);
 
+static ssize_t charger_led_update_show(struct device *dev,
+					struct device_attribute *attr, char *buf)
+{
+	int val;
+	val = !gpio_get_value(led_ctl);
+
+	return snprintf(buf, 2, "%d\n", val);
+}
+
+static ssize_t charger_led_update_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t size)
+{
+	unsigned int val = 0;
+
+	if (size > 2)
+		return -EINVAL;
+
+	if (sscanf(buf, "%u", &val) != 1)
+		return -EINVAL;
+
+	if (charger_led_ctl(val))
+		pr_info("%s : set charger led gpio error\n", __func__);
+
+	return size;
+}
+
+int charger_led_ctl(bool on)
+{
+	if (led_ctl < 0)
+		return led_ctl;
+
+	if (on)
+		return gpio_direction_output(led_ctl, 0);
+	else
+		return gpio_direction_output(led_ctl, 1);
+}
+EXPORT_SYMBOL(charger_led_ctl);
+
+static int s2mu003_request_led_ctl(struct device *dev)
+{
+	int ret;
+	struct device_node *np = dev->of_node;
+
+	ret = led_ctl = of_get_named_gpio(np, "s2mu003,led_ctl", 0);
+	if (ret < 0) {
+		dev_err(dev, "%s : can't get led gpio\n", __func__);
+		return ret;
+	}
+
+	ret = gpio_request(led_ctl, "charger_led_ctl");
+	if (ret) {
+		dev_err(dev, "%s : can't get led control gpio\n", __func__);
+		return ret;
+	}
+
+	return gpio_direction_output(led_ctl, 0);
+}
+
+static DEVICE_ATTR(charger_led, (S_IRUGO | S_IWUSR | S_IWGRP),
+			charger_led_update_show,
+			charger_led_update_store);
+
+static struct attribute *charge_attrs[] = {
+	&dev_attr_charger_led.attr,
+	NULL
+};
+
+static const struct attribute_group charge_attr_grp = {
+	.attrs = charge_attrs,
+};
+
 static int s2mu003mfd_parse_dt(struct device *dev,
 		s2mu003_mfd_platform_data_t *pdata)
 {
@@ -242,6 +336,8 @@ static int s2mu003mfd_parse_dt(struct device *dev,
 		return ret;
 	}
 
+	s2mu003_request_led_ctl(dev);
+
 	pdata->irq_base = -1;
 	return 0;
 }
@@ -249,8 +345,7 @@ static int s2mu003mfd_parse_dt(struct device *dev,
 static int s2mu003_mfd_probe(struct i2c_client *i2c,
 			    const struct i2c_device_id *id)
 {
-	int ret = 0;
-	u8 data = 0;
+	int ret = 0, dev_id1, dev_id2, temp;
 	struct device_node *of_node = i2c->dev.of_node;
 	s2mu003_mfd_chip_t *chip;
 	s2mu003_mfd_platform_data_t *pdata = i2c->dev.platform_data;
@@ -316,9 +411,13 @@ static int s2mu003_mfd_probe(struct i2c_client *i2c,
 
 	/* To disable MRST function should be
 	finished before set any reg init-value*/
-	data = s2mu003_reg_read(i2c, 0x47);
-	pr_info("%s : Manual Reset Data = 0x%x", __func__, data);
+	temp = s2mu003_reg_read(i2c, 0x47);
+	pr_info("%s : Manual Reset Data = 0x%x", __func__, temp);
 	s2mu003_clr_bits(i2c, 0x47, 1<<3); /*Disable Manual Reset*/
+
+	dev_id1 = s2mu003_reg_read(i2c, 0xA5);
+	dev_id2 = s2mu003_reg_read(i2c, 0xAF);
+	chip->dev_id = ((dev_id1 & 0xC0) >> 4) | ((dev_id2 & 0xC0) >> 6);
 
 	ret = s2mu003_init_irq(chip);
 
@@ -348,9 +447,21 @@ static int s2mu003_mfd_probe(struct i2c_client *i2c,
 		goto err_add_fled_devs;
 	}
 #endif /*CONFIG_LEDS_S2MU003*/
-
-
-#ifdef CONFIG_CHARGER_S2MU003
+#if 0
+#ifdef CONFIG_SEC_FUELGAUGE_S2MU003
+	chip->fuelgauge_i2c = i2c_new_dummy(i2c->adapter,
+					pdata->fuelgauge_reg);
+	i2c_set_clientdata(chip->fuelgauge_i2c, chip);
+	ret = mfd_add_devices(chip->dev, 0, &s2mu003_fuelgauge_devs[0],
+			ARRAY_SIZE(s2mu003_fuelgauge_devs),
+			NULL, chip->irq_base, NULL);
+	if (ret < 0) {
+		dev_err(chip->dev, "Failed : add fuelgauge devices\n");
+		goto err_add_chg_devs;
+	}
+#endif /*CONFIG_SEC_FUELGAUGE_S2MU003*/
+#endif
+#if defined(CONFIG_CHARGER_S2MU003) || defined(CONFIG_SEC_CHARGER_S2MU003)
 	ret = mfd_add_devices(chip->dev, 0, &s2mu003_charger_devs[0],
 			ARRAY_SIZE(s2mu003_charger_devs),
 			NULL, chip->irq_base, NULL);
@@ -358,17 +469,25 @@ static int s2mu003_mfd_probe(struct i2c_client *i2c,
 		dev_err(chip->dev, "Failed : add charger devices\n");
 		goto err_add_chg_devs;
 	}
-#endif /*CONFIG_CHARGER_S2MU003*/
+#endif /*CONFIG_CHARGER_S2MU003 || CONFIG_SEC_CHARGER_S2MU003*/
 
 	device_init_wakeup(chip->dev, 1);
 	enable_irq_wake(chip->irq);
 
+	ret = sysfs_create_group(&i2c->dev.kobj, &charge_attr_grp);
+	if (ret < 0) {
+		dev_err(&i2c->dev, "sys file creation failed.\n");
+		goto exit_remove_sysfs;
+	}
+
 	pr_info("%s : S2MU003 MFD Driver Fin probe\n", __func__);
 	return ret;
 
-#ifdef CONFIG_CHARGER_S2MU003
+exit_remove_sysfs:
+	sysfs_remove_group(&i2c->dev.kobj, &charge_attr_grp);
+#if defined(CONFIG_CHARGER_S2MU003) || defined(CONFIG_SEC_CHARGER_S2MU003)
 err_add_chg_devs:
-#endif /*CONFIG_CHARGER_S2MU003*/
+#endif /*CONFIG_CHARGER_S2MU003 || CONFIG_SEC_CHARGER_S2MU003*/
 
 #ifdef CONFIG_LEDS_S2MU003
 err_add_fled_devs:
@@ -380,10 +499,10 @@ err_add_regulator_devs:
 err_init_irq:
 	wake_lock_destroy(&(chip->irq_wake_lock));
 	mutex_destroy(&chip->io_lock);
-	kfree(chip);
 irq_base_err:
-err_mfd_nomem:
 err_i2cfunc_not_support:
+	kfree(chip);
+err_mfd_nomem:
 err_parse_dt:
 err_dt_nomem:
 	return ret;
@@ -499,7 +618,7 @@ static void __exit s2mu003_mfd_i2c_exit(void)
 }
 module_exit(s2mu003_mfd_i2c_exit);
 
-MODULE_DESCRIPTION("Richtek S2MU003 MFD I2C Driver");
-MODULE_AUTHOR("Patrick Chang <patrick_chang@samsung.com>");
+MODULE_DESCRIPTION("Samsung S2MU003 MFD I2C Driver");
+MODULE_AUTHOR("Junhan Bae <junhan84.bae@samsung.com>");
 MODULE_VERSION(S2MU003_DRV_VER);
 MODULE_LICENSE("GPL");

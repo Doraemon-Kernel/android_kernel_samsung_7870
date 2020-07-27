@@ -26,8 +26,13 @@
 #include <linux/types.h>
 #include <linux/device.h>
 #include <linux/miscdevice.h>
+#include <linux/configfs.h>
+#include <linux/usb/composite.h>
+
+#include "../configfs.h"
 
 #define ADB_BULK_BUFFER_SIZE           4096
+#define MAX_INST_NAME_LEN		40
 
 /* number of tx requests to allocate */
 #define TX_REQ_MAX 4
@@ -55,6 +60,12 @@ struct adb_dev {
 	wait_queue_head_t write_wq;
 	struct usb_request *rx_req;
 	int rx_done;
+};
+
+struct adb_instance {
+	const char *name;
+	struct usb_function_instance func_inst;
+	struct adb_dev *dev;
 };
 
 static struct usb_interface_descriptor adb_interface_desc = {
@@ -145,8 +156,10 @@ static struct usb_descriptor_header *ss_adb_descs[] = {
 	NULL,
 };
 
+#ifndef CONFIG_USB_CONFIGFS_UEVENT
 static void adb_ready_callback(void);
 static void adb_closed_callback(void);
+#endif
 
 /* temporary variable used between adb_open() and adb_gadget_bind() */
 static struct adb_dev *_adb_dev;
@@ -459,7 +472,9 @@ static int adb_open(struct inode *ip, struct file *fp)
 	/* clear the error latch */
 	_adb_dev->error = 0;
 
+#ifndef CONFIG_USB_CONFIGFS_UEVENT
 	adb_ready_callback();
+#endif
 
 	return 0;
 }
@@ -468,7 +483,9 @@ static int adb_release(struct inode *ip, struct file *fp)
 {
 	pr_info("adb_release\n");
 
+#ifndef CONFIG_USB_CONFIGFS_UEVENT
 	adb_closed_callback();
+#endif
 
 	adb_unlock(&_adb_dev->open_excl);
 	return 0;
@@ -605,6 +622,7 @@ static void adb_function_disable(struct usb_function *f)
 	VDBG(cdev, "%s disabled\n", dev->function.name);
 }
 
+#ifndef CONFIG_USB_CONFIGFS_UEVENT
 static int adb_bind_config(struct usb_configuration *c)
 {
 	struct adb_dev *dev = _adb_dev;
@@ -623,8 +641,9 @@ static int adb_bind_config(struct usb_configuration *c)
 
 	return usb_add_function(c, &dev->function);
 }
+#endif
 
-static int adb_setup(void)
+static int __adb_setup(struct adb_instance *fi_adb)
 {
 	struct adb_dev *dev;
 	int ret;
@@ -632,6 +651,9 @@ static int adb_setup(void)
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;
+
+	if (fi_adb != NULL)
+		fi_adb->dev = dev;
 
 	spin_lock_init(&dev->lock);
 
@@ -658,6 +680,19 @@ err:
 	return ret;
 }
 
+static int adb_setup_configfs(struct adb_instance *fi_adb)
+{
+	return __adb_setup(fi_adb);
+}
+
+#ifndef CONFIG_USB_CONFIGFS_UEVENT
+static int adb_setup(void)
+{
+	return __adb_setup(NULL);
+
+}
+#endif
+
 static void adb_cleanup(void)
 {
 	misc_deregister(&adb_device);
@@ -665,3 +700,128 @@ static void adb_cleanup(void)
 	kfree(_adb_dev);
 	_adb_dev = NULL;
 }
+
+static struct adb_instance *to_adb_instance(struct config_item *item)
+{
+	return container_of(to_config_group(item), struct adb_instance,
+							func_inst.group);
+}
+
+static void adb_attr_release(struct config_item *item)
+{
+	struct adb_instance *fi_adb = to_adb_instance(item);
+	usb_put_function_instance(&fi_adb->func_inst);
+}
+
+static struct configfs_item_operations adb_item_ops = {
+	.release	= adb_attr_release,
+};
+
+static struct config_item_type adb_func_type = {
+	.ct_item_ops	= &adb_item_ops,
+	.ct_owner	= THIS_MODULE,
+};
+
+static struct adb_instance *to_fi_adb(struct usb_function_instance *fi)
+{
+	return container_of(fi, struct adb_instance, func_inst);
+}
+
+static int adb_set_inst_name(struct usb_function_instance *fi,
+						const char *name)
+{
+	struct adb_instance *fi_adb;
+	char *ptr;
+	int name_len;
+
+	name_len = strlen(name) + 1;
+	if (name_len > MAX_INST_NAME_LEN)
+		return -ENAMETOOLONG;
+
+	ptr = kstrndup(name, name_len, GFP_KERNEL);
+	if (!ptr)
+		return -ENOMEM;
+
+	fi_adb = to_fi_adb(fi);
+	fi_adb->name = ptr;
+
+	return 0;
+}
+
+static void adb_free_inst(struct usb_function_instance *fi)
+{
+	struct adb_instance *fi_adb;
+
+	fi_adb = to_fi_adb(fi);
+	kfree(fi_adb->name);
+	adb_cleanup();
+	kfree(fi_adb);
+}
+
+struct usb_function_instance *alloc_inst_adb(bool adb_config)
+{
+	struct adb_instance *fi_adb;
+	int ret = 0;
+
+	fi_adb = kzalloc(sizeof(*fi_adb), GFP_KERNEL);
+	if (!fi_adb)
+		return ERR_PTR(-ENOMEM);
+	fi_adb->func_inst.set_inst_name = adb_set_inst_name;
+	fi_adb->func_inst.free_func_inst = adb_free_inst;
+
+	if (adb_config) {
+		ret = adb_setup_configfs(fi_adb);
+		if (ret) {
+			kfree(fi_adb);
+			pr_err("Error setting adb\n");
+			return ERR_PTR(ret);
+		}
+	} else
+		fi_adb->dev = _adb_dev;
+
+	config_group_init_type_name(&fi_adb->func_inst.group, "",
+						&adb_func_type);
+
+	return  &fi_adb->func_inst;
+}
+EXPORT_SYMBOL_GPL(alloc_inst_adb);
+
+static struct usb_function_instance *adb_alloc_inst(void)
+{
+	return alloc_inst_adb(true);
+}
+
+static void adb_free(struct usb_function *f)
+{
+	/*NO-OP: no function specific resource allocation in adb_alloc*/
+}
+
+struct usb_function *function_alloc_adb(struct usb_function_instance *fi,
+					bool adb_config)
+{
+	struct adb_instance *fi_adb = to_fi_adb(fi);
+	struct adb_dev *dev = fi_adb->dev;
+
+	dev->function.name = "adb";
+
+	dev->function.fs_descriptors = fs_adb_descs;
+	dev->function.hs_descriptors = hs_adb_descs;
+	dev->function.ss_descriptors = ss_adb_descs;
+
+	dev->function.bind = adb_function_bind;
+	dev->function.unbind = adb_function_unbind;
+	dev->function.set_alt = adb_function_set_alt;
+	dev->function.disable = adb_function_disable;
+	dev->function.free_func = adb_free;
+
+	return &dev->function;
+}
+EXPORT_SYMBOL_GPL(function_alloc_adb);
+
+static struct usb_function *adb_alloc(struct usb_function_instance *fi)
+{
+	return function_alloc_adb(fi, true);
+}
+
+DECLARE_USB_FUNCTION_INIT(adb, adb_alloc_inst, adb_alloc);
+MODULE_LICENSE("GPL");

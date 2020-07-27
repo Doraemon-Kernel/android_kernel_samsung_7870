@@ -47,6 +47,8 @@
  */
 
 #define FIPS_FUNC_TEST 0
+
+#define SKC_VERSION_TEXT "SKC v1.7.1"
 /* Crypto notification events. */
 enum {
 	CRYPTO_MSG_ALG_REQUEST,

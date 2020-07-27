@@ -161,10 +161,9 @@ int kbase_device_init(struct kbase_device * const kbdev)
 	 */
 	kbase_hw_set_features_mask(kbdev);
 
-	/* On Linux 4.0+, dma coherency is determined from device tree */
-#if defined(CONFIG_ARM64) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 0, 0)
+#if defined(CONFIG_ARM64)
 	set_dma_ops(kbdev->dev, &noncoherent_swiotlb_dma_ops);
-#endif
+#endif /* CONFIG_ARM64 */
 
 	/* Workaround a pre-3.13 Linux issue, where dma_mask is NULL when our
 	 * device structure was created by device-tree
@@ -182,11 +181,15 @@ int kbase_device_init(struct kbase_device * const kbdev)
 	if (err)
 		goto dma_set_mask_failed;
 
+	err = kbase_mem_lowlevel_init(kbdev);
+	if (err)
+		goto mem_lowlevel_init_failed;
+
 	kbdev->nr_hw_address_spaces = kbdev->gpu_props.num_address_spaces;
 
 	err = kbase_device_all_as_init(kbdev);
 	if (err)
-		goto as_init_failed;
+		goto term_lowlevel_mem;
 
 	spin_lock_init(&kbdev->hwcnt.lock);
 
@@ -222,16 +225,14 @@ int kbase_device_init(struct kbase_device * const kbdev)
 
 	kbdev->mmu_mode = kbase_mmu_mode_get_lpae();
 
-#ifdef CONFIG_MALI_DEBUG
-	init_waitqueue_head(&kbdev->driver_inactive_wait);
-#endif /* CONFIG_MALI_DEBUG */
-
 	return 0;
 term_trace:
 	kbasep_trace_term(kbdev);
 term_as:
 	kbase_device_all_as_term(kbdev);
-as_init_failed:
+term_lowlevel_mem:
+	kbase_mem_lowlevel_term(kbdev);
+mem_lowlevel_init_failed:
 dma_set_mask_failed:
 fail:
 	return err;
@@ -250,6 +251,8 @@ void kbase_device_term(struct kbase_device *kbdev)
 	kbasep_trace_term(kbdev);
 
 	kbase_device_all_as_term(kbdev);
+
+	kbase_mem_lowlevel_term(kbdev);
 }
 
 void kbase_device_free(struct kbase_device *kbdev)

@@ -2172,7 +2172,7 @@ static int do_test(int m)
 
 #ifdef CONFIG_CRYPTO_FIPS
 	case 1402 : //For FIPS 140-2
-		printk(KERN_ERR "FIPS : Tcrypt Tests Start\n");
+		printk(KERN_INFO "FIPS 140-2 (%s) : POST\n", SKC_VERSION_TEXT);
 
 #ifdef CONFIG_CRYPTO_AES 
 		/* AES */

@@ -88,17 +88,13 @@ config GPIO_DS_DETECT
 	bool "Support GPIO DS Detect"
 	default n
 
-config HW_REV_DETECT
-	bool "Support HW REV Detect"
-	default n
-
-config MODEM_IF_LEGACY_QOS
-	bool "Implement QoS for legacy"
+config FREE_CP_RSVD_MEMORY
+	bool "Free CP reserved memory after CP goes to sleep for Wifi model"
 	depends on LINK_DEVICE_SHMEM
 	default n
 
 config MODEM_IF_QOS
-	bool "Implement QoS for sbd"
+	bool "Implement QoS"
 	depends on LINK_DEVICE_SHMEM
 	default n
 

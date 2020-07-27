@@ -17,6 +17,8 @@
 #include <linux/platform_device.h>
 #include <linux/io.h>
 
+#include <asm/neon.h>
+
 #include "fimc-is-config.h"
 #include "fimc-is-param.h"
 #include "fimc-is-type.h"
@@ -33,12 +35,23 @@
 
 /* for access sysreg_isp register */
 #define SYSREG_ISP_USER_CON	0x144F1000
+#define SYSREG_ISP_MIPIPHY_CON	0x144F1040
 
 /* Define default subdev ops if there are not used subdev IP */
 const struct fimc_is_subdev_ops fimc_is_subdev_dis_ops;
 const struct fimc_is_subdev_ops fimc_is_subdev_scc_ops;
 const struct fimc_is_subdev_ops fimc_is_subdev_mcs_ops;
 const struct fimc_is_subdev_ops fimc_is_subdev_mcsp_ops;
+
+void fimc_is_enter_lib_isr(void)
+{
+	kernel_neon_begin();
+}
+
+void fimc_is_exit_lib_isr(void)
+{
+	kernel_neon_end();
+}
 
 int fimc_is_hw_group_cfg(void *group_data)
 {
@@ -172,12 +185,12 @@ int fimc_is_hw_group_open(void *group_data)
 
 	switch (group_id) {
 	case GROUP_ID_3AA0:
-		leader->constraints_width = 5328;
-		leader->constraints_height = 3000;
+		leader->constraints_width = 5328; /* 16MP(16:9) max width */
+		leader->constraints_height = 3466; /* 16MP(4:3) max height */
 		break;
 	case GROUP_ID_ISP0:
-		leader->constraints_width = 5328;
-		leader->constraints_height = 3000;
+		leader->constraints_width = 5328; /* 16MP(16:9) max width */
+		leader->constraints_height = 3466; /* 16MP(4:3) max height */
 		break;
 	default:
 		merr("group id is invalid(%d)", group, group_id);
@@ -195,6 +208,8 @@ int fimc_is_hw_camif_cfg(void *sensor_data)
 	struct fimc_is_device_csi *csi;
 	struct fimc_is_device_ischain *ischain;
 	bool is_otf = false;
+	void __iomem *isp_mipiphy_con;
+	u32 val;
 
 	BUG_ON(!sensor_data);
 
@@ -203,6 +218,7 @@ int fimc_is_hw_camif_cfg(void *sensor_data)
 	flite = (struct fimc_is_device_flite *)v4l2_get_subdevdata(sensor->subdev_flite);
 	csi = (struct fimc_is_device_csi *)v4l2_get_subdevdata(sensor->subdev_csi);
 	is_otf = (ischain && test_bit(FIMC_IS_GROUP_OTF_INPUT, &ischain->group_3aa.state));
+	isp_mipiphy_con = ioremap(SYSREG_ISP_MIPIPHY_CON, SZ_4K);
 
 	/* always clear csis dummy */
 	clear_bit(CSIS_DUMMY, &csi->state);
@@ -216,11 +232,33 @@ int fimc_is_hw_camif_cfg(void *sensor_data)
 			clear_bit(FLITE_DUMMY, &flite->state);
 		else
 			set_bit(FLITE_DUMMY, &flite->state);
+
+		/* MIPI PHY select to M0S4 for CSIS1 */
+		val = readl(isp_mipiphy_con);
+		val |= (1 << 3);
+		writel(val, isp_mipiphy_con);
+		break;
+	case 2:
+#if !defined(CONFIG_CAMERA_MIPI_PHY_SELECT_M0S2)
+		set_bit(FLITE_DUMMY, &flite->state);
+#else
+		if (is_otf)
+			clear_bit(FLITE_DUMMY, &flite->state);
+		else
+			set_bit(FLITE_DUMMY, &flite->state);
+
+		/* MIPI PHY select to M0S2 for CSIS1 */
+		val = readl(isp_mipiphy_con);
+		val &= (~(1 << 3));
+		writel(val, isp_mipiphy_con);
+#endif
 		break;
 	default:
 		merr("sensor id is invalid(%d)", sensor, sensor->instance);
 		break;
 	}
+
+	iounmap(isp_mipiphy_con);
 
 	return ret;
 }
@@ -247,6 +285,10 @@ int fimc_is_hw_camif_open(void *sensor_data)
 		set_bit(CSIS_DMA_ENABLE, &csi->state);
 		clear_bit(FLITE_DMA_ENABLE, &flite->state);
 		break;
+	case 2:
+		set_bit(CSIS_DMA_ENABLE, &csi->state);
+		clear_bit(FLITE_DMA_ENABLE, &flite->state);
+		break;
 	default:
 		merr("sensor id is invalid(%d)", sensor, sensor->instance);
 		break;
@@ -259,6 +301,7 @@ int fimc_is_hw_ischain_cfg(void *ischain_data)
 {
 	void __iomem *isp_user_con;
 	struct fimc_is_device_ischain *device;
+	struct fimc_is_device_csi *csi;
 	u32 val;
 
 	BUG_ON(!ischain_data);
@@ -267,22 +310,23 @@ int fimc_is_hw_ischain_cfg(void *ischain_data)
 	if (test_bit(FIMC_IS_ISCHAIN_REPROCESSING, &device->state))
 		return 0;
 
+	csi = (struct fimc_is_device_csi *)v4l2_get_subdevdata(
+			device->sensor->subdev_csi);
+
 	isp_user_con = ioremap(SYSREG_ISP_USER_CON, SZ_4K);
 
 	val = readl(isp_user_con);
-	/* RT setting */
-	val |= (1 << 0)| /* VRA set to RT */
-		(1 << 1); /* ISP & Scaler set to RT */
 
-	/* BNS Input Select
-	 * CSIS0 : 0 (BACK)
-	 * CSIS1 : 1 (FRONT)
-	 */
-	if (device->sensor->instance == 0) {
+	/* NRT: 0, RT: 1 */
+	/* ISP & Scaler: RT, VRA: RT */
+	val |= (1 << 1) | (1 << 0);
+
+	/* BNS Input Select */
+	/* CSIS0: 0, CSIS1: 1 */
+	if (csi->instance == 0)
 		val &= ~(1 << 3);
-	} else {
+	else
 		val |= (1 << 3);
-	}
 
 	writel(val, isp_user_con);
 
@@ -299,10 +343,13 @@ static irqreturn_t interface_3aa_isr1(int irq, void *data)
 	itf_3aa = (struct fimc_is_interface_hwip *)data;
 	intr_3aa = &itf_3aa->handler[INTR_HWIP1];
 
-	if (intr_3aa->valid)
+	if (intr_3aa->valid) {
+		fimc_is_enter_lib_isr();
 		intr_3aa->handler(intr_3aa->id, intr_3aa->ctx);
-	else
+		fimc_is_exit_lib_isr();
+	} else {
 		err_itfc("[%d]3aa(1) empty handler!!", itf_3aa->id);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -315,10 +362,13 @@ static irqreturn_t interface_3aa_isr2(int irq, void *data)
 	itf_3aa = (struct fimc_is_interface_hwip *)data;
 	intr_3aa = &itf_3aa->handler[INTR_HWIP2];
 
-	if (intr_3aa->valid)
+	if (intr_3aa->valid) {
+		fimc_is_enter_lib_isr();
 		intr_3aa->handler(intr_3aa->id, intr_3aa->ctx);
-	else
+		fimc_is_exit_lib_isr();
+	} else {
 		err_itfc("[%d]3aa(2) empty handler!!", itf_3aa->id);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -331,10 +381,13 @@ static irqreturn_t interface_3aa_isr3(int irq, void *data)
 	itf_3aa = (struct fimc_is_interface_hwip *)data;
 	intr_3aa = &itf_3aa->handler[INTR_HWIP3];
 
-	if (intr_3aa->valid)
+	if (intr_3aa->valid) {
+		fimc_is_enter_lib_isr();
 		intr_3aa->handler(intr_3aa->id, intr_3aa->ctx);
-	else
+		fimc_is_exit_lib_isr();
+	} else {
 		err_itfc("[%d]3aa(3) empty handler!!", itf_3aa->id);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -363,10 +416,13 @@ static irqreturn_t interface_vra_isr1(int irq, void *data)
 	itf_vra = (struct fimc_is_interface_hwip *)data;
 	intr_vra = &itf_vra->handler[INTR_HWIP1];
 
-	if (intr_vra->valid)
+	if (intr_vra->valid) {
+		fimc_is_enter_lib_isr();
 		intr_vra->handler(intr_vra->id, (void *)itf_vra->hw_ip);
-	else
+		fimc_is_exit_lib_isr();
+	} else {
 		err_itfc("[%d]vra(1) empty handler!!", itf_vra->id);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -380,7 +436,9 @@ static irqreturn_t interface_vra_isr2(int irq, void *data)
 	intr_vra = &itf_vra->handler[INTR_HWIP2];
 
 	if (intr_vra->valid) {
+		fimc_is_enter_lib_isr();
 		intr_vra->handler(intr_vra->id, (void *)itf_vra->hw_ip);
+		fimc_is_exit_lib_isr();
 	} else {
 		err_itfc("[%d]vra(2) empty handler!!", itf_vra->id);
 	}
@@ -457,6 +515,8 @@ int fimc_is_hw_get_address(void *itfc_data, void *pdev_data, int hw_id)
 			return -EINVAL;
 		}
 
+		itf_hwip->hw_ip->regs_start = mem_res->start;
+		itf_hwip->hw_ip->regs_end = mem_res->end;
 		itf_hwip->hw_ip->regs = ioremap_nocache(mem_res->start, resource_size(mem_res));
 		if (!itf_hwip->hw_ip->regs) {
 			dev_err(&pdev->dev, "Failed to remap io region\n");
@@ -471,9 +531,17 @@ int fimc_is_hw_get_address(void *itfc_data, void *pdev_data, int hw_id)
 			return -EINVAL;
 		}
 
+		itf_hwip->hw_ip->regs_b_start = mem_res->start;
+		itf_hwip->hw_ip->regs_b_end = mem_res->end;
 		itf_hwip->hw_ip->regs_b = ioremap_nocache(mem_res->start, resource_size(mem_res));
 		if (!itf_hwip->hw_ip->regs) {
 			dev_err(&pdev->dev, "Failed to remap io region\n");
+			return -EINVAL;
+		}
+
+		itf_hwip->hw_ip->regs_dump = kzalloc(SZ_64K, GFP_KERNEL);
+		if (!itf_hwip->hw_ip->regs_dump) {
+			dev_err(&pdev->dev, "Failed to allc regs_dump\n");
 			return -EINVAL;
 		}
 
@@ -487,13 +555,14 @@ int fimc_is_hw_get_address(void *itfc_data, void *pdev_data, int hw_id)
 			return -EINVAL;
 		}
 
+		itf_hwip->hw_ip->regs_start = mem_res->start;
+		itf_hwip->hw_ip->regs_end = mem_res->end;
 		itf_hwip->hw_ip->regs = ioremap_nocache(mem_res->start, resource_size(mem_res));
 		if (!itf_hwip->hw_ip->regs) {
 			dev_err(&pdev->dev, "Failed to remap io region\n");
 			return -EINVAL;
 		}
 
-		info_itfc("[ID:%2d] (0x%p)\n", hw_id, itf_hwip->hw_ip);
 		info_itfc("[ID:%2d] MCSC VA(0x%p)\n", hw_id, itf_hwip->hw_ip->regs);
 		break;
 	case DEV_HW_VRA:
@@ -503,6 +572,8 @@ int fimc_is_hw_get_address(void *itfc_data, void *pdev_data, int hw_id)
 			return -EINVAL;
 		}
 
+		itf_hwip->hw_ip->regs_start = mem_res->start;
+		itf_hwip->hw_ip->regs_end = mem_res->end;
 		itf_hwip->hw_ip->regs = ioremap_nocache(mem_res->start, resource_size(mem_res));
 		if (!itf_hwip->hw_ip->regs) {
 			dev_err(&pdev->dev, "Failed to remap io region\n");
@@ -517,6 +588,8 @@ int fimc_is_hw_get_address(void *itfc_data, void *pdev_data, int hw_id)
 			return -EINVAL;
 		}
 
+		itf_hwip->hw_ip->regs_b_start = mem_res->start;
+		itf_hwip->hw_ip->regs_b_end = mem_res->end;
 		itf_hwip->hw_ip->regs_b = ioremap_nocache(mem_res->start, resource_size(mem_res));
 		if (!itf_hwip->hw_ip->regs_b) {
 			dev_err(&pdev->dev, "Failed to remap io region\n");
@@ -713,6 +786,6 @@ bool fimc_is_has_mcsc(void)
 
 bool fimc_is_hw_frame_done_with_dma(void)
 {
-	return false; /* true after FIMC-IS V4.x */
+	/* HACK: 3AA DMA interrupt callback is skipped because preventing interrupt loss. */
+	return true; /* true after FIMC-IS V4.x */
 }
-

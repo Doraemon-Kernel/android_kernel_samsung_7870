@@ -19,6 +19,8 @@ struct shdmem_info {
 
 unsigned long shm_get_phys_base(void);
 unsigned shm_get_phys_size(void);
+unsigned long shm_get_sysram_base(void);
+unsigned shm_get_sysram_size(void);
 unsigned shm_get_boot_size(void);
 unsigned shm_get_ipc_rgn_offset(void);
 unsigned shm_get_ipc_rgn_size(void);
@@ -28,5 +30,5 @@ unsigned long shm_get_security_param3(unsigned long mode, u32 main_size);
 void __iomem *shm_request_region(unsigned long sh_addr, unsigned size);
 void __iomem *shm_get_boot_region(void);
 void __iomem *shm_get_ipc_region(void);
-void shm_release_region(void);
+void shm_release_region(void *v_addr);
 #endif

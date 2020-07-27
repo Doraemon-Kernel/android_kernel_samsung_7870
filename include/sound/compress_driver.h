@@ -157,7 +157,6 @@ int snd_compress_register(struct snd_compr *device);
 int snd_compress_deregister(struct snd_compr *device);
 int snd_compress_new(struct snd_card *card, int device,
 			int type, struct snd_compr *compr);
-void snd_compress_free(struct snd_card *card, struct snd_compr *compr);
 
 /* dsp driver callback apis
  * For playback: driver should call snd_compress_fragment_elapsed() to let the
@@ -177,10 +176,11 @@ static inline void snd_compr_drain_notify(struct snd_compr_stream *stream)
 	if (snd_BUG_ON(!stream))
 		return;
 
-	if (stream->runtime->state == SNDRV_PCM_STATE_DRAINING)
-		stream->runtime->state = SNDRV_PCM_STATE_RUNNING;
-	else
+	if (stream->direction == SND_COMPRESS_PLAYBACK)
 		stream->runtime->state = SNDRV_PCM_STATE_SETUP;
+	else
+		stream->runtime->state = SNDRV_PCM_STATE_PREPARED;
+
 	wake_up(&stream->runtime->sleep);
 }
 

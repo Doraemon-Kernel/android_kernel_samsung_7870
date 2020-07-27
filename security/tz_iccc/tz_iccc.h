@@ -3,7 +3,7 @@
 
 /* ICCC Implementation in Kernel */
 
-#include <../../drivers/gud/gud-exynos8890/MobiCoreDriver/public/mobicore_driver_api.h>
+#include <../../drivers/gud/gud-exynos7870/MobiCoreDriver/public/mobicore_driver_api.h>
 #include <linux/security/Iccc_Interface.h>
 #include <linux/selinux.h>
 

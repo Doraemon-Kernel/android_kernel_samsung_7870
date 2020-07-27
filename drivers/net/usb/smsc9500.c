@@ -3467,18 +3467,14 @@ static int smsc9500_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 //actual data size isn't, then kernel may drop the subsequent packets.
 			if (dev->turbo_mode) {
 				ax_skb = alloc_skb(skb->len + NET_IP_ALIGN, GFP_ATOMIC);
-				if (ax_skb) {
-					skb_reserve(ax_skb, NET_IP_ALIGN);
-					skb_put(ax_skb, skb->len);
-					memcpy(ax_skb->data, skb->data, skb->len);
+				skb_reserve(ax_skb, NET_IP_ALIGN);
+				skb_put(ax_skb, skb->len);
+				memcpy(ax_skb->data, skb->data, skb->len);
 
-					vlan_tag = (u16*)&ax_skb->cb[0];
-					*vlan_tag = VLAN_DUMMY; //Reserved value
-					smscusbnet_skb_return(dev, ax_skb);
-					ret = RX_FIXUP_INVALID_SKB;
-				} else
-					printk(KERN_ERR "%s - %d : alloc_skb() failed\n",
-						__func__, __LINE__);
+				vlan_tag = (u16*)&ax_skb->cb[0];
+				*vlan_tag = VLAN_DUMMY; //Reserved value
+				smscusbnet_skb_return(dev, ax_skb);
+				ret = RX_FIXUP_INVALID_SKB;
 			} else {
 				ret = RX_FIXUP_VALID_SKB;
 				vlan_tag = (u16*)&skb->cb[0];
@@ -3500,11 +3496,7 @@ static int smsc9500_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 
 #ifdef RX_SKB_COPY
 		ax_skb = alloc_skb(size + NET_IP_ALIGN, GFP_ATOMIC);
-		if (ax_skb)
-			skb_reserve(ax_skb, NET_IP_ALIGN);
-		else
-			printk(KERN_ERR "%s - %d : alloc_skb() failed\n",
-				__func__, __LINE__);
+		skb_reserve(ax_skb, NET_IP_ALIGN);
 #else
 		ax_skb = skb_clone(skb, GFP_ATOMIC);
 #endif

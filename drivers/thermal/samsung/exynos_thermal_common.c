@@ -25,18 +25,20 @@
 #include <linux/isp_cooling.h>
 #include <linux/err.h>
 #include <linux/slab.h>
-#include <linux/cpufreq.h>
 #include <linux/suspend.h>
 #include <linux/thermal.h>
 #include <linux/pm_qos.h>
+#include <linux/cpufreq.h>
 #include <soc/samsung/cpufreq.h>
 
 #include "exynos_thermal_common.h"
 
-unsigned long cpu_max_temp[2];
-#if defined(CONFIG_ARM_EXYNOS_MP_CPUFREQ)
-int get_real_max_freq(cluster_type cluster);
+#if defined(CONFIG_GPU_THERMAL)
+extern int gpu_dvfs_get_max_freq(void);
+extern int gpu_dvfs_get_min_freq(void);
 #endif
+
+unsigned long cpu_max_temp[2];
 
 struct exynos_thermal_zone {
 	enum thermal_device_mode mode;
@@ -73,15 +75,21 @@ static int exynos_set_mode(struct thermal_zone_device *thermal,
 		return 0;
 	}
 
+	mutex_lock(&thermal->lock);
+
+	if (mode == THERMAL_DEVICE_ENABLED &&
+		!th_zone->sensor_conf->trip_data.trigger_falling)
+		thermal->polling_delay = IDLE_INTERVAL;
+	else
+		thermal->polling_delay = 0;
+
+	mutex_unlock(&thermal->lock);
+
 	th_zone->mode = mode;
-
-#if defined(CONFIG_EXYNOS_BIG_FREQ_BOOST)
-	if (th_zone->therm_dev->device_enable)
-		thermal_zone_device_update(thermal);
-#else
 	thermal_zone_device_update(thermal);
-#endif
-
+	dev_dbg(th_zone->sensor_conf->dev,
+		"thermal polling set for duration=%d msec\n",
+		thermal->polling_delay);
 	return 0;
 }
 
@@ -147,8 +155,12 @@ static int exynos_bind(struct thermal_zone_device *thermal,
 	struct exynos_thermal_zone *th_zone = thermal->devdata;
 	struct thermal_sensor_conf *data = th_zone->sensor_conf;
 	enum thermal_trip_type type;
+#ifdef CONFIG_ARM_EXYNOS_MP_CPUFREQ
 	struct cpufreq_policy policy;
-	int max_freq;
+#endif
+#ifdef CONFIG_GPU_THERMAL
+	int gpu_max_freq, gpu_min_freq;
+#endif
 
 	tab_ptr = (struct freq_clip_table *)data->cooling_data.freq_data;
 	tab_size = data->cooling_data.freq_clip_count;
@@ -168,40 +180,45 @@ static int exynos_bind(struct thermal_zone_device *thermal,
 	/* Bind the thermal zone to the cpufreq cooling device */
 	for (i = 0; i < tab_size; i++) {
 		clip_data = (struct freq_clip_table *)&(tab_ptr[i]);
-		if (data->d_type == CLUSTER0) {
-			cpufreq_get_policy(&policy, CLUSTER0_CORE);
 
-#if defined(CONFIG_ARM_EXYNOS_MP_CPUFREQ)
-			max_freq = get_real_max_freq(CL_ZERO);
-#else
-			max_freq = policy.max;
+#ifdef CONFIG_ARM_EXYNOS_MP_CPUFREQ
+		if(data->d_type == CLUSTER0 || data->d_type == CLUSTER1) {
+			ret = cpufreq_get_policy(&policy, data->d_type);
+			if (ret)
+				return -EINVAL;
+
+			if (clip_data->freq_clip_max > policy.max) {
+				pr_warn("%s: Throttling freq(%d) is greater than policy max(%d)\n", __func__, clip_data->freq_clip_max, policy.max);
+				clip_data->freq_clip_max = policy.max;
+			 } else if (clip_data->freq_clip_max < policy.min){
+				pr_warn("%s: Throttling freq(%d) is lower than policy min(%d)\n", __func__, clip_data->freq_clip_max, policy.min);
+				clip_data->freq_clip_max = policy.min;
+			 }
+		}
 #endif
-			if (clip_data->freq_clip_max > max_freq) {
-				dev_info(data->dev, "clip_data->freq_clip_max : %d, policy.max : %d \n",
-							clip_data->freq_clip_max, max_freq);
-				clip_data->freq_clip_max = max_freq;
-				dev_info(data->dev, "Apply to clip_data->freq_clip_max : %d",
-							clip_data->freq_clip_max);
-			}
 
+#ifdef CONFIG_GPU_THERMAL
+		if(data->d_type == GPU) {
+			gpu_max_freq = gpu_dvfs_get_max_freq() * 1000;
+			gpu_min_freq = gpu_dvfs_get_min_freq() * 1000;
+
+			if(gpu_max_freq > 0 && gpu_min_freq > 0) {
+				if (clip_data->freq_clip_max > gpu_max_freq) {
+					pr_warn("%s: GPU Throttling freq(%d) is greater than max(%d)\n", __func__, clip_data->freq_clip_max, gpu_max_freq);
+					clip_data->freq_clip_max = gpu_max_freq;
+				 } else if (clip_data->freq_clip_max < gpu_min_freq){
+					pr_warn("%s: GPU Throttling freq(%d) is lower than min(%d)\n", __func__, clip_data->freq_clip_max, gpu_min_freq);
+					clip_data->freq_clip_max = gpu_min_freq;
+				 }
+			}
+		}
+#endif
+
+		if (data->d_type == CLUSTER0)
 			level = cpufreq_cooling_get_level(0, clip_data->freq_clip_max);
-		} else if (data->d_type == CLUSTER1) {
-			cpufreq_get_policy(&policy, CLUSTER1_CORE);
-
-#if defined(CONFIG_ARM_EXYNOS_MP_CPUFREQ)
-			max_freq = get_real_max_freq(CL_ONE);
-#else
-			max_freq = policy.max;
-#endif
-			if (clip_data->freq_clip_max > max_freq) {
-				dev_info(data->dev, "clip_data->freq_clip_max : %d, policy.max : %d \n",
-							clip_data->freq_clip_max, max_freq);
-				clip_data->freq_clip_max = max_freq;
-				dev_info(data->dev, "Apply to clip_data->freq_clip_max : %d",
-							clip_data->freq_clip_max);
-			}
+		else if (data->d_type == CLUSTER1)
 			level = cpufreq_cooling_get_level(4, clip_data->freq_clip_max);
-		} else if (data->d_type == GPU)
+		else if (data->d_type == GPU)
 			level = gpufreq_cooling_get_level(0, clip_data->freq_clip_max);
 		else if (data->d_type == ISP)
 			level = isp_cooling_get_fps(0, clip_data->freq_clip_max);
@@ -209,7 +226,7 @@ static int exynos_bind(struct thermal_zone_device *thermal,
 			level = (int)THERMAL_CSTATE_INVALID;
 
 		if (level == THERMAL_CSTATE_INVALID) {
-			dev_err(data->dev, "%s level is not matching \n", __func__);
+			pr_warn("Bind fail is occurred because level is invalid.\n");
 			return 0;
 		}
 
@@ -390,11 +407,8 @@ static int exynos_throttle_cpu_hotplug(struct thermal_zone_device *thermal)
 			 * call cluster1_cores_hotplug(false) for hotplugged out cpus.
 			 */
 			pm_qos_update_request(&thermal_cpu_hotplug_request, NR_CPUS);
-
-			mutex_lock(&thermal->lock);
 			is_cpu_hotplugged_out = false;
 			cpufreq_device->cpufreq_state = 0;
-			mutex_unlock(&thermal->lock);
 		}
 	} else {
 		if (cur_temp >= data->hotplug_out_threshold) {
@@ -402,11 +416,8 @@ static int exynos_throttle_cpu_hotplug(struct thermal_zone_device *thermal)
 			 * If current temperature is higher than high threshold,
 			 * call cluster1_cores_hotplug(true) to hold temperature down.
 			 */
-			mutex_lock(&thermal->lock);
-			is_cpu_hotplugged_out = true;
-			mutex_unlock(&thermal->lock);
-
 			pm_qos_update_request(&thermal_cpu_hotplug_request, NR_CLUST1_CPUS);
+			is_cpu_hotplugged_out = true;
 		}
 	}
 
@@ -469,15 +480,7 @@ void exynos_report_trigger(struct thermal_sensor_conf *conf)
 		}
 	}
 
-	if (conf->d_type == CLUSTER1) {
-		core_boost_lock();
-		thermal_zone_device_update(th_zone->therm_dev);
-		core_boost_unlock();
-	} else
-		thermal_zone_device_update(th_zone->therm_dev);
-
-	if (th_zone->therm_dev->ops->throttle_cpu_hotplug)
-		th_zone->therm_dev->ops->throttle_cpu_hotplug(th_zone->therm_dev);
+	thermal_zone_device_update(th_zone->therm_dev);
 
 	mutex_lock(&th_zone->therm_dev->lock);
 	/* Find the level for which trip happened */
@@ -495,50 +498,10 @@ void exynos_report_trigger(struct thermal_sensor_conf *conf)
 			th_zone->therm_dev->polling_delay = IDLE_INTERVAL;
 	}
 
-	if (th_zone->sensor_conf->trip_data.trip_old_val != i) {
-		snprintf(data, sizeof(data), "%u", i);
-		kobject_uevent_env(&th_zone->therm_dev->device.kobj, KOBJ_CHANGE, envp);
-		th_zone->sensor_conf->trip_data.trip_old_val = i;
-	}
-
+	snprintf(data, sizeof(data), "%u", i);
+	kobject_uevent_env(&th_zone->therm_dev->device.kobj, KOBJ_CHANGE, envp);
 	mutex_unlock(&th_zone->therm_dev->lock);
 }
-
-#if defined(CONFIG_EXYNOS_BIG_FREQ_BOOST)
-void change_core_boost_thermal(struct thermal_sensor_conf *quad, struct thermal_sensor_conf *dual, int mode)
-{
-	struct exynos_thermal_zone *th_zone;
-
-	if (mode == 0) {
-		/* Quad Setting Value */
-		th_zone = quad->pzone_data;
-		if (th_zone->therm_dev->device_enable)
-			exynos_set_mode(th_zone->therm_dev, THERMAL_DEVICE_ENABLED);
-		else
-			exynos_set_mode(th_zone->therm_dev, THERMAL_DEVICE_DISABLED);
-
-		/* Dual Setting Value */
-		th_zone = dual->pzone_data;
-		if (th_zone->therm_dev->device_enable)
-			exynos_set_mode(th_zone->therm_dev, THERMAL_DEVICE_PAUSED);
-		else
-			exynos_set_mode(th_zone->therm_dev, THERMAL_DEVICE_DISABLED);
-	} else {
-		/* Dual Setting Value */
-		th_zone = dual->pzone_data;
-		if (th_zone->therm_dev->device_enable)
-			exynos_set_mode(th_zone->therm_dev, THERMAL_DEVICE_ENABLED);
-		else
-			exynos_set_mode(th_zone->therm_dev, THERMAL_DEVICE_DISABLED);
-		/* Quad Setting Value */
-		th_zone = quad->pzone_data;
-		if (th_zone->therm_dev->device_enable)
-			exynos_set_mode(th_zone->therm_dev, THERMAL_DEVICE_PAUSED);
-		else
-			exynos_set_mode(th_zone->therm_dev, THERMAL_DEVICE_DISABLED);
-	}
-}
-#endif
 
 static int exynos_pm_notifier(struct notifier_block *notifier,
 			unsigned long event, void *v)
@@ -592,16 +555,9 @@ int exynos_register_thermal(struct thermal_sensor_conf *sensor_conf)
 	cpumask_clear(&mask_val);
 
 	for_each_possible_cpu(cpu) {
-		if (sensor_conf->d_type == CLUSTER1) {
-			if (cpu_topology[cpu].cluster_id == 0) {
-				cpumask_copy(&mask_val, topology_core_cpumask(cpu));
-				break;
-			}
-		} else {
-			if (cpu_topology[cpu].cluster_id == sensor_conf->id) {
-				cpumask_copy(&mask_val, topology_core_cpumask(cpu));
-				break;
-			}
+		if (cpu_topology[cpu].cluster_id == sensor_conf->id) {
+			cpumask_copy(&mask_val, topology_core_cpumask(cpu));
+			break;
 		}
 	}
 
@@ -636,13 +592,10 @@ int exynos_register_thermal(struct thermal_sensor_conf *sensor_conf)
 	/* Add hotplug function ops */
 	if (sensor_conf->hotplug_enable) {
 		dev_ops = &exynos_dev_hotplug_ops;
-		if (sensor_conf->id == 0)
-			pm_qos_add_request(&thermal_cpu_hotplug_request, PM_QOS_CPU_ONLINE_MAX,
-						PM_QOS_CPU_ONLINE_MAX_DEFAULT_VALUE);
+		pm_qos_add_request(&thermal_cpu_hotplug_request, PM_QOS_CPU_ONLINE_MAX,
+					PM_QOS_CPU_ONLINE_MAX_DEFAULT_VALUE);
 	} else
 		dev_ops = &exynos_dev_ops;
-
-	th_zone->mode = THERMAL_DEVICE_ENABLED;
 
 	th_zone->therm_dev = thermal_zone_device_register(
 			sensor_conf->name, sensor_conf->trip_data.trip_count,
@@ -654,9 +607,9 @@ int exynos_register_thermal(struct thermal_sensor_conf *sensor_conf)
 		dev_err(sensor_conf->dev,
 			"Failed to register thermal zone device\n");
 		ret = PTR_ERR(th_zone->therm_dev);
-		th_zone->mode = THERMAL_DEVICE_DISABLED;
 		goto err_unregister;
 	}
+	th_zone->mode = THERMAL_DEVICE_ENABLED;
 	sensor_conf->pzone_data = th_zone;
 
 	if (sensor_conf->id == 0)

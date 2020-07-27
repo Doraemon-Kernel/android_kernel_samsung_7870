@@ -44,14 +44,15 @@
 #include "muic_dt.h"
 #include "muic_vps.h"
 
-#if defined(CONFIG_MUIC_HV)
-#include "muic_hv.h"
-#include "muic_hv_max77854.h"
-#endif
-
 static int muic_gpio_uart_sel;
+static bool muic_gpio_uart_ap;
 
 #if defined(CONFIG_OF)
+struct of_device_id muic_i2c_dt_ids[] = {
+	{ .compatible = "muic-universal" },
+	{ },
+};
+#endif
 
 /* The supported APS list from dts format as follows.
     + : MUIC SHOULD detect the device type.
@@ -79,6 +80,9 @@ static int muic_gpio_uart_sel;
 "+CDP:OPEN",
 "+Undefined Charging",
 */
+
+
+#if defined(CONFIG_OF)
 int of_update_supported_list(struct i2c_client *i2c,
 				struct muic_platform_data *pdata)
 {
@@ -180,10 +184,16 @@ err:
 	return ret;
 }
 
-int of_muic_dt(struct i2c_client *i2c, struct muic_platform_data *pdata, muic_data_t *pmuic)
+
+int of_muic_dt(struct i2c_client *i2c, struct muic_platform_data *pdata)
 {
 	struct device_node *np_muic = i2c->dev.of_node;
+	muic_data_t *pmuic = i2c_get_clientdata(i2c);
 	int ret=0;
+#ifdef CONFIG_MUIC_USB_ID_CTR
+	int muic_usb_id_ctr=0;
+#endif
+	pr_info("%s\n", __func__);
 
 	if(!np_muic)
 		return -EINVAL;
@@ -192,78 +202,78 @@ int of_muic_dt(struct i2c_client *i2c, struct muic_platform_data *pdata, muic_da
 		"muic-universal,chip_name", (char const **)&pmuic->chip_name);
 	if (ret)
 		pr_info("%s: Vendor is Empty\n", __func__);
-	else 
+	else
 		pr_info("%s: chip_name is %s\n", __func__, pmuic->chip_name);
 
 	pmuic->undefined_range = of_property_read_bool(np_muic, "muic,undefined_range");
 	pr_info("%s: muic,undefined_range[%s]\n", __func__, pmuic->undefined_range ? "T" : "F");
 
 	pdata->irq_gpio = of_get_named_gpio(np_muic, "muic-universal,irq-gpio", 0);
-	pr_info("%s: irq-gpio: %u )\n", __func__, pdata->irq_gpio);
-
-	if (of_find_property(np_muic, "muic-universal,uart-gpio", NULL)) {
-		muic_gpio_uart_sel = of_get_named_gpio(np_muic, "muic-universal,uart-gpio", 0);
-		if (muic_gpio_uart_sel < 0) {
-			pr_info("%s : cannot get uart-gpio : %d\n",
-				__func__, muic_gpio_uart_sel);
-			pmuic->gpio_uart_sel = muic_gpio_uart_sel = 0;
-			return 0;
-		} else
-			pr_info("%s: uart-gpio : %d\n", __func__, muic_gpio_uart_sel);
-
-		pmuic->gpio_uart_sel = muic_gpio_uart_sel;
-	} else {
-		pr_info("%s: No gpio_uart_sel defined.\n", __func__);
-		pmuic->gpio_uart_sel = muic_gpio_uart_sel = 0;
+	pr_info("%s: irq-gpio: %u\n", __func__, pdata->irq_gpio);
+#ifdef CONFIG_MUIC_POGO
+	pmuic->mux_sel = of_get_named_gpio(np_muic, "mux-sel", 0);
+	ret = gpio_is_valid(pmuic->mux_sel);
+	if (!ret) {
+		pr_err("GPIO_MUX_SEL is not valid!!!\n");
+		return ret;
 	}
+	gpio_direction_output(pmuic->mux_sel, 0);
+	pr_info("%s: mux_sel: %u\n", __func__, pmuic->mux_sel);
+#endif
+#ifdef CONFIG_MUIC_USB_ID_CTR
+	muic_usb_id_ctr = of_get_named_gpio(np_muic, "usb-id-ctr", 0);
+	ret = gpio_is_valid(muic_usb_id_ctr);
+	if (!ret) {
+		pr_err("GPIO_USB_ID_CTR is not valid!!!\n");
+		return ret;
+	}
+	pmuic->usb_id_ctr = muic_usb_id_ctr;
+	gpio_direction_output(pmuic->usb_id_ctr, 0);
+	pr_info("%s: usb_id_ctr: %u\n", __func__, pmuic->usb_id_ctr);
+#endif
 
 	return 0;
 }
 
-#if defined(CONFIG_MUIC_HV)
-int of_muic_hv_dt(muic_data_t *pmuic)
+#ifdef CONFIG_MUIC_POGO
+int muic_mux_sel_control(muic_data_t *pmuic, int control)
 {
-	struct device_node *np_muic;
-	struct hv_data *phv = pmuic->phv;
-	int ret = 0;
+	int mux_sel = pmuic->mux_sel;
+	int tmp; 
 
-	np_muic = of_find_node_by_path("/muic");
-	if (np_muic == NULL)
-		return -EINVAL;
+	if (gpio_is_valid(mux_sel))
+		gpio_direction_output(mux_sel, control);
 
-	ret = of_property_read_u8(np_muic, "muic,qc-hv", &phv->qc_hv);
-	if (ret) {
-		pr_err("%s:%s There is no Property of muic,qc-hv\n",
-				MUIC_DEV_NAME, __func__);
-		goto err;
-	}
+	tmp = gpio_get_value(mux_sel);
+	pr_info("%s mux_sel: %d\n", __func__, tmp);
 
-	pr_info("%s:%s phv->qc-hv:0x%02x\n", MUIC_DEV_NAME, __func__,
-				phv->qc_hv);
-
-        ret = of_property_read_u8(np_muic, "muic,afcmode-tx", &phv->tx_data);
-        if (ret) {
-                pr_err("%s:%s There is no Property of muic,afcmode-tx\n",
-                                MUIC_DEV_NAME, __func__);
-                return -EINVAL;
-        }
-
-        pr_info("%s:%s phv->tx_data:0x%02x\n", MUIC_DEV_NAME, __func__,
-                                phv->tx_data);
-
-#if defined(CONFIG_MUIC_HV_SUPPORT_POGO_DOCK)
-	pmuic->dock_int_ap = of_get_named_gpio(np_muic, "muic,dock_int_ap", 0);
-	if (gpio_is_valid(pmuic->dock_int_ap))
-		pr_info("%s:%s dock_int_ap:%d, value:%d\n", MUIC_DEV_NAME, __func__, 
-				pmuic->dock_int_ap, gpio_get_value(pmuic->dock_int_ap));
-	else
-		pr_err("%s:%s dock_int_ap is invalid\n", MUIC_DEV_NAME, __func__);
+	return 0;
+}
 #endif
 
-err:
-	of_node_put(np_muic);
+#if defined(CONFIG_MUIC_PINCTRL)
+int of_muic_pinctrl(struct i2c_client *i2c)
+{
+	struct pinctrl *muic_pinctrl;
 
-	return ret;
+	pr_info("%s\n", __func__);
+
+	muic_pinctrl = devm_pinctrl_get_select(&i2c->dev, "muic_i2c_pins_default");
+	if (IS_ERR(muic_pinctrl)) {
+		if (PTR_ERR(muic_pinctrl) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		pr_debug("Target does not use i2c pinctrl\n");
+		muic_pinctrl = NULL;
+	}
+	muic_pinctrl = devm_pinctrl_get_select(&i2c->dev, "muic_interrupt_pins_default");
+	if (IS_ERR(muic_pinctrl)) {
+		if (PTR_ERR(muic_pinctrl) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		pr_debug("Target does not use int pinctrl\n");
+		muic_pinctrl = NULL;
+	}
+
+	return 0;
 }
 #endif
 #endif
@@ -272,47 +282,30 @@ int muic_set_gpio_uart_sel(int uart_sel)
 {
 	const char *mode;
 	int uart_sel_gpio = muic_gpio_uart_sel;
-	int uart_sel_val;
-	int ret;
 
 	if (!uart_sel_gpio) {
 		pr_err("%s: No UART gpio defined.\n", __func__);
 		return 0;
 	}
 
-	ret = gpio_request(uart_sel_gpio, "GPIO_UART_SEL");
-	if (ret) {
-		pr_err("failed to gpio_request GPIO_UART_SEL\n");
-		return ret;
-	}
-
-	uart_sel_val = gpio_get_value(uart_sel_gpio);
-
-	pr_info("%s: uart_sel(%d), GPIO_UART_SEL(%d)=%c ->", __func__, uart_sel,
-			uart_sel_gpio, (uart_sel_val == 0 ? 'L' : 'H'));
-
 	switch (uart_sel) {
 	case MUIC_PATH_UART_AP:
 		mode = "AP_UART";
 		if (gpio_is_valid(uart_sel_gpio))
-			gpio_direction_output(uart_sel_gpio, 0);
+			gpio_direction_output(uart_sel_gpio, muic_gpio_uart_ap);
 		break;
 	case MUIC_PATH_UART_CP:
 		mode = "CP_UART";
 		if (gpio_is_valid(uart_sel_gpio))
-			gpio_direction_output(uart_sel_gpio, 1);
+			gpio_direction_output(uart_sel_gpio, !muic_gpio_uart_ap);
 		break;
 	default:
 		mode = "Error";
 		break;
 	}
 
-	uart_sel_val = gpio_get_value(uart_sel_gpio);
-
-	gpio_free(uart_sel_gpio);
-
-	pr_info(" %s, GPIO_UART_SEL(%d)=%c\n", mode, uart_sel_gpio,
-			(uart_sel_val == 0 ? 'L' : 'H'));
+	pr_info("%s: uart_sel(%d), GPIO_UART_SEL(%d)=%s", __func__, uart_sel,
+			uart_sel_gpio, mode);
 
 	return 0;
 }

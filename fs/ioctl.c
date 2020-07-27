@@ -18,7 +18,7 @@
 
 #include <asm/ioctls.h>
 
-#include "./internal.h"
+#include "internal.h"
 #include <linux/namei.h>
 
 /* So that the fiemap access checks can't overflow on 32 bit machines. */

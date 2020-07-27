@@ -21,23 +21,20 @@
 #endif
 
 /* These definitions are need to guide from AP team */
-#define DSIM_STOP_STATE_CNT		0xA
+#define DSIM_STOP_STATE_CNT		0x7ff
 #define DSIM_BTA_TIMEOUT		0xff
 #define DSIM_LP_RX_TIMEOUT		0xffff
 #define DSIM_MULTI_PACKET_CNT		0xffff
 #define DSIM_PLL_STABLE_TIME		0x13880
-#define DSIM_FIFOCTRL_THRESHOLD		0x0 /* 1 ~ 32 */
 
 /* If below values depend on panel. These values wil be move to panel file.
  * And these values are valid in case of video mode only. */
 #define DSIM_CMD_ALLOW_VALUE		4
 #define DSIM_STABLE_VFP_VALUE		2
 #define DSIM_M_PLL_CTRL2		0x0
-#define TE_PROTECT_ON_TIME		158 /* 15.8ms*/
-#define TE_TIMEOUT_TIME			180 /* 18ms */
 
 /* M_PLL_CTRL setting value */
-const u32 DSIM_M_PLL_CTRL1[3] = {0x40000080, 0x400000c0, 0x400000c0};
+const u32 DSIM_M_PLL_CTRL1[3] = {0x40000000, 0x40000040, 0x40000040};
 
 /* DPHY timing table */
 const u32 dphy_timing[][10] = {
@@ -156,43 +153,6 @@ const u32 b_dphyctl[14] = {
 
 
 /******************* CAL raw functions implementation *************************/
-
-#if IS_ENABLED(CONFIG_EXYNOS_OTP)
-void dsim_reg_set_phy_otp_config(u32 id)
-{
-	u8 type, index_count;
-	u32 i, ret, magic;
-	struct tune_bits *data;
-
-	switch (id) {
-	case 0:
-		magic = OTP_MAGIC_MIPI_DSI0_M4S4;
-		break;
-	case 1:
-		magic = OTP_MAGIC_MIPI_DSI1_M4S0;
-		break;
-	case 2:
-		magic = OTP_MAGIC_MIPI_DSI2_M1S0;
-		break;
-	default:
-		dsim_err("%s dsim%d doesn't supported\n", __func__, id);
-		break;
-	}
-
-	ret = otp_tune_bits_parsed(magic, &type, &index_count, &data);
-	if (ret) {
-		dsim_err("OTP data for DPHY is not ready\n");
-		return;
-	}
-
-	for (i = 0; i < index_count; i++) {
-		dsim_write(id, data[i].index * 4, data[i].value);
-		dsim_dbg("dsi%d, data[%d].index = %d, data[%d].value = %d\n",
-				i, i, data[i].index, i, data[i].value);
-	}
-}
-#endif
-
 void dsim_reg_sw_reset(u32 id)
 {
 	u32 cnt = 1000;
@@ -541,92 +501,6 @@ void dsim_reg_enable_dsc(u32 id, u32 en)
 	dsim_write_mask(id, DSIM_CONFIG, val, DSIM_CONFIG_CPRS_EN);
 }
 
-void dsim_reg_set_num_of_slice(u32 id, u32 num_of_slice)
-{
-	u32 val = DSIM_CPRS_CTRL_NUM_OF_SLICE(num_of_slice);
-
-	dsim_write_mask(id, DSIM_CPRS_CTRL, val, DSIM_CPRS_CTRL_NUM_OF_SLICE_MASK);
-}
-
-void dsim_reg_get_num_of_slice(u32 id, u32 *num_of_slice)
-{
-	u32 val = dsim_read(id, DSIM_CPRS_CTRL);
-
-	*num_of_slice = DSIM_CPRS_CTRL_NUM_OF_SLICE_GET(val);
-}
-
-void dsim_reg_set_multi_slice(u32 id, struct decon_lcd *lcd_info)
-{
-	u32 multi_slice = 1;
-	u32 val;
-
-	/* if multi-slice(2~4 slices) DSC compression is used in video mode
-	 * MULTI_SLICE_PACKET configuration must be matched to DDI's configuration */
-	if (lcd_info->mode == DECON_MIPI_COMMAND_MODE)
-		multi_slice = 1;
-	else if (lcd_info->mode == DECON_VIDEO_MODE)
-		multi_slice = lcd_info->dsc_slice_num > 1 ? 1 : 0;
-
-	/* if MULTI_SLICE_PACKET is enabled, only one packet header is transferred
-	 * for multi slice */
-	val = multi_slice ? ~0 : 0;
-	dsim_write_mask(id, DSIM_CPRS_CTRL, val, DSIM_CPRS_CTRL_MULI_SLICE_PACKET);
-}
-
-void dsim_reg_set_size_of_slice(u32 id, struct decon_lcd *lcd_info)
-{
-	u32 slice_w = lcd_info->xres / lcd_info->dsc_slice_num;
-	u32 val_01 = 0, mask_01 = 0;
-	u32 val_23 = 0, mask_23 = 0;
-
-	if (lcd_info->dsc_slice_num == 4) {
-		val_01 = DSIM_SLICE01_SIZE_OF_SLICE1(slice_w) |
-			DSIM_SLICE01_SIZE_OF_SLICE0(slice_w);
-		mask_01 = DSIM_SLICE01_SIZE_OF_SLICE1_MASK |
-			DSIM_SLICE01_SIZE_OF_SLICE0_MASK;
-		val_23 = DSIM_SLICE23_SIZE_OF_SLICE3(slice_w) |
-			DSIM_SLICE23_SIZE_OF_SLICE2(slice_w);
-		mask_23 = DSIM_SLICE23_SIZE_OF_SLICE3_MASK |
-			DSIM_SLICE23_SIZE_OF_SLICE2_MASK;
-	} else if (lcd_info->dsc_slice_num == 2 && lcd_info->dsc_cnt == 2) {
-		val_01 = DSIM_SLICE01_SIZE_OF_SLICE1(slice_w) |
-			DSIM_SLICE01_SIZE_OF_SLICE0(slice_w);
-		mask_01 = DSIM_SLICE01_SIZE_OF_SLICE1_MASK |
-			DSIM_SLICE01_SIZE_OF_SLICE0_MASK;
-	} else if (lcd_info->dsc_slice_num == 2 && lcd_info->dsc_cnt == 1) {
-		val_01 = DSIM_SLICE01_SIZE_OF_SLICE1(slice_w) |
-			DSIM_SLICE01_SIZE_OF_SLICE0(slice_w);
-		mask_01 = DSIM_SLICE01_SIZE_OF_SLICE1_MASK |
-			DSIM_SLICE01_SIZE_OF_SLICE0_MASK;
-	} else if (lcd_info->dsc_slice_num == 1) {
-		val_01 = DSIM_SLICE01_SIZE_OF_SLICE0(slice_w);
-		mask_01 = DSIM_SLICE01_SIZE_OF_SLICE0_MASK;
-	} else {
-		dsim_err("not supported slice mode. dsc(%d), slice(%d)\n",
-				lcd_info->dsc_cnt, lcd_info->dsc_slice_num);
-	}
-
-	dsim_write_mask(id, DSIM_SLICE01, val_01, mask_01);
-	dsim_write_mask(id, DSIM_SLICE23, val_23, mask_23);
-}
-
-void dsim_reg_print_size_of_slice(u32 id)
-{
-	u32 val;
-	u32 slice0_w, slice1_w, slice2_w, slice3_w;
-
-	val = dsim_read(id, DSIM_SLICE01);
-	slice0_w = DSIM_SLICE01_SIZE_OF_SLICE0_GET(val);
-	slice1_w = DSIM_SLICE01_SIZE_OF_SLICE1_GET(val);
-
-	val = dsim_read(id, DSIM_SLICE23);
-	slice2_w = DSIM_SLICE23_SIZE_OF_SLICE2_GET(val);
-	slice3_w = DSIM_SLICE23_SIZE_OF_SLICE3_GET(val);
-
-	dsim_dbg("dsim%d: slice0 w(%d), slice1 w(%d), slice2 w(%d), slice3(%d)\n",
-			id, slice0_w, slice1_w, slice2_w, slice3_w);
-}
-
 void dsim_reg_disable_hsa(u32 id, u32 en)
 {
 	u32 val = en ? ~0 : 0;
@@ -732,66 +606,9 @@ void dsim_reg_set_vresol(u32 id, u32 vresol)
 	dsim_write_mask(id, DSIM_RESOL, val, DSIM_RESOL_VRESOL_MASK);
 }
 
-u32 dsc_get_hresol(u32 x_resol, u32 dscc_en, u32 ds_en)
-{
-	u32 slice_width;
-	u32 width_eff;
-	u32 slice_width_byte_unit, comp_slice_width_byte_unit;
-	u32 comp_slice_width_pixel_unit;
-	u32 overlap_w = 0;
-	u32 comp_slice_w = 0;
-	u32 i, j;
-
-	/* check if two encoders are used */
-	if (dscc_en)
-		width_eff = (x_resol >> 1) + overlap_w;
-	else
-		width_eff = x_resol + overlap_w;
-
-	/* check if dual slice is enabled */
-	if (ds_en)
-		slice_width = width_eff >> 1;
-	else
-		slice_width = width_eff;
-
-	/* 3bytes per pixel */
-	slice_width_byte_unit = slice_width * 3;
-	/* integer value, /3 for 1/3 compression */
-	comp_slice_width_byte_unit = slice_width_byte_unit / 3;
-	/* integer value, /3 for pixel unit */
-	comp_slice_width_pixel_unit = comp_slice_width_byte_unit / 3;
-
-	i = comp_slice_width_byte_unit % 3;
-	j = comp_slice_width_pixel_unit % 2;
-
-	if ( i == 0 && j == 0) {
-		comp_slice_w = comp_slice_width_pixel_unit;
-	} else if (i == 0 && j != 0) {
-		comp_slice_w = comp_slice_width_pixel_unit + 1;
-	} else if (i != 0) {
-		while (1) {
-			comp_slice_width_pixel_unit++;
-			j = comp_slice_width_pixel_unit % 2;
-			if (j == 0)
-				break;
-		}
-		comp_slice_w = comp_slice_width_pixel_unit;
-	}
-
-	return comp_slice_w;
-
-}
-
 void dsim_reg_set_hresol(u32 id, u32 hresol, struct decon_lcd *lcd)
 {
-	u32 width = 0, val = 0;
-	u32 dual_slice = 0;
-	u32 slice_mode_change = 0;
-	int dsi_cnt = 1;
-
-	if (lcd->dsc_slice_num == lcd->dsc_cnt *2) dual_slice = 1;
-	slice_mode_change = ((lcd->dsc_slice_num == lcd->dsc_cnt) != (lcd->dsc_slice_num == dsi_cnt));
-	dsim_dbg("dual slice(%d), slice_mode_change(%d)\n", dual_slice, slice_mode_change);
+	u32 width, val;
 
 	if (lcd->mic_enabled) {
 		switch (lcd->mic_ratio) {
@@ -804,9 +621,6 @@ void dsim_reg_set_hresol(u32 id, u32 hresol, struct decon_lcd *lcd)
 			width = lcd->xres;
 			break;
 		}
-	} else if (lcd->dsc_enabled) {
-		width = dsc_get_hresol(lcd->xres, slice_mode_change, dual_slice) * 2;
-		dsim_dbg("%s hresol : %d\n", __func__, width);
 	}
 
 	val = DSIM_RESOL_HRESOL(width);
@@ -1014,20 +828,6 @@ int dsim_reg_wait_hs_clk_ready(u32 id)
 	return 0;
 }
 
-u32 dsim_reg_is_writable_fifo_state(u32 id)
-{
-	u32 val = dsim_read(id, DSIM_FIFOCTRL);
-	if (DSIM_FIFOCTRL_NUMBER_OF_PH_SFR_GET(val) < DSIM_FIFOCTRL_THRESHOLD)
-		return 1;
-	else
-		return 0;
-}
-
-u32 dsim_reg_header_fifo_is_empty(u32 id)
-{
-	return dsim_read_mask(id, DSIM_FIFOCTRL, DSIM_FIFOCTRL_EMPTY_PH_SFR);
-}
-
 void dsim_reg_set_fifo_ctrl(u32 id, u32 cfg)
 {
 	dsim_write_mask(id, DSIM_FIFOCTRL, ~cfg, cfg);
@@ -1188,11 +988,7 @@ int dsim_reg_init(u32 id, struct decon_lcd *lcd_info, u32 data_lane_cnt, struct 
 	unsigned int time_te_protect_on;
 	unsigned int time_te_tout;
 	int ret = 0;
-	u32 num_of_slice;
 
-#if IS_ENABLED(CONFIG_EXYNOS_OTP)
-	dsim_reg_set_phy_otp_config(id);
-#endif
 	/*
 	 * DSIM does not need to init, if DSIM is already
 	 * becomes txrequest_hsclk = 1'b1 because of LCD_ON_UBOOT
@@ -1204,6 +1000,7 @@ int dsim_reg_init(u32 id, struct decon_lcd *lcd_info, u32 data_lane_cnt, struct 
 		   then just return. */
 		ret = -EBUSY;
 	}
+
 	/* get byte clock */
 	clks->byte_clk = clks->hs_clk / 8;
 	dsim_dbg("byte clock is %u MHz\n", clks->byte_clk);
@@ -1241,8 +1038,8 @@ int dsim_reg_init(u32 id, struct decon_lcd *lcd_info, u32 data_lane_cnt, struct 
 		/*set TE base command*/
 		time_stable_vfp = lcd_info->xres * DSIM_STABLE_VFP_VALUE * 3 / 100;
 		time_vsync_tout = lcd_info->vfp * lcd_info->xres * 3 / 100;
-		time_te_protect_on = (clks->hs_clk * TE_PROTECT_ON_TIME) / 8;
-		time_te_tout = (clks->hs_clk * TE_TIMEOUT_TIME) / 8;
+		time_te_protect_on = (clks->hs_clk/8) * 165;
+		time_te_tout = (clks->hs_clk/8) * 18 * 10;
 		dsim_reg_set_command_control(id, 0);
 		dsim_reg_set_time_stable_vfp(id, time_stable_vfp);
 		dsim_reg_set_time_vsync_timeout(id, time_vsync_tout);
@@ -1252,18 +1049,8 @@ int dsim_reg_init(u32 id, struct decon_lcd *lcd_info, u32 data_lane_cnt, struct 
 
 	dsim_reg_set_bta_timeout(id);
 	dsim_reg_set_lpdr_timeout(id);
-	dsim_reg_set_hsync_timeout(id, 0x3f);
-
-	if (lcd_info->dsc_enabled) {
-		dsim_dbg("%s: dsc configuration is set\n", __func__);
-		dsim_reg_set_num_of_slice(id, lcd_info->dsc_slice_num);
-		dsim_reg_set_multi_slice(id, lcd_info); /* multi slice */
-		dsim_reg_set_size_of_slice(id, lcd_info);
-
-		dsim_reg_get_num_of_slice(id, &num_of_slice);
-		dsim_dbg("dsim%d: number of DSC slice(%d)\n", id, num_of_slice);
-		dsim_reg_print_size_of_slice(id);
-	}
+	dsim_reg_set_hsync_timeout(id, 3);
+	/*should be adding dsc code*/
 	return ret;
 }
 
@@ -1349,6 +1136,7 @@ int dsim_reg_set_clocks(u32 id, struct dsim_clks *clks, struct stdphy_pms *dphy_
 		/* get DPHY timing values using hs clock and escape clock */
 		dsim_reg_get_dphy_timing(clks->hs_clk, clks->esc_clk, &t);
 		dsim_reg_set_dphy_timing_values(id, &t);
+
 		/* enable PLL */
 		ret = dsim_reg_enable_pll(id, 1);
 	} else {
@@ -1408,60 +1196,6 @@ void dsim_reg_set_int(u32 id, u32 en)
 		DSIM_INTMSK_ERR_RX_ECC;
 
 	dsim_write_mask(id, DSIM_INTMSK, val, mask);
-}
-
-u32 dsim_reg_rx_fifo_is_empty(u32 id)
-{
-	return dsim_read_mask(id, DSIM_FIFOCTRL, DSIM_FIFOCTRL_EMPTY_RX);
-}
-
-u32 dsim_reg_get_rx_fifo(u32 id)
-{
-	return dsim_read(id, DSIM_RXFIFO);
-}
-
-int dsim_reg_rx_err_handler(u32 id, u32 rx_fifo)
-{
-	int ret = 0;
-	u32 err_bit = rx_fifo >> 8; /* Error_Range [23:8] */
-
-	if ((err_bit & MIPI_DSI_ERR_BIT_MASK) == 0) {
-		dsim_dbg("dsim%d, Non error reporting format (rx_fifo=0x%x)\n",
-				id, rx_fifo);
-		return ret;
-	}
-
-	/* Parse error report bit*/
-	if (err_bit & MIPI_DSI_ERR_SOT)
-		dsim_err("SoT error!\n");
-	if (err_bit & MIPI_DSI_ERR_SOT_SYNC)
-		dsim_err("SoT sync error!\n");
-	if (err_bit & MIPI_DSI_ERR_EOT_SYNC)
-		dsim_err("EoT error!\n");
-	if (err_bit & MIPI_DSI_ERR_ESCAPE_MODE_ENTRY_CMD)
-		dsim_err("Escape mode entry command error!\n");
-	if (err_bit & MIPI_DSI_ERR_LOW_POWER_TRANSMIT_SYNC)
-		dsim_err("Low-power transmit sync error!\n");
-	if (err_bit & MIPI_DSI_ERR_HS_RECEIVE_TIMEOUT)
-		dsim_err("HS receive timeout error!\n");
-	if (err_bit & MIPI_DSI_ERR_FALSE_CONTROL)
-		dsim_err("False control error!\n");
-	if (err_bit & MIPI_DSI_ERR_ECC_SINGLE_BIT)
-		dsim_err("ECC error, single-bit(detected and corrected)!\n");
-	if (err_bit & MIPI_DSI_ERR_ECC_MULTI_BIT)
-		dsim_err("ECC error, multi-bit(detected, not corrected)!\n");
-	if (err_bit & MIPI_DSI_ERR_CHECKSUM)
-		dsim_err("Checksum error(long packet only)!\n");
-	if (err_bit & MIPI_DSI_ERR_DATA_TYPE_NOT_RECOGNIZED)
-		dsim_err("DSI data type not recognized!\n");
-	if (err_bit & MIPI_DSI_ERR_VCHANNEL_ID_INVALID)
-		dsim_err("DSI VC ID invalid!\n");
-	if (err_bit & MIPI_DSI_ERR_INVALID_TRANSMIT_LENGTH)
-		dsim_err("Invalid transmission length!\n");
-
-	dsim_err("dsim%d, (rx_fifo=0x%x) Check DPHY values about HS clk.\n",
-			id, rx_fifo);
-	return -EINVAL;
 }
 
 /*
@@ -1605,17 +1339,11 @@ u32 dsim_reg_get_xres(u32 id)
 int dsim_reg_exit_ulps_and_start(u32 id, u32 ddi_type, u32 lanes)
 {
 	int ret = 0;
-	/*
-	 * Guarantee 1.2v signal level for data lane(positive) when exit ULPS.
-	 * DSIM Should be set standby. If not, lane goes to 600mv sometimes.
-	*/
-	dsim_reg_set_hs_clock(id, 1);
-	dsim_reg_set_standby(id, 1);
-	dsim_reg_set_hs_clock(id, 0);
-
 	/* try to exit ULPS mode. The sequence is depends on DDI type */
 	ret = dsim_reg_set_ulps_by_ddi(id, ddi_type, lanes, 0);
-	dsim_reg_start(id, NULL, lanes);
+	dsim_reg_set_hs_clock(id, 1);
+	dsim_reg_set_standby(id, 1);
+	dsim_reg_set_int(id, 1);
 	return ret;
 }
 

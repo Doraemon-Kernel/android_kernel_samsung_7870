@@ -42,7 +42,6 @@
 #define PARAMS_CNT		(0x0060)
 #define PARAMS_VAL1		(0x0064)
 #define PARAMS_VAL2		(0x0068)
-#define LAST_CHECKPT		(0x006C)
 #define FW_LOG_VAL1		(0x0078)
 #define FW_LOG_VAL2		(0x007C)
 
@@ -65,7 +64,6 @@
 #define COMPR_IP_ID		(0x0044)
 #define COMPR_SIZE_OUT_DATA	(0x0048)
 #define COMPR_CPU_LOCK_LV	(0x0054)
-#define COMPR_DMA_IDX		(0x0050)
 #define COMPR_CHECK_CMD		(0x0058)
 #define COMPR_CHECK_RUNNING	(0x005C)
 #define COMPR_ACK		(0x0060)
@@ -86,7 +84,6 @@
 #define INTR_FX_EXT		(0x9000)
 #define INTR_EFF_REQUEST	(0xA000)
 #define INTR_SET_CPU_LOCK	(0xC000)
-#define INTR_DMA_INDEX		(0xD000)
 #define INTR_FW_LOG		(0xFFFF)
 
 
@@ -126,7 +123,6 @@
 #define INSTANCE_MAX		(20)
 #ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
 #define SRAM_FW_MAX		(0x24000)
-#define SRAM_FW_MEMSET_SIZE	(0x22000)
 #else
 #define SRAM_FW_MAX		(0x3B000)
 #endif
@@ -189,8 +185,6 @@ enum SEIREN_CMDTYPE {
 	CMD_COMPR_SET_VOLUME,
 	CMD_COMPR_CA5_WAKEUP,
 	CMD_COMPR_HPDET_NOTIFY,
-	CMD_COMPR_DMA_START,
-	CMD_COMPR_DMA_STOP,
 	SYS_RESET = 0x80,
 	SYS_RESTAR,
 	SYS_RESUME,
@@ -370,8 +364,6 @@ struct seiren_info {
 	void __iomem	*effect_ram;
 	bool		effect_on;
 	unsigned int	out_sample_rate;
-	int		left_vol;
-	int		right_vol;
 #endif
 	bool		fx_ext_on;
 	unsigned char	*fx_work_buf;
@@ -441,7 +433,7 @@ struct audio_processor {
 };
 
 extern int esa_compr_set_param(struct audio_processor *ap, uint8_t **buffer);
-extern int esa_compr_open(void);
+extern void esa_compr_open(void);
 extern void esa_compr_close(void);
 extern int esa_compr_send_buffer(const size_t copy_size,
 					struct audio_processor *ap);
@@ -450,9 +442,6 @@ extern void __iomem *esa_compr_get_mem(void);
 extern u32 esa_compr_pcm_size(void);
 extern void esa_compr_hpdet_notifier(bool on);
 extern void esa_compr_set_state(bool flag);
-extern int esa_compr_send_direct_cmd(int32_t cmd);
-extern void esa_fw_start(void);
-extern void esa_fw_stop(void);
 #endif
 
 #ifdef CONFIG_SND_ESA_SA_EFFECT

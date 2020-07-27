@@ -16,10 +16,8 @@
 #include <linux/uaccess.h>
 
 static struct fimc_is_lib_vra *g_lib_vra;
+extern struct fimc_is_lib_support gPtr_lib_support;
 
-extern bool vra_binary_load;
-
-/* Callback functions for VRA library */
 static void fimc_is_lib_vra_callback_frw_abort(void)
 {
 	dbg_lib("vra_callback_frw_abort\n");
@@ -27,52 +25,96 @@ static void fimc_is_lib_vra_callback_frw_abort(void)
 
 static void fimc_is_lib_vra_callback_frw_hw_err(u32 ch_index, u32 err_mask)
 {
-	err_lib("callback_frw_hw_err: ch_index = %#x, err_mask = %#x",
-		       ch_index, err_mask);
+	err_lib("callback_frw_hw_err: ch_index(%#x), err_mask(%#x)",
+		ch_index, err_mask);
 }
 
 static void fimc_is_lib_vra_callback_output_ready(u32 handle,
-		u32 num_all_faces, const struct api_vra_out_face *faces_ptr,
-		const struct api_vra_out_list_info *out_list_info_ptr)
+	u32 num_all_faces, const struct api_vra_out_face *faces_ptr,
+	const struct api_vra_out_list_info *out_list_info_ptr)
 {
-	int i;
-	struct fimc_is_lib_vra *lib_vra;
+	int i, j;
+	struct fimc_is_lib_vra *lib_vra = g_lib_vra;
+	u32 face_rect[CAMERA2_MAX_FACES][4];
+	u32 face_center[CAMERA2_MAX_FACES][2];
+	bool debug_flag = false;
 
-	lib_vra = g_lib_vra;
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return;
 	}
 
-	dbg_lib("callback_output_ready: num_all_faces(%d)\n", num_all_faces);
+#if defined(VRA_DMA_TEST_BY_IMAGE)
+	info_lib("------ num_all_faces(%d) -------\n", num_all_faces);
+#endif
 
 	lib_vra->out_list_info = out_list_info_ptr;
-	lib_vra->all_face_num = (num_all_faces > MAX_FACE_COUNT) ?
-				MAX_FACE_COUNT : num_all_faces;
+	lib_vra->all_face_num = (num_all_faces > lib_vra->max_face_num) ?
+				0 : num_all_faces;
 
 	for (i = 0; i < lib_vra->all_face_num; i++) {
-		lib_vra->out_faces[i] = faces_ptr[i];
-		dbg_lib(">>>>>>>>>>>>>>[%d] pos(%d,%d) size(%d,%d) Score:%d\n",
+		face_rect[i][0] = faces_ptr[i].base.rect.left;
+		face_rect[i][1] = faces_ptr[i].base.rect.top;
+		face_rect[i][2] = faces_ptr[i].base.rect.left + faces_ptr[i].base.rect.width;
+		face_rect[i][3] = faces_ptr[i].base.rect.top  + faces_ptr[i].base.rect.height;
+		face_center[i][0] = (face_rect[i][0] + face_rect[i][2]) >> 1;
+		face_center[i][1] = (face_rect[i][1] + face_rect[i][3]) >> 1;
+	}
+
+	for (i = 0; i < lib_vra->all_face_num; i++) {
+		for (j = 0; j < lib_vra->all_face_num; j++) {
+			if (i == j)
+				continue;
+			if (((face_rect[j][0] <= face_center[i][0]) && (face_center[i][0] <= face_rect[j][2]))
+				&& ((face_rect[j][1] <= face_center[i][1]) && (face_center[i][1] <= face_rect[j][3]))) {
+				info_lib("lib_vra_callback_output_ready: debug_flag on\n");
+				debug_flag = true;
+				break;
+			}
+		}
+
+		if (debug_flag)
+			break;
+	}
+
+	if ((num_all_faces > lib_vra->max_face_num) || (debug_flag)) {
+		info_lib("lib_vra_callback_output_ready: num_all_faces(%d) > MAX(%d)\n",
+			num_all_faces, lib_vra->max_face_num);
+
+		for (i = 0; i < lib_vra->all_face_num; i++) {
+			info_lib("lib_vra: (%d), id[%d]; x,y,w,h,score; %d,%d,%d,%d,%d\n",
+				lib_vra->all_face_num,
 				i, faces_ptr[i].base.rect.left,
 				faces_ptr[i].base.rect.top,
 				faces_ptr[i].base.rect.width,
 				faces_ptr[i].base.rect.height,
 				faces_ptr[i].base.score);
+		}
+	}
+
+	for (i = 0; i < lib_vra->all_face_num; i++) {
+		lib_vra->out_faces[i] = faces_ptr[i];
+#if defined(VRA_DMA_TEST_BY_IMAGE)
+		info_lib("lib_vra: id[%d]; x,y,w,h,score; %d,%d,%d,%d,%d\n",
+				i, faces_ptr[i].base.rect.left,
+				faces_ptr[i].base.rect.top,
+				faces_ptr[i].base.rect.width,
+				faces_ptr[i].base.rect.height,
+				faces_ptr[i].base.score);
+#endif
 	}
 }
 
 static void fimc_is_lib_vra_callback_end_input(u32 handle,
 		u32 frame_index, unsigned char *base_address)
 {
-	dbg_lib("callback_end_input: baseAdr: %#lx\n", (ulong)base_address);
+	dbg_lib("lib_vra_callback_end_input: base_addr(%p)\n", base_address);
 }
 
 static void fimc_is_lib_vra_callback_frame_error(u32 handle,
-		enum api_vra_sen_err error_type, u32 additonal_info)
+	enum api_vra_sen_err error_type, u32 additonal_info)
 {
-	struct fimc_is_lib_vra *lib_vra;
-
-	lib_vra = g_lib_vra;
+	struct fimc_is_lib_vra *lib_vra = g_lib_vra;
 
 	if (VRA_ERR_FRAME_LOST) {
 		lib_vra->debug.lost_frame_cnt[additonal_info]++;
@@ -90,7 +132,7 @@ void fimc_is_lib_vra_task_trigger(struct fimc_is_lib_vra *lib_vra,
 	struct fimc_is_lib_task *task_vra;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return;
 	}
 
@@ -113,21 +155,33 @@ int fimc_is_lib_vra_invoke_contol_event(struct fimc_is_lib_vra *lib_vra)
 	enum api_vra_type status = VRA_NO_ERROR;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
-	dbg_lib("vra_invoke_contol_event: ctl_task_type (%d)\n", lib_vra->ctl_task_type);
+	dbg_lib("lib_vra_invoke_contol_event: type(%d)\n", lib_vra->ctl_task_type);
 
-	spin_lock_irqsave(&lib_vra->ctl_lock, lib_vra->ctl_irq_flag);
-	status = lib_vra->itf_func.on_control_task_event(lib_vra->fr_work_heap);
-	if (status) {
-		err_lib("vra_invoke_contol_event: VRA control task is fail (%#x)",
-			status);
+	if (in_interrupt()) {
+		spin_lock(&lib_vra->ctl_lock);
+		status = CALL_VRAOP(lib_vra, on_control_task_event,
+					lib_vra->fr_work_heap);
+		if (status) {
+			err_lib("on_control_task_event is fail (%#x)", status);
+			spin_unlock(&lib_vra->ctl_lock);
+			return -EINVAL;
+		}
+		spin_unlock(&lib_vra->ctl_lock);
+	} else {
+		spin_lock_irqsave(&lib_vra->ctl_lock, lib_vra->ctl_irq_flag);
+		status = CALL_VRAOP(lib_vra, on_control_task_event,
+					lib_vra->fr_work_heap);
+		if (status) {
+			err_lib("on_control_task_event is fail (%#x)", status);
+			spin_unlock_irqrestore(&lib_vra->ctl_lock, lib_vra->ctl_irq_flag);
+			return -EINVAL;
+		}
 		spin_unlock_irqrestore(&lib_vra->ctl_lock, lib_vra->ctl_irq_flag);
-		return -EINVAL;
 	}
-	spin_unlock_irqrestore(&lib_vra->ctl_lock, lib_vra->ctl_irq_flag);
 
 	return 0;
 }
@@ -137,22 +191,33 @@ int fimc_is_lib_vra_invoke_fwalgs_event(struct fimc_is_lib_vra *lib_vra)
 	enum api_vra_type status = VRA_NO_ERROR;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
-	dbg_lib("vra_invoke_fwalgs_event: algs_task_type (%d)\n",
-		lib_vra->algs_task_type);
+	dbg_lib("lib_vra_invoke_fwalgs_event: type(%d)\n", lib_vra->algs_task_type);
 
-	spin_lock_irqsave(&lib_vra->algs_lock, lib_vra->algs_irq_flag);
-	status = lib_vra->itf_func.on_fw_algs_task_event(lib_vra->fr_work_heap);
-	if (status) {
-		err_lib("vra_invoke_fwalgs_event: VRA frame work task is fail (%#x)",
-			status);
+	if (in_interrupt()) {
+		spin_lock(&lib_vra->algs_lock);
+		status = CALL_VRAOP(lib_vra, on_fw_algs_task_event,
+					lib_vra->fr_work_heap);
+		if (status) {
+			err_lib("on_fw_algs_task_event is fail (%#x)", status);
+			spin_unlock(&lib_vra->algs_lock);
+			return -EINVAL;
+		}
+		spin_unlock(&lib_vra->algs_lock);
+	} else {
+		spin_lock_irqsave(&lib_vra->algs_lock, lib_vra->algs_irq_flag);
+		status = CALL_VRAOP(lib_vra, on_fw_algs_task_event,
+					lib_vra->fr_work_heap);
+		if (status) {
+			err_lib("on_fw_algs_task_event is fail (%#x)", status);
+			spin_unlock_irqrestore(&lib_vra->algs_lock, lib_vra->algs_irq_flag);
+			return -EINVAL;
+		}
 		spin_unlock_irqrestore(&lib_vra->algs_lock, lib_vra->algs_irq_flag);
-		return -EINVAL;
 	}
-	spin_unlock_irqrestore(&lib_vra->algs_lock, lib_vra->algs_irq_flag);
 
 	return 0;
 }
@@ -170,11 +235,12 @@ void fimc_is_lib_vra_task_work(struct kthread_work *work)
 
 int fimc_is_lib_vra_init_task(struct fimc_is_lib_vra *lib_vra)
 {
-	s32 ret = 0, cnt = 0;
-	struct sched_param param = {.sched_priority = 0};
+	s32 ret = 0;
+	u32 j, cpu = 0;
+	struct sched_param param = { .sched_priority = MAX_RT_PRIO - 3 };
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
@@ -184,167 +250,143 @@ int fimc_is_lib_vra_init_task(struct fimc_is_lib_vra *lib_vra)
 	lib_vra->task_vra.task = kthread_run(kthread_worker_fn,
 		&lib_vra->task_vra.worker, "fimc_is_lib_vra");
 	if (unlikely(!lib_vra->task_vra.task)) {
-		err_lib("failed to create VRA task");
+		err_lib("lib_vra->task_vra.task is NULL");
 		return -ENOMEM;
 	}
-
+#ifdef ENABLE_FPSIMD_FOR_USER
+	fpsimd_set_task_using(lib_vra->task_vra.task);
+#endif
+	param.sched_priority = TASK_VRA_PRIORITY;
 	ret = sched_setscheduler_nocheck(lib_vra->task_vra.task,
-		SCHED_NORMAL, &param);
+		SCHED_FIFO, &param);
 	if (ret) {
 		err("sched_setscheduler_nocheck is fail(%d)", ret);
 		return ret;
 	}
 
 	lib_vra->task_vra.work_index = 0;
-
-	for (cnt = 0; cnt < FIMC_IS_MAX_TASK; cnt++) {
-		lib_vra->task_vra.work[cnt].func = NULL;
-		lib_vra->task_vra.work[cnt].params = NULL;
-		init_kthread_work(&lib_vra->task_vra.work[cnt].work,
+	for (j = 0; j < FIMC_IS_MAX_TASK; j++) {
+		lib_vra->task_vra.work[j].func = NULL;
+		lib_vra->task_vra.work[j].params = NULL;
+		init_kthread_work(&lib_vra->task_vra.work[j].work,
 			fimc_is_lib_vra_task_work);
 	}
 
+#ifdef SET_CPU_AFFINITY
+	cpu = TASK_VRA_AFFINITY;
+	ret = set_cpus_allowed_ptr(lib_vra->task_vra.task, cpumask_of(cpu));
+	dbg_lib("lib_vra_task_init: affinity cpu(%d) (%d)\n", cpu, ret);
+#endif
 	return 0;
 }
 
-void fimc_is_lib_vra_control_set_event(u32 event_type)
+void fimc_is_lib_vra_set_event_control(u32 event_type)
 {
-	int ret;
-	struct fimc_is_lib_vra *lib_vra;
+	warn_lib("Invalid event_type (%d)", event_type);
 
-	if (unlikely(!g_lib_vra)) {
-		err_lib("VRA library is NULL");
-		return;
-	}
-
-	lib_vra = g_lib_vra;
-
-	switch (event_type) {
-	case CTRL_TASK_SET_CH0_INT:
-		lib_vra->ctl_task_type = CTRL_TASK_SET_CH0_INT;
-		fimc_is_lib_vra_task_trigger(lib_vra,
-			fimc_is_lib_vra_invoke_contol_event);
-		break;
-	case CTRL_TASK_SET_CH1_INT:
-		lib_vra->ctl_task_type = CTRL_TASK_SET_CH1_INT;
-		fimc_is_lib_vra_task_trigger(lib_vra,
-			fimc_is_lib_vra_invoke_contol_event);
-		break;
-	case CTRL_TASK_SET_NEWFR:
-		lib_vra->ctl_task_type = CTRL_TASK_SET_NEWFR;
-		ret = fimc_is_lib_vra_invoke_contol_event(lib_vra);
-		if (ret) {
-			err_lib("vra control set is fail(%#x)", ret);
-			return;
-		}
-		break;
-	case CTRL_TASK_SET_ABORT:
-		lib_vra->ctl_task_type = CTRL_TASK_SET_ABORT;
-		ret = fimc_is_lib_vra_invoke_contol_event(lib_vra);
-		if (ret) {
-			err_lib("vra control set is fail(%d)", ret);
-			return;
-		}
-		break;
-	case CTRL_TASK_SET_FWALGS:
-		lib_vra->ctl_task_type = CTRL_TASK_SET_FWALGS;
-		fimc_is_lib_vra_task_trigger(lib_vra,
-			fimc_is_lib_vra_invoke_contol_event);
-		break;
-	default:
-		err_lib("vra_control_set_event is undefine (%d)", event_type);
-		break;
-
-	}
+	return;
 }
 
-void fimc_is_lib_vra_fw_algs_set_event(u32 event_type)
+void fimc_is_lib_vra_set_event_fw_algs(u32 event_type)
 {
-	struct fimc_is_lib_vra *lib_vra;
-
-	lib_vra = g_lib_vra;
+	struct fimc_is_lib_vra *lib_vra = g_lib_vra;
 
 	switch (event_type) {
 	case FWALGS_TASK_SET_ABORT:
 		/* This event is processed in fimc_is_lib_vra_fwalgs_stop */
+		info_lib("FWALGS_TASK_SET_ABORT (%d)\n", event_type);
 		break;
 	case FWALGS_TASK_SET_ALGS:
 		lib_vra->algs_task_type = FWALGS_TASK_SET_ALGS;
-		dbg_lib("FWALGS_TASK_SET_ALGS\n");
+		dbg_lib("lib_vra_set_event_fw_algs: type(%d)\n", event_type);
 		fimc_is_lib_vra_task_trigger(lib_vra,
 			fimc_is_lib_vra_invoke_fwalgs_event);
 		break;
 	default:
+		err_lib("Invalid event_type (%d)", event_type);
 		break;
 	}
+
+	return;
 }
 
-int fimc_is_lib_vra_alloc_memory(struct fimc_is_lib_vra *lib_vra,
-		ulong dma_address)
+int fimc_is_lib_vra_alloc_memory(struct fimc_is_lib_vra *lib_vra, ulong dma_addr)
 {
 	int index;
+	u32 size;
 	enum api_vra_type status = VRA_NO_ERROR;
+	struct api_vra_alloc_info *alloc_info;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
+	alloc_info = &lib_vra->alloc_info;
 	/* ToDo: make define */
-	lib_vra->alloc_info.max_image.width = 640;
-	lib_vra->alloc_info.max_image.height = 480;
-	lib_vra->alloc_info.track_faces = 30;
-	lib_vra->alloc_info.dt_faces_hw_res = 2100;
-	lib_vra->alloc_info.tr_hw_res_per_face = 110;
-	lib_vra->alloc_info.ff_hw_res_per_face = 500;
-	lib_vra->alloc_info.ff_hw_res_per_list =
-		lib_vra->alloc_info.ff_hw_res_per_face;
-	lib_vra->alloc_info.cache_line_length = 32;
-	lib_vra->alloc_info.pad_size = 0;
-	lib_vra->alloc_info.allow_3planes = 0;
-	lib_vra->alloc_info.image_slots = 5;
-	lib_vra->alloc_info.max_sensors = VRA_TOTAL_SENSORS;
-	lib_vra->alloc_info.max_tr_res_frames = 5;
+	alloc_info->max_image.width  = 640;
+	alloc_info->max_image.height = 480;
+	alloc_info->track_faces      = 30;
+	alloc_info->dt_faces_hw_res  = 2100;
+	alloc_info->tr_hw_res_per_face = VRA_TR_HW_RES_PER_FACE;
+	alloc_info->ff_hw_res_per_face = 500;
+	alloc_info->ff_hw_res_per_list = VRA_FF_HW_RES_PER_LIST;
+	alloc_info->cache_line_length  = 32;
+#if defined(CONFIG_FIMC_IS_V4_0_0)
+	alloc_info->pad_size = 0;
+	alloc_info->allow_3planes = 0;
+#elif defined(CONFIG_FIMC_IS_V3_11_0)
+	alloc_info->use_pad = 1;
+	alloc_info->allow_ch0_2planes = 0;
+#if defined(VRA_DMA_TEST_BY_IMAGE)
+	alloc_info->using_ch0_input = 0;
+#else
+	alloc_info->using_ch0_input = 1;
+#endif
+#endif
+	alloc_info->image_slots = VRA_IMAGE_SLOTS;
+	alloc_info->max_sensors = VRA_TOTAL_SENSORS;
+	alloc_info->max_tr_res_frames = 5;
 
-	status = lib_vra->itf_func.ex_get_memory_sizes(&lib_vra->alloc_info,
-			&lib_vra->fr_work_size, &lib_vra->frame_desc_size,
-			&lib_vra->dma_out_size);
+	status = CALL_VRAOP(lib_vra, ex_get_memory_sizes,
+				&lib_vra->alloc_info,
+				&lib_vra->fr_work_size,
+				&lib_vra->frame_desc_size,
+				&lib_vra->dma_out_size);
 	if (status) {
-		err_lib("get_memory_size is fail (%d)", status);
+		err_lib("ex_get_memory_sizes is fail (%d)", status);
 		return -ENOMEM;
 	}
 
 	if (SIZE_VRA_INTERNEL_BUF < lib_vra->dma_out_size) {
-		err_lib("invalid dma size");
+		err_lib("SIZE_VRA_INTERNEL_BUF(%d) < Request dma size(%d)",
+			SIZE_VRA_INTERNEL_BUF, lib_vra->dma_out_size);
 		return -ENOMEM;
 	}
 
-	dbg_lib("vra frame work:: dma_size (%d), frame_desc_size(%d), fr_work_size(%d)\n",
-		lib_vra->dma_out_size, lib_vra->frame_desc_size, lib_vra->fr_work_size);
+	dbg_lib("lib_vra_alloc_memory: dma_out_size(%d), frame_desc_size(%d),"
+		" fr_work_size(%d)\n",
+		lib_vra->dma_out_size, lib_vra->frame_desc_size,
+		lib_vra->fr_work_size);
 
-#ifdef ENABLE_RESERVED_INTERNAL_DMA
-	lib_vra->dma_out_heap =
-		fimc_is_alloc_dma_buffer(lib_vra->dma_out_size);
-	memset(lib_vra->dma_out_heap, 0, lib_vra->dma_out_size);
-#else
-	lib_vra->dma_out_heap = (void *)dma_address;
-#endif
+	size = lib_vra->dma_out_size;
+	lib_vra->dma_out_heap = fimc_is_alloc_reserved_vra_dma_buffer(size);
+	memset(lib_vra->dma_out_heap, 0, size);
 
-	lib_vra->fr_work_heap =
-		fimc_is_alloc_reserved_buffer(lib_vra->fr_work_size);
-	memset(lib_vra->fr_work_heap, 0, lib_vra->fr_work_size);
+	size = lib_vra->fr_work_size;
+	lib_vra->fr_work_heap = fimc_is_alloc_reserved_vra_dma_buffer(size);
+	memset(lib_vra->fr_work_heap, 0, size);
+
+	dbg_lib("lib_vra_alloc_memory: dma_out_heap(0x%p), fr_work_heap(0x%p)\n",
+		lib_vra->dma_out_heap, lib_vra->fr_work_heap);
 
 	for (index = 0; index < VRA_TOTAL_SENSORS; index++) {
-		lib_vra->frame_desc_heap[index] =
-			fimc_is_alloc_reserved_buffer(lib_vra->frame_desc_size);
-		memset(lib_vra->frame_desc_heap[index], 0, lib_vra->frame_desc_size);
+		size = lib_vra->frame_desc_size;
+		lib_vra->frame_desc_heap[index] = fimc_is_alloc_reserved_vra_dma_buffer(size);
+		memset(lib_vra->frame_desc_heap[index], 0, size);
+		dbg_lib("lib_vra_alloc_memory: frame_desc_heap[%d]=(0x%p)\n",
+			index, lib_vra->frame_desc_heap[index]);
 	}
-
-	dbg_lib("vra frame work: dma_out_heap (0x%p), fr_work_heap(0x%p)\n",
-		lib_vra->dma_out_heap, lib_vra->fr_work_heap);
-	for (index = 0; index < VRA_TOTAL_SENSORS; index++)
-		dbg_lib("frame_desc_heap_%d (0x%p)\n", index,
-			lib_vra->frame_desc_heap[index]);
 
 	return 0;
 }
@@ -354,32 +396,30 @@ int fimc_is_lib_vra_free_memory(struct fimc_is_lib_vra *lib_vra)
 	u32 index;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
-#ifdef ENABLE_RESERVED_INTERNAL_DMA
-	fimc_is_free_dma_buffer(lib_vra->dma_out_heap);
-#endif
+	fimc_is_free_reserved_vra_dma_buffer(lib_vra->dma_out_heap);
 
-	fimc_is_free_reserved_buffer(lib_vra->fr_work_heap);
+	fimc_is_free_reserved_vra_dma_buffer(lib_vra->fr_work_heap);
 
 	for (index = 0; index < VRA_TOTAL_SENSORS; index++)
-		fimc_is_free_reserved_buffer(lib_vra->frame_desc_heap[index]);
+		fimc_is_free_reserved_vra_dma_buffer(lib_vra->frame_desc_heap[index]);
 
 	return 0;
 }
 
 int fimc_is_lib_vra_init_frame_work(struct fimc_is_lib_vra *lib_vra,
-		void __iomem *base_addr,
-		enum fimc_is_lib_vra_input_type input_type)
+	void __iomem *base_addr, enum fimc_is_lib_vra_input_type input_type)
 {
-	enum api_vra_type status = VRA_NO_ERROR;
 	int ret;
-	int index;
+	enum api_vra_type status = VRA_NO_ERROR;
+	struct vra_call_backs_str *callbacks;
+	struct lib_vra_fr_work_info fr_work_info;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
@@ -387,7 +427,7 @@ int fimc_is_lib_vra_init_frame_work(struct fimc_is_lib_vra *lib_vra,
 	g_lib_vra = lib_vra;
 
 	lib_vra->fr_index = 0;
-#ifdef VRA_DMA_TEST_BY_IMAGE
+#if defined(VRA_DMA_TEST_BY_IMAGE)
 	lib_vra->image_load = false;
 #endif
 
@@ -396,62 +436,66 @@ int fimc_is_lib_vra_init_frame_work(struct fimc_is_lib_vra *lib_vra,
 	spin_lock_init(&lib_vra->intr_lock);
 
 	lib_vra->dma_out.total_size = lib_vra->dma_out_size;
-	lib_vra->dma_out.base_adr = lib_vra->dma_out_heap;
-	lib_vra->dma_out.is_cached = true;
+	lib_vra->dma_out.base_adr   = lib_vra->dma_out_heap;
+	lib_vra->dma_out.is_cached  = true;
 
-	lib_vra->fr_work_init.hw_regs_base_adr = (ulong)base_addr;
+	lib_vra->fr_work_init.hw_regs_base_adr = (uintptr_t)base_addr;
 	lib_vra->fr_work_init.int_type = VRA_INT_LEVEL;
 
+#if defined(VRA_DMA_TEST_BY_IMAGE)
+	lib_vra->fr_work_init.dram_input = true;
+#else
 	if (input_type == VRA_INPUT_OTF) {
 		lib_vra->fr_work_init.dram_input = false;
 	} else if (input_type == VRA_INPUT_MEMORY) {
 		lib_vra->fr_work_init.dram_input = true;
 	} else {
-		err_lib("VRA input type is unknown");
+		err_lib("input type is unknown(%d)", input_type);
 		return -EINVAL;
 	}
+#endif
 
-	dbg_lib("vra frame work base address(%#lx)\n",
-		(ulong)lib_vra->fr_work_init.hw_regs_base_adr);
+	dbg_lib("lib_vra_init_frame_work: hw_regs_base_adr(%#lx)\n",
+		lib_vra->fr_work_init.hw_regs_base_adr);
 
-	lib_vra->fr_work_init.call_backs.frw_abort_func_ptr =
-		fimc_is_lib_vra_callback_frw_abort;
-	lib_vra->fr_work_init.call_backs.frw_hw_err_func_ptr =
-		fimc_is_lib_vra_callback_frw_hw_err;
-	lib_vra->fr_work_init.call_backs.sen_out_ready_func_ptr =
-		fimc_is_lib_vra_callback_output_ready;
-	lib_vra->fr_work_init.call_backs.sen_end_input_proc_ptr =
-		fimc_is_lib_vra_callback_end_input;
-	lib_vra->fr_work_init.call_backs.sen_error_ptr =
-		fimc_is_lib_vra_callback_frame_error;
-	lib_vra->fr_work_init.call_backs.sen_stat_collected_ptr = NULL;
+	callbacks = &lib_vra->fr_work_init.call_backs;
+	callbacks->frw_abort_func_ptr     = fimc_is_lib_vra_callback_frw_abort;
+	callbacks->frw_hw_err_func_ptr    = fimc_is_lib_vra_callback_frw_hw_err;
+	callbacks->sen_out_ready_func_ptr = fimc_is_lib_vra_callback_output_ready;
+	callbacks->sen_end_input_proc_ptr = fimc_is_lib_vra_callback_end_input;
+	callbacks->sen_error_ptr          = fimc_is_lib_vra_callback_frame_error;
+	callbacks->sen_stat_collected_ptr = NULL;
 
 	lib_vra->fr_work_init.hw_clock_freq_mhz = 533; /* Not used */
 	lib_vra->fr_work_init.sw_clock_freq_mhz = 400;
 	lib_vra->fr_work_init.block_new_fr_on_transaction = false;
-	lib_vra->fr_work_init.block_new_fr_on_input_set = false;
+	lib_vra->fr_work_init.block_new_fr_on_input_set   = false;
 	lib_vra->fr_work_init.wait_on_lock = true;
-	lib_vra->fr_work_init.reset_uniqu_id_on_reset_list = true;
+	lib_vra->fr_work_init.reset_uniqu_id_on_reset_list   = true;
 	lib_vra->fr_work_init.crop_faces_out_of_image_pixels = true;
 
-	status = lib_vra->itf_func.vra_frame_work_init(lib_vra->fr_work_heap,
-			lib_vra->fr_work_size, &lib_vra->alloc_info,
-			&lib_vra->fr_work_init, &lib_vra->dma_out,
-			VRA_DICO_API_VERSION);
+	fr_work_info.fr_work_init = lib_vra->fr_work_init;
+	fr_work_info.fr_work_heap = lib_vra->fr_work_heap;
+	fr_work_info.fr_work_size = lib_vra->fr_work_size;
+
+	status = CALL_VRAOP(lib_vra, vra_frame_work_init,
+				&fr_work_info,
+				&lib_vra->alloc_info,
+				&lib_vra->dma_out,
+				VRA_DICO_API_VERSION);
 	if (status) {
-		err_lib("frame work init fail(%d)", status);
+		err_lib("vra_frame_work_init is fail(0x%x)", status);
 		ret = -EINVAL;
 		goto free;
 	}
 
-	for (index = 0; index < FIMC_IS_MAX_NODES; index++)
-		clear_bit(VRA_LIB_INIT, &lib_vra->state.frame_desc[index]);
+	clear_bit(VRA_LIB_FRAME_DESC_INIT, &lib_vra->state);
 
 	return 0;
 free:
 	ret = fimc_is_lib_vra_free_memory(lib_vra);
 	if (ret) {
-		err_lib("VRA memory free is fail");
+		err_lib("lib_vra_free_memory is fail");
 		return ret;
 	}
 
@@ -463,7 +507,7 @@ int fimc_is_lib_vra_init_frame_desc(struct fimc_is_lib_vra *lib_vra, u32 instanc
 	enum api_vra_type status;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
@@ -491,15 +535,17 @@ int fimc_is_lib_vra_init_frame_desc(struct fimc_is_lib_vra *lib_vra, u32 instanc
 		lib_vra->frame_desc[instance].sizes.width = 640;
 		lib_vra->frame_desc[instance].sizes.height = 480;
 		lib_vra->frame_desc[instance].hdr_lines = 0;
-		lib_vra->frame_desc[instance].yuv_format = VRA_YUV_FMT_444;
+		lib_vra->frame_desc[instance].yuv_format = VRA_OTF_INPUT_FORMAT;
 		lib_vra->frame_desc[instance].u_before_v = true;
 	}
 
-	status = lib_vra->itf_func.vra_sensor_init(lib_vra->frame_desc_heap[instance],
-			lib_vra->frame_desc_size, 0,
-			&lib_vra->frame_desc[instance], VRA_TRM_ROI_TRACK);
+	status = CALL_VRAOP(lib_vra, vra_sensor_init,
+				lib_vra->frame_desc_heap[instance],
+				lib_vra->frame_desc_size,
+				&lib_vra->frame_desc[instance],
+				VRA_TRM_ROI_TRACK);
 	if (status) {
-		err_lib("[%d]VRA frame descript init fail(%#x)", instance, status);
+		err_lib("[%d]vra_sensor_init is fail(%#x)", instance, status);
 		return -EINVAL;
 	}
 
@@ -513,27 +559,29 @@ int fimc_is_lib_vra_create_object(struct fimc_is_lib_vra *lib_vra,
 	int ret;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
-	if (!test_bit(VRA_LIB_INIT, &lib_vra->state.frame_work)) {
+	if (!test_bit(VRA_LIB_FRAME_WORK_INIT, &lib_vra->state)) {
 		ret = fimc_is_lib_vra_init_frame_work(lib_vra, base_addr, input_type);
 		if (ret) {
-			err_lib("VRA frame work init is fail");
+			err_lib("[%d]lib_vra_init_frame_work is fail (%d)", instance, ret);
 			return ret;
 		}
-		set_bit(VRA_LIB_INIT, &lib_vra->state.frame_work);
+		set_bit(VRA_LIB_FRAME_WORK_INIT, &lib_vra->state);
 	}
 
-	if (!test_bit(VRA_LIB_INIT, &lib_vra->state.frame_desc[instance])) {
+	if (!test_bit(VRA_LIB_FRAME_DESC_INIT, &lib_vra->state)) {
 		ret = fimc_is_lib_vra_init_frame_desc(lib_vra, instance);
 		if (ret) {
-			err_lib("VRA frame descript init is fail (%d)", instance);
+			err_lib("[%d]lib_vra_init_frame_desc is fail (%d)", instance, ret);
 			return ret;
 		}
-		set_bit(VRA_LIB_INIT, &lib_vra->state.frame_desc[instance]);
+		set_bit(VRA_LIB_FRAME_DESC_INIT, &lib_vra->state);
 	}
+
+	set_bit(VRA_LIB_FWALGS_ABORT, &lib_vra->state);
 
 	return 0;
 }
@@ -546,11 +594,11 @@ int fimc_is_lib_vra_set_orientation(struct fimc_is_lib_vra *lib_vra,
 	enum fimc_is_lib_vra_dir dir;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
-	dir = lib_vra->tune[instance].dir;
+	dir = lib_vra->orientation[instance];
 
 	if (dir == VRA_REAR_ORIENTATION) {
 		switch (scaler_orientation) {
@@ -567,7 +615,7 @@ int fimc_is_lib_vra_set_orientation(struct fimc_is_lib_vra *lib_vra,
 			vra_orientation = VRA_ORIENT_BTM_LEFT_TO_TOP;
 			break;
 		default:
-			warn_lib("vra_set_orientation: unknown orientation");
+			warn_lib("REAR: unknown scaler_orientation(%d)", scaler_orientation);
 			vra_orientation = VRA_ORIENT_TOP_LEFT_TO_RIGHT;
 			break;
 		}
@@ -586,19 +634,20 @@ int fimc_is_lib_vra_set_orientation(struct fimc_is_lib_vra *lib_vra,
 			vra_orientation = VRA_ORIENT_TOP_RIGHT_TO_BTM;
 			break;
 		default:
-			warn_lib("vra_set_orientation: unknown orientation");
+			warn_lib("REAR: unknown scaler_orientation(%d)", scaler_orientation);
 			vra_orientation = VRA_ORIENT_TOP_LEFT_TO_RIGHT;
 			break;
 		}
 	}
 
-	dbg_lib("scaler orientation(%d) --> vra orientation index(%d)\n",
+	dbg_lib("[%d]scaler_orientation(%d), vra_orientation(%d)\n", instance,
 		scaler_orientation, vra_orientation);
 
-	status = lib_vra->itf_func.set_orientation(lib_vra->frame_desc_heap[instance],
-			vra_orientation);
+	status = CALL_VRAOP(lib_vra, set_orientation,
+				lib_vra->frame_desc_heap[instance],
+				vra_orientation);
 	if (status) {
-		err_lib("vra_set_orientation if fail(%#x)", status);
+		err_lib("[%d]set_orientation fail (%#x)", instance, status);
 		return -EINVAL;
 	}
 
@@ -612,27 +661,27 @@ int fimc_is_lib_vra_new_frame(struct fimc_is_lib_vra *lib_vra,
 	unsigned char *input_dma_buf = NULL;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
-#ifdef VRA_DMA_TEST_BY_IMAGE
-	fimc_is_lib_vra_test_image_load(lib_vra);
+#if defined(VRA_DMA_TEST_BY_IMAGE)
 	input_dma_buf = lib_vra->test_input_buffer;
-#endif
+#else
 	input_dma_buf = buffer;
+#endif
 
-	status = lib_vra->itf_func.on_new_frame(lib_vra->frame_desc_heap[instance],
-			lib_vra->fr_index,
-			0,
-			input_dma_buf);
+	status = CALL_VRAOP(lib_vra, on_new_frame,
+				lib_vra->frame_desc_heap[instance],
+				lib_vra->fr_index, 0, input_dma_buf);
 	if (status == VRA_ERR_NEW_FR_PREV_REQ_NOT_HANDLED ||
 		status == VRA_ERR_NEW_FR_NEXT_EXIST ||
 		status == VRA_BUSY ||
 		status == VRA_ERR_FRWORK_ABORTING) {
-		err_lib("VRA sensor new frame set fail(%#x)", status);
+		err_lib("[%d]on_new_frame is fail(%#x)", instance, status);
 		return -EINVAL;
 	}
+	clear_bit(VRA_LIB_FWALGS_ABORT, &lib_vra->state);
 
 	return 0;
 }
@@ -642,14 +691,14 @@ int fimc_is_lib_vra_handle_interrupt(struct fimc_is_lib_vra *lib_vra, u32 id)
 	enum api_vra_type result;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
 	spin_lock(&lib_vra->intr_lock);
-	result = lib_vra->itf_func.on_interrupt(lib_vra->fr_work_heap, id);
+	result = CALL_VRAOP(lib_vra, on_interrupt, lib_vra->fr_work_heap, id);
 	if (result) {
-		err_lib("VRA API interrupt handle fail (%#x)", result);
+		err_lib("on_interrupt is fail (%#x)", result);
 		spin_unlock(&lib_vra->intr_lock);
 		return -EINVAL;
 	}
@@ -663,19 +712,19 @@ static int fimc_is_lib_vra_fwalgs_stop(struct fimc_is_lib_vra *lib_vra)
 	int ret;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
 	lib_vra->algs_task_type = FWALGS_TASK_SET_ABORT;
-	dbg_lib("FWALGS_TASK_SET_ABORT\n");
+	dbg_lib("lib_vra_fwalgs_stop: type(%d)\n", lib_vra->algs_task_type);
 
 	ret = fimc_is_lib_vra_invoke_fwalgs_event(lib_vra);
 	if (ret) {
-		err_lib("%s: FWALGS_TASK_SET_ABORT fail(%#x)",
-			__func__, ret);
+		err_lib("lib_vra_invoke_fwalgs_event(SET_ABORT) is fail(%#x)", ret);
 		return ret;
 	}
+	set_bit(VRA_LIB_FWALGS_ABORT, &lib_vra->state);
 
 	return 0;
 }
@@ -686,21 +735,26 @@ int fimc_is_lib_vra_stop(struct fimc_is_lib_vra *lib_vra)
 	enum api_vra_type result;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
-	result = lib_vra->itf_func.frame_work_abort(lib_vra->fr_work_heap, true);
+	result = CALL_VRAOP(lib_vra, frame_work_abort,
+				lib_vra->fr_work_heap, true);
 	if (result) {
-		err_lib("vra_abort is fail (%#x)", result);
+		err_lib("frame_work_abort is fail (%#x)", result);
 		return -EINVAL;
 	}
 
 	ret = fimc_is_lib_vra_fwalgs_stop(lib_vra);
 	if (ret) {
-		err_lib("vra_fwalgs_abort is fail(%d)", ret);
+		err_lib("lib_vra_fwalgs_stop is fail(%d)", ret);
 		return ret;
 	}
+
+	lib_vra->all_face_num = 0;
+
+	clear_bit(VRA_LIB_APPLY_TUNE_SET, &lib_vra->state);
 
 	return 0;
 }
@@ -711,27 +765,35 @@ int fimc_is_lib_vra_destory_object(struct fimc_is_lib_vra *lib_vra, u32 instance
 	int ret;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
-	result = lib_vra->itf_func.frame_work_terminate(lib_vra->fr_work_heap);
+	result = CALL_VRAOP(lib_vra, frame_work_terminate, lib_vra->fr_work_heap);
 	if (result) {
-		err_lib("vra_terminate is fail (%#x)", result);
+		err_lib("frame_work_terminate is fail (%#x)", result);
 		return -EINVAL;
 	}
 
 	ret = fimc_is_lib_vra_fwalgs_stop(lib_vra);
 	if (ret) {
-		err_lib("vra_fwalgs_abort is fail(%d)", ret);
+		err_lib("lib_vra_fwalgs_stop is fail(%d)", ret);
 		return ret;
 	}
 
-	if (lib_vra->task_vra.task != NULL)
-		kthread_stop(lib_vra->task_vra.task);
+	if (lib_vra->task_vra.task != NULL) {
+		ret = kthread_stop(lib_vra->task_vra.task);
+		if (ret)
+			err_lib("kthread_stop fail (%d)", ret);
 
-	clear_bit(VRA_LIB_INIT, &lib_vra->state.frame_work);
-	clear_bit(VRA_LIB_INIT, &lib_vra->state.frame_desc[instance]);
+		lib_vra->task_vra.task = NULL;
+	}
+
+	clear_bit(VRA_LIB_FRAME_WORK_INIT, &lib_vra->state);
+	clear_bit(VRA_LIB_FRAME_DESC_INIT, &lib_vra->state);
+	clear_bit(VRA_LIB_APPLY_TUNE_SET, &lib_vra->state);
+	clear_bit(VRA_LIB_FWALGS_ABORT, &lib_vra->state);
+	clear_bit(VRA_LIB_BYPASS_REQUESTED, &lib_vra->state);
 
 	return 0;
 }
@@ -740,14 +802,16 @@ int fimc_is_lib_vra_update_dm(struct fimc_is_lib_vra *lib_vra,
 	enum facedetect_mode *faceDetectMode, struct camera2_stats_dm *dm)
 {
 	int face_num;
+	struct api_vra_face_base_str *base;
+	struct api_vra_facial_str *facial;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("fimc_is_lib_vra is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
 	if (unlikely(!faceDetectMode)) {
-		err_lib("fimc_is_lib_vra is NULL");
+		err_lib("faceDetectMode is NULL");
 		return -EINVAL;
 	}
 
@@ -755,14 +819,6 @@ int fimc_is_lib_vra_update_dm(struct fimc_is_lib_vra *lib_vra,
 		err_lib("camera2_stats_dm is NULL");
 		return -EINVAL;
 	}
-
-	if (*faceDetectMode == FACEDETECT_MODE_OFF) {
-		dm->faceDetectMode = FACEDETECT_MODE_OFF;
-		return 0;
-	}
-
-	/* ToDo: FACEDETECT_MODE_FULL*/
-	dm->faceDetectMode = FACEDETECT_MODE_SIMPLE;
 
 	if (!lib_vra->all_face_num) {
 		memset(&dm->faceIds, 0, sizeof(dm->faceIds));
@@ -772,35 +828,43 @@ int fimc_is_lib_vra_update_dm(struct fimc_is_lib_vra *lib_vra,
 	}
 
 	for (face_num = 0; face_num < lib_vra->all_face_num; face_num++) {
+		base = &lib_vra->out_faces[face_num].base;
 		/* X min */
-		dm->faceRectangles[face_num][0] =
-			lib_vra->out_faces[face_num].base.rect.left;
+		dm->faceRectangles[face_num][0] = base->rect.left;
 		/* Y min */
-		dm->faceRectangles[face_num][1] =
-			lib_vra->out_faces[face_num].base.rect.top;
+		dm->faceRectangles[face_num][1] = base->rect.top;
 		/* X max */
-		dm->faceRectangles[face_num][2] =
-			lib_vra->out_faces[face_num].base.rect.left +
-			lib_vra->out_faces[face_num].base.rect.width;
+		dm->faceRectangles[face_num][2] = base->rect.left + base->rect.width;
 		/* Y max */
-		dm->faceRectangles[face_num][3] =
-			lib_vra->out_faces[face_num].base.rect.top +
-			lib_vra->out_faces[face_num].base.rect.height;
+		dm->faceRectangles[face_num][3] = base->rect.top + base->rect.height;
 		/* Score */
-		dm->faceScores[face_num] =
-			lib_vra->out_faces[face_num].base.score > 0xff ?
-			0xff : lib_vra->out_faces[face_num].base.score;
+		dm->faceScores[face_num] = base->score > 0xff ?	0xff : base->score;
 		/* ID */
-		dm->faceIds[face_num] =
-			lib_vra->out_faces[face_num].base.unique_id;
+		dm->faceIds[face_num] = base->unique_id;
 
-		dbg_lib("%s: face position <%d, %d>\n", __func__,
+		dbg_lib("lib_vra_update_dm: face position(%d,%d),size(%dx%d),scores(%d),id(%d))\n",
 			dm->faceRectangles[face_num][0],
-			dm->faceRectangles[face_num][1]);
-		dbg_lib("face size <%d, %d> confidance: <%d> id: <%d>\n",
+			dm->faceRectangles[face_num][1],
 			dm->faceRectangles[face_num][2],
 			dm->faceRectangles[face_num][3],
-			dm->faceScores[face_num], dm->faceIds[face_num]);
+			dm->faceScores[face_num],
+			dm->faceIds[face_num]);
+
+		facial = &lib_vra->out_faces[face_num].facial;
+		dm->faceLandmarks[face_num][0] = facial->locations[VRA_FF_LOCATION_LEFT_EYE].left;
+		dm->faceLandmarks[face_num][1] = facial->locations[VRA_FF_LOCATION_LEFT_EYE].top;
+		dm->faceLandmarks[face_num][2] = facial->locations[VRA_FF_LOCATION_RIGHT_EYE].left;
+		dm->faceLandmarks[face_num][3] = facial->locations[VRA_FF_LOCATION_RIGHT_EYE].top;
+		dm->faceLandmarks[face_num][4] = facial->locations[VRA_FF_LOCATION_MOUTH].left;
+		dm->faceLandmarks[face_num][5] = facial->locations[VRA_FF_LOCATION_MOUTH].top;
+
+		dbg_lib("lib_vra_update_dm: face locations(%d,%d,%d,%d,%d,%d)\n",
+			dm->faceLandmarks[face_num][0],
+			dm->faceLandmarks[face_num][1],
+			dm->faceLandmarks[face_num][2],
+			dm->faceLandmarks[face_num][3],
+			dm->faceLandmarks[face_num][4],
+			dm->faceLandmarks[face_num][5]);
 	}
 
 	/* ToDo: Add error handler for detected face range */
@@ -815,24 +879,40 @@ int fimc_is_lib_vra_update_sm(struct fimc_is_lib_vra *lib_vra)
 }
 
 int fimc_is_lib_vra_get_meta(struct fimc_is_lib_vra *lib_vra,
-				struct camera2_shot *shot)
+	struct fimc_is_frame *frame)
 {
 	int ret = 0;
+	struct camera2_stats_ctl *stats_ctl;
+	struct camera2_stats_dm *stats_dm;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
-	if (unlikely(!shot)) {
-		err_lib("camera2_shot is NULL");
+	if (unlikely(!frame)) {
+		err_lib("frame is NULL");
 		return -EINVAL;
+	}
+
+	stats_ctl = &frame->shot->ctl.stats;
+	stats_dm = &frame->shot->dm.stats;
+
+	if (stats_ctl->faceDetectMode == FACEDETECT_MODE_OFF) {
+		stats_dm->faceDetectMode = FACEDETECT_MODE_OFF;
+		if(frame->shot_ext->fd_bypass) {
+			info_lib("fimc_is_lib_vra_get_meta : fd_bypass is enabled\n");
+			return 0;
+		}
+	} else {
+		/* TODO: FACEDETECT_MODE_FULL*/
+		stats_dm->faceDetectMode = FACEDETECT_MODE_SIMPLE;
 	}
 
 	ret = fimc_is_lib_vra_update_dm(lib_vra,
-			&shot->ctl.stats.faceDetectMode, &shot->dm.stats);
+			&frame->shot->ctl.stats.faceDetectMode, &frame->shot->dm.stats);
 	if (ret) {
-		err_lib("VRA get meta is fail (%#x)", ret);
+		err_lib("lib_vra_update_dm is fail (%#x)", ret);
 		return -EINVAL;
 	}
 
@@ -841,7 +921,7 @@ int fimc_is_lib_vra_get_meta(struct fimc_is_lib_vra *lib_vra,
 	return 0;
 }
 
-#ifdef VRA_DMA_TEST_BY_IMAGE
+#if defined(VRA_DMA_TEST_BY_IMAGE)
 int fimc_is_lib_vra_test_image_load(struct fimc_is_lib_vra *lib_vra)
 {
 	int ret = 0;
@@ -853,13 +933,13 @@ int fimc_is_lib_vra_test_image_load(struct fimc_is_lib_vra *lib_vra)
 		return 0;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
 	vra_dma_image = filp_open(VRA_DMA_TEST_IMAGE_PATH, O_RDONLY, 0);
 	if (unlikely(!vra_dma_image)) {
-		err("filp_open fail!!\n");
+		err("filp_open(%s) fail!!\n", VRA_DMA_TEST_IMAGE_PATH);
 		return -EEXIST;
 	}
 
@@ -869,14 +949,13 @@ int fimc_is_lib_vra_test_image_load(struct fimc_is_lib_vra *lib_vra)
 	fsize = vra_dma_image->f_path.dentry->d_inode->i_size;
 	fsize -= 1;
 
-	dbg_lib("%s: start, file path: size %ld Bytes\n", __func__, fsize);
-
-	lib_vra->test_input_buffer = fimc_is_alloc_dma_buffer(fsize);
+	info_lib("lib_vra_test_image_load: size(%ld)Bytes\n", fsize);
+	lib_vra->test_input_buffer = fimc_is_alloc_reserved_vra_dma_buffer(fsize);
 	nread = vfs_read(vra_dma_image,
 			(char __user *)lib_vra->test_input_buffer,
 			fsize, &vra_dma_image->f_pos);
 	if (nread != fsize) {
-		err_lib("failed to read firmware file, %ld Bytes", nread);
+		err_lib("failed to read firmware file (%ld)Bytes", nread);
 		ret = -EINVAL;
 		goto buf_free;
 	}
@@ -886,226 +965,325 @@ int fimc_is_lib_vra_test_image_load(struct fimc_is_lib_vra *lib_vra)
 	return 0;
 
 buf_free:
-	fimc_is_free_dma_buffer(lib_vra->test_input_buffer);
+	fimc_is_free_reserved_vra_dma_buffer(lib_vra->test_input_buffer);
 	set_fs(old_fs);
 
 	return ret;
 }
 #endif
 
-void fimc_is_lib_vra_os_funcs(struct fimc_is_lib_vra_os_system_funcs *funcs)
+void fimc_is_lib_vra_assert(void)
 {
-	if (unlikely(!vra_binary_load)) {
-		err_lib("VRA library is not loading");
+	BUG_ON(1);
+}
+
+bool fimc_is_lib_in_interrupt(void)
+{
+	if (in_interrupt())
+		return true;
+	else
+		return false;
+}
+
+void fimc_is_lib_vra_os_funcs(void)
+{
+	struct fimc_is_lib_support *lib = &gPtr_lib_support;
+	struct fimc_is_lib_vra_os_system_funcs funcs;
+
+	if (unlikely(!lib->binary_load_flg)) {
+		err_lib("SDK library is not loaded");
 		return;
 	}
 
-	funcs->control_task_set_event = fimc_is_lib_vra_control_set_event;
-	funcs->fw_algs_task_set_event = fimc_is_lib_vra_fw_algs_set_event;
-	funcs->set_dram_adr_from_core_to_vdma = fimc_is_translate_kva_to_dva;
-	funcs->clean_cache_region = fimc_is_res_cache_invalid;
-	funcs->invalidate_cache_region = fimc_is_res_cache_invalid;
-	funcs->data_write_back_cache_region = fimc_is_res_cache_flush;
-	funcs->log_write_console = fimc_is_log_write_console;
-	funcs->log_write = fimc_is_log_write;
+	funcs.control_task_set_event = fimc_is_lib_vra_set_event_control;
+	funcs.fw_algs_task_set_event = fimc_is_lib_vra_set_event_fw_algs;
+	funcs.set_dram_adr_from_core_to_vdma = fimc_is_translate_vra_kva_to_dva;
+	funcs.clean_cache_region             = fimc_is_vra_cache_invalid;
+	funcs.invalidate_cache_region        = fimc_is_vra_cache_invalid;
+	funcs.data_write_back_cache_region   = fimc_is_vra_cache_flush;
+	funcs.log_write_console              = fimc_is_log_write_console;
+	funcs.log_write                      = fimc_is_log_write;
 
-	((vra_load_binary_funcs_t)LIB_VRA_BINARY_ADDR)((void *)funcs);
+	funcs.spin_lock_init 	     = fimc_is_spin_lock_init;
+	funcs.spin_lock_finish 	     = fimc_is_spin_lock_finish;
+	funcs.spin_lock              = fimc_is_spin_lock;
+	funcs.spin_unlock            = fimc_is_spin_unlock;
+	funcs.spin_lock_irq          = fimc_is_spin_lock_irq;
+	funcs.spin_unlock_irq        = fimc_is_spin_unlock_irq;
+	funcs.spin_lock_irqsave      = fimc_is_spin_lock_irqsave;
+	funcs.spin_unlock_irqrestore = fimc_is_spin_unlock_irqrestore;
+	funcs.lib_assert       = fimc_is_lib_vra_assert;
+	funcs.lib_in_interrupt = fimc_is_lib_in_interrupt;
+
+#ifdef ENABLE_FPSIMD_FOR_USER
+	fpsimd_get();
+	((vra_set_os_funcs_t)VRA_LIB_ADDR)((void *)&funcs);
+	fpsimd_put();
+#else
+	((vra_set_os_funcs_t)VRA_LIB_ADDR)((void *)&funcs);
+#endif
 }
 
-int fimc_is_lib_vra_get_interface_funcs(struct fimc_is_lib_vra *lib_vra)
+void fimc_is_lib_vra_check_size(struct api_vra_input_desc *frame_desc, struct vra_param *param, u32 fcount)
 {
+	if ((frame_desc->sizes.width != param->otf_input.width)
+		||(frame_desc->sizes.height != param->otf_input.height)) {
+		info_lib("===== VRA input setting =====\n"
+			"\t cmd(OTF:%d, DMA:%d), old_sizes(%dx%d) new_sizes(%dx%d) [F:%d]\n",
+			param->otf_input.cmd, param->dma_input.cmd,
+			frame_desc->sizes.width, frame_desc->sizes.height,
+			param->otf_input.width, param->otf_input.height, fcount);
+	}
+	return;
+}
+
+int fimc_is_lib_vra_test_input(struct fimc_is_lib_vra *lib_vra, u32 instance)
+{
+	enum api_vra_type status;
+	struct api_vra_input_desc *frame_desc;
+
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
-	get_lib_vra_func((void *)&lib_vra->itf_func);
+	frame_desc = &lib_vra->frame_desc[instance];
 
-	dbg_lib("VRA library interface functions setting\n");
+	frame_desc->sizes.width  = 640;
+	frame_desc->sizes.height = 480;
+	frame_desc->hdr_lines  = 0;
+	frame_desc->yuv_format = VRA_YUV_FMT_422;
+	frame_desc->u_before_v = true;
+	frame_desc->dram.pix_component_store_bits = 8;
+	frame_desc->dram.pix_component_data_bits  = 8;
+	frame_desc->dram.planes_num   = 1;
+	frame_desc->dram.un_pack_data = 0;
+	frame_desc->dram.line_ofs_fst_plane = frame_desc->sizes.width * 2;
+	frame_desc->dram.line_ofs_other_planes = 0;
+	frame_desc->dram.adr_ofs_bet_planes
+		= frame_desc->sizes.height * frame_desc->dram.line_ofs_fst_plane;
+
+	info_lib("lib_vra_test_input: DMA_TEST_BY_IMAGE\n");
+
+	status = CALL_VRAOP(lib_vra, set_input,
+				lib_vra->frame_desc_heap[instance],
+				&lib_vra->frame_desc[instance],
+				VRA_KEEP_TR_DATA_BASE);
+	if (status) {
+		err_lib("[%d]set_input is fail(%#x)", instance, status);
+		return -EINVAL;
+	}
 
 	return 0;
 }
 
-int fimc_is_lib_vra_config_param(struct fimc_is_lib_vra *lib_vra,
-		struct vra_param *param, u32 instance)
+int fimc_is_lib_vra_otf_input(struct fimc_is_lib_vra *lib_vra,
+	struct vra_param *param, u32 instance, u32 fcount)
 {
+	enum api_vra_type status;
+	struct api_vra_input_desc *frame_desc;
+
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
 	if (unlikely(!param)) {
-		err_lib("VRA param is NULL");
+		err_lib("vra_param is NULL");
 		return -EINVAL;
 	}
 
-	if (param->otf_input.cmd == OTF_INPUT_COMMAND_ENABLE) {
-		lib_vra->frame_desc[instance].sizes.width = param->otf_input.width;
-		lib_vra->frame_desc[instance].sizes.height = param->otf_input.height;
-		lib_vra->frame_desc[instance].hdr_lines = 0;
+	frame_desc = &lib_vra->frame_desc[instance];
+	lib_vra_check_size(frame_desc, param, fcount);
 
-		switch (param->otf_input.format) {
-		case OTF_OUTPUT_FORMAT_YUV444:
-			lib_vra->frame_desc[instance].yuv_format = VRA_YUV_FMT_444;
-			lib_vra->frame_desc[instance].u_before_v = true;
-			break;
-		case OTF_OUTPUT_FORMAT_YUV422:
-			lib_vra->frame_desc[instance].yuv_format = VRA_YUV_FMT_422;
-			lib_vra->frame_desc[instance].u_before_v = true;
-			break;
-		case OTF_OUTPUT_FORMAT_YUV420:
-			lib_vra->frame_desc[instance].yuv_format = VRA_YUV_FMT_420;
-			lib_vra->frame_desc[instance].u_before_v = true;
-			break;
-		default:
-			err_lib("VRA OTF output format is wrong!!");
-			break;
-		}
-	} else if (param->dma_input.cmd == DMA_INPUT_COMMAND_ENABLE) {
-		lib_vra->frame_desc[instance].sizes.width = param->dma_input.width;
-		lib_vra->frame_desc[instance].sizes.height = param->dma_input.height;
-		lib_vra->frame_desc[instance].hdr_lines = 0;
+	frame_desc->sizes.width  = param->otf_input.width;
+	frame_desc->sizes.height = param->otf_input.height;
+	frame_desc->hdr_lines = 0;
 
-		switch (param->dma_input.format) {
-		case DMA_OUTPUT_FORMAT_YUV444:
-			lib_vra->frame_desc[instance].yuv_format = VRA_YUV_FMT_444;
-			lib_vra->frame_desc[instance].u_before_v = true;
-			lib_vra->frame_desc[instance].dram.line_ofs_fst_plane =
-			param->dma_input.width * 3;
-			break;
-		case DMA_OUTPUT_FORMAT_YUV422:
-			lib_vra->frame_desc[instance].yuv_format = VRA_YUV_FMT_422;
-			lib_vra->frame_desc[instance].u_before_v =
-				param->dma_input.plane == 2 ? false : true;
-			lib_vra->frame_desc[instance].dram.line_ofs_fst_plane =
-				param->dma_input.width * 2;
-			break;
-		case DMA_OUTPUT_FORMAT_YUV420:
-			lib_vra->frame_desc[instance].yuv_format = VRA_YUV_FMT_420;
-			lib_vra->frame_desc[instance].u_before_v = true;
-			lib_vra->frame_desc[instance].dram.line_ofs_fst_plane =
-				param->dma_input.width;
-			break;
-		default:
-			err_lib("VRA DMA output format is wrong!!");
-			break;
-		}
-
-		lib_vra->frame_desc[instance].dram.pix_component_store_bits =
-			param->dma_input.bitwidth;
-		lib_vra->frame_desc[instance].dram.pix_component_data_bits =
-			param->dma_input.bitwidth;
-		lib_vra->frame_desc[instance].dram.planes_num = param->dma_input.plane;
-		lib_vra->frame_desc[instance].dram.un_pack_data = 0;
-		lib_vra->frame_desc[instance].dram.line_ofs_other_planes = 0;
-		lib_vra->frame_desc[instance].dram.adr_ofs_bet_planes =
-			param->dma_input.height * lib_vra->frame_desc[instance].dram.line_ofs_fst_plane;
-	} else {
-		err_lib("VRA output format is wrong!!");
-		return -EINVAL;
+	switch (param->otf_input.format) {
+	case OTF_OUTPUT_FORMAT_YUV444:
+		frame_desc->yuv_format = VRA_YUV_FMT_444;
+		frame_desc->u_before_v = true;
+		break;
+	case OTF_OUTPUT_FORMAT_YUV422:
+		frame_desc->yuv_format = VRA_YUV_FMT_422;
+		frame_desc->u_before_v = true;
+		break;
+	case OTF_OUTPUT_FORMAT_YUV420:
+		frame_desc->yuv_format = VRA_YUV_FMT_420;
+		frame_desc->u_before_v = true;
+		break;
+	default:
+		err_lib("[%d]Invalid otf_input.format(%d)", instance,
+			param->otf_input.format);
+		break;
 	}
 
-#ifdef VRA_DMA_TEST_BY_IMAGE
-	track_mode = VRA_TRM_SINGLE_FRAME;
-	lib_vra->frame_desc[instance].sizes.width = 640;
-	lib_vra->frame_desc[instance].sizes.height = 480;
-	lib_vra->frame_desc[instance].hdr_lines = 0;
-	lib_vra->frame_desc[instance].yuv_format = VRA_YUV_FMT_422;
-	lib_vra->frame_desc[instance].u_before_v = true;
-	lib_vra->frame_desc[instance].dram.pix_component_store_bits = 8;
-	lib_vra->frame_desc[instance].dram.pix_component_data_bits = 8;
-	lib_vra->frame_desc[instance].dram.planes_num = 1;
-	lib_vra->frame_desc[instance].dram.un_pack_data = 0;
-	lib_vra->frame_desc[instance].dram.line_ofs_fst_plane =
-		lib_vra->frame_desc[instance].sizes.width * 2;
-	lib_vra->frame_desc[instance].dram.line_ofs_other_planes = 0;
-	lib_vra->frame_desc[instance].dram.adr_ofs_bet_planes =
-		lib_vra->frame_desc[instance].sizes.height *
-		lib_vra->frame_desc[instance].dram.line_ofs_fst_plane;
-#endif
+	status = CALL_VRAOP(lib_vra, set_input,
+				lib_vra->frame_desc_heap[instance],
+				&lib_vra->frame_desc[instance],
+				VRA_KEEP_TR_DATA_BASE);
+	if (status) {
+		err_lib("[%d]set_input is fail(%#x)", instance, status);
+		return -EINVAL;
+	}
 
 	return 0;
 }
 
-int fimc_is_lib_vra_set_param(struct fimc_is_lib_vra *lib_vra,
-		struct fimc_is_lib_vra_tune_data *vra_tune,
-		enum fimc_is_lib_vra_dir dir, u32 instance)
+int fimc_is_lib_vra_dma_input(struct fimc_is_lib_vra *lib_vra,
+	struct vra_param *param, u32 instance, u32 fcount)
 {
-	struct api_vra_tune_data dbg_tune;
-	enum api_vra_orientation dbg_orientation;
 	enum api_vra_type status;
-	int cnt;
+	struct api_vra_input_desc *frame_desc;
 
 	if (unlikely(!lib_vra)) {
-		err_lib("VRA library is NULL");
+		err_lib("lib_vra is NULL");
 		return -EINVAL;
 	}
 
-	lib_vra->tune[instance].dir = dir;
-
-	if (!vra_tune) {
-		lib_vra->tune[instance].api_tune.tracking_mode = VRA_TRM_ROI_TRACK;
-		lib_vra->tune[instance].api_tune.enable_features = 0;
-		lib_vra->tune[instance].api_tune.full_frame_detection_freq = 1;
-		lib_vra->tune[instance].api_tune.min_face_size = 40;
-		lib_vra->tune[instance].api_tune.max_face_count = 10;
-		lib_vra->tune[instance].api_tune.face_priority = 1;
-		lib_vra->tune[instance].api_tune.disable_frontal_rot_mask = 0x00;
-		lib_vra->tune[instance].api_tune.disable_profile_rot_mask = 0xFE;
-		lib_vra->tune[instance].api_tune.working_point = 865;
-		lib_vra->tune[instance].api_tune.tracking_smoothness = 10;
-
-		lib_vra->tune[instance].frame_lock.lock_frame_num = 0;
-		lib_vra->tune[instance].frame_lock.init_frames_per_lock = 1;
-		lib_vra->tune[instance].frame_lock.normal_frames_per_lock = 1;
-	} else {
-		memcpy(&lib_vra->tune[instance], vra_tune,
-				sizeof(struct fimc_is_lib_vra_tune_data));
-
-		if (lib_vra->fr_work_init.dram_input)
-			lib_vra->tune[instance].api_tune.full_frame_detection_freq =
-					vra_tune->frame_lock.init_frames_per_lock;
-		else
-			lib_vra->tune[instance].api_tune.full_frame_detection_freq =
-					vra_tune->frame_lock.normal_frames_per_lock;
-	}
-
-	cnt = lib_vra->itf_func.set_parameter(lib_vra->fr_work_heap,
-			lib_vra->frame_desc_heap[instance],
-			&lib_vra->tune[instance].api_tune);
-	if (cnt) {
-		err_lib("VRA set param is fail, %d parameter setting fail", cnt);
+	if (unlikely(!param)) {
+		err_lib("vra_param is NULL");
 		return -EINVAL;
 	}
 
-	status = lib_vra->itf_func.set_input(lib_vra->frame_desc_heap[instance],
-			&lib_vra->frame_desc[instance],
-			VRA_KEEP_TR_DATA_BASE);
+	frame_desc = &lib_vra->frame_desc[instance];
+	lib_vra_check_size(frame_desc, param, fcount);
+
+	frame_desc->sizes.width  = param->dma_input.width;
+	frame_desc->sizes.height = param->dma_input.height;
+	frame_desc->hdr_lines = 0;
+
+	switch (param->dma_input.format) {
+	case DMA_OUTPUT_FORMAT_YUV444:
+		frame_desc->yuv_format = VRA_YUV_FMT_444;
+		frame_desc->u_before_v = true;
+		frame_desc->dram.line_ofs_fst_plane = param->dma_input.width * 3;
+		break;
+	case DMA_OUTPUT_FORMAT_YUV422:
+		frame_desc->yuv_format = VRA_YUV_FMT_422;
+		frame_desc->u_before_v = param->dma_input.plane == 2 ? false : true;
+		frame_desc->dram.line_ofs_fst_plane = param->dma_input.width * 2;
+		break;
+	case DMA_OUTPUT_FORMAT_YUV420:
+		frame_desc->yuv_format = VRA_YUV_FMT_420;
+		frame_desc->u_before_v = true;
+		frame_desc->dram.line_ofs_fst_plane = param->dma_input.width;
+		break;
+	default:
+		err_lib("[%d]Invalid dma_input.format(%d)", instance,
+			param->dma_input.format);
+		break;
+	}
+
+	frame_desc->dram.pix_component_store_bits = param->dma_input.bitwidth;
+	frame_desc->dram.pix_component_data_bits  = param->dma_input.bitwidth;
+	frame_desc->dram.planes_num = param->dma_input.plane;
+	frame_desc->dram.un_pack_data = 0;
+	frame_desc->dram.line_ofs_other_planes = 0;
+	frame_desc->dram.adr_ofs_bet_planes
+			= param->dma_input.height *
+			frame_desc->dram.line_ofs_fst_plane;
+
+	status = CALL_VRAOP(lib_vra, set_input,
+				lib_vra->frame_desc_heap[instance],
+				&lib_vra->frame_desc[instance],
+				VRA_KEEP_TR_DATA_BASE);
 	if (status) {
-		err_lib("VRA set input fail(%#x)", status);
+		err_lib("[%d]set_input is fail(%#x)", instance, status);
 		return -EINVAL;
 	}
-
-	cnt = lib_vra->itf_func.get_parameter(lib_vra->fr_work_heap,
-			lib_vra->frame_desc_heap[instance], &dbg_tune, &dbg_orientation);
-	if (cnt) {
-		err_lib("VRA get param is fail, %d parameter get fail", cnt);
-		return -EINVAL;
-	}
-
-	dbg_lib("VRA set parameter: tracking_mode(%#x), enable_features(%#x)\n",
-			dbg_tune.tracking_mode, dbg_tune.enable_features);
-	dbg_lib("min_face_size(%#x), max_face_count(%#x)\n",
-			dbg_tune.min_face_size, dbg_tune.max_face_count);
-	dbg_lib("full_frame_detection_freq(%#x), face_priority(%#x)\n",
-			dbg_tune.full_frame_detection_freq,
-			dbg_tune.face_priority);
-	dbg_lib("disable_frontal_rot_mask(%#x), disable_profile_rot_mask(%#x)\n",
-			dbg_tune.disable_frontal_rot_mask,
-			dbg_tune.disable_profile_rot_mask);
-	dbg_lib("working_point(%#x), tracking_smoothness(%#x)\n",
-			dbg_tune.working_point,
-			dbg_tune.tracking_smoothness);
 
 	return 0;
+}
+
+int fimc_is_lib_vra_apply_tune(struct fimc_is_lib_vra *lib_vra,
+	struct fimc_is_lib_vra_tune_data *vra_tune, u32 instance)
+{
+	struct fimc_is_lib_vra_tune_data tune;
+	struct api_vra_tune_data *info_tune, dbg_tune;
+	struct fimc_is_lib_vra_frame_lock *info_frame;
+	enum api_vra_orientation dbg_orientation;
+	bool dma_test = false;
+	int cnt;
+	int ret;
+
+	if (unlikely(!lib_vra)) {
+		err_lib("lib_vra is NULL");
+		return -EINVAL;
+	}
+
+	dbg_lib("lib_vra_set_param: vra_tune(%p)\n", vra_tune);
+
+#if defined(VRA_DMA_TEST_BY_IMAGE)
+	dma_test = true;
+#endif
+
+	if (!vra_tune || dma_test) {
+		dbg_lib("lib_vra_apply_tune: vra_tune use default setting\n");
+		tune.api_tune.tracking_mode = VRA_TUNE_TRACKING_MODE;
+		tune.api_tune.enable_features = 0;
+		tune.api_tune.full_frame_detection_freq = 1;
+		tune.api_tune.min_face_size = 40;
+		tune.api_tune.max_face_count = 10;
+		tune.api_tune.face_priority = VRA_TUNE_FACE_PRIORITY;
+		tune.api_tune.disable_frontal_rot_mask = VRA_TUNE_DISABLE_FRONTAL_ROT_MASK;
+		tune.api_tune.disable_profile_rot_mask = 0xFE;
+		tune.api_tune.working_point = VRA_TUNE_WORKING_POINT;
+		tune.api_tune.tracking_smoothness = 10;
+
+		tune.frame_lock.lock_frame_num = 0;
+		tune.frame_lock.init_frames_per_lock = 1;
+		tune.frame_lock.normal_frames_per_lock = 1;
+		tune.dir = VRA_REAR_ORIENTATION;
+	} else {
+		dbg_lib("lib_vra_apply_tune: vra_tune use setfile\n");
+		memcpy(&tune, vra_tune, sizeof(struct fimc_is_lib_vra_tune_data));
+		set_bit(VRA_LIB_APPLY_TUNE_SET, &lib_vra->state);
+	}
+
+	lib_vra->max_face_num = tune.api_tune.max_face_count;
+	lib_vra->orientation[instance] = tune.dir;
+	info_tune  = &tune.api_tune;
+	info_frame = &tune.frame_lock;
+
+	cnt = CALL_VRAOP(lib_vra, set_parameter, lib_vra->fr_work_heap,
+				lib_vra->frame_desc_heap[instance],
+				&tune.api_tune);
+	if (cnt) {
+		err_lib("[%d]set_parameter is fail, cnt(%d)", instance, cnt);
+		ret = -EINVAL;
+		goto debug_info;
+	}
+
+	cnt = CALL_VRAOP(lib_vra, get_parameter, lib_vra->fr_work_heap,
+				lib_vra->frame_desc_heap[instance],
+				&dbg_tune, &dbg_orientation);
+	if (cnt) {
+		err_lib("[%d]get_parameter is fail, cnt(%d)", instance, cnt);
+		info_tune = &dbg_tune;
+		ret = -EINVAL;
+		goto debug_info;
+	}
+
+	return 0;
+
+debug_info:
+	info_lib("===== VRA set parameter =====\n"
+		"\t tracking_mode(%#x), enable_features(%#x)\n"
+		"\t min_face_size(%#x), max_face_count(%#x)\n"
+		"\t full_frame_detection_freq(%#x), face_priority(%#x)\n"
+		"\t disable_frontal_rot_mask(%#x), disable_profile_rot_mask(%#x)\n"
+		"\t working_point(%#x), tracking_smoothness(%#x)\n"
+		"\t frame_lock: lock_frame_num(%d), init_frames_per_lock(%d), "
+		"normal_frames_per_lock(%d)\n",
+		info_tune->tracking_mode, info_tune->enable_features,
+		info_tune->min_face_size, info_tune->max_face_count,
+		info_tune->full_frame_detection_freq, info_tune->face_priority,
+		info_tune->disable_frontal_rot_mask, info_tune->disable_profile_rot_mask,
+		info_tune->working_point, info_tune->tracking_smoothness,
+		info_frame->lock_frame_num, info_frame->init_frames_per_lock,
+		info_frame->normal_frames_per_lock);
+
+	return ret;
 }

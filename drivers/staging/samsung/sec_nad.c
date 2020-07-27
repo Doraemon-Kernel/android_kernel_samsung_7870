@@ -395,6 +395,7 @@ static ssize_t show_nad_support(struct device *dev,
 }
 static DEVICE_ATTR(nad_support, S_IRUGO, show_nad_support, NULL);
 
+
 #if defined(CONFIG_SEC_NAD_API)
 static void make_result_data_to_string(void)
 {
@@ -492,7 +493,6 @@ static int __init sec_nad_init(void)
         pr_err("%s: Failed to create device file\n", __func__);
         goto err_create_nad_sysfs;
     }
-
 #if defined(CONFIG_SEC_NAD_API)
     ret = device_create_file(sec_nad, &dev_attr_nad_api); 
     if(ret) {
@@ -500,7 +500,6 @@ static int __init sec_nad_init(void)
         goto err_create_nad_sysfs;
     }
 #endif
-
     /* Initialize nad param struct */
     sec_nad_param_data.offset = NAD_ENV_OFFSET;
     sec_nad_param_data.state = NAD_PARAM_EMPTY;

@@ -30,6 +30,7 @@
 #include <linux/sched.h>
 #include <linux/io.h>
 #include <linux/irq.h>
+#include <linux/uaccess.h>
 #include <linux/pm_runtime.h>
 #include <linux/pm_qos.h>
 #include <linux/iommu.h>
@@ -38,12 +39,6 @@
 #include <linux/seq_file.h>
 #include <linux/firmware.h>
 #include <linux/kthread.h>
-#include <linux/exynos_ion.h>
-#include <linux/kobject.h>
-#include <linux/sysfs.h>
-#include <linux/syscalls.h>
-#include <linux/uaccess.h>
-#include <linux/file.h>
 
 #include <asm/cacheflush.h>
 #include <asm/cachetype.h>
@@ -58,9 +53,7 @@
 #endif
 
 #include "../lpass.h"
-#include "../eax.h"
 #include "seiren.h"
-#include "seiren-dma.h"
 #include "seiren_ioctl.h"
 #include "seiren_error.h"
 #ifdef CONFIG_SND_SAMSUNG_ELPE
@@ -83,13 +76,7 @@
 #define CA5_INT_FREQ_BOOST	(200000)
 #endif
 
-#ifdef CONFIG_SOC_EXYNOS8890
-#define OFFLOAD_INT_LOCK_FREQ 255000
-#endif
-
 #define msecs_to_loops(t) (loops_per_jiffy / 1000 * HZ * t)
-
-void __iomem *dma_reg = NULL;
 
 DEFINE_MUTEX(esa_mutex);
 static DECLARE_WAIT_QUEUE_HEAD(esa_wq);
@@ -113,7 +100,6 @@ int end_index;
 
 #ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
 int esa_compr_running(void);
-static void esa_fw_snapshot(void);
 #endif
 
 int check_esa_status(void)
@@ -167,47 +153,6 @@ static int esa_set_cpu_lock_kthread(void *arg)
 static struct audio_processor *ptr_ap;
 static void esa_dump_fw_log(void);
 
-int esa_compr_send_direct_cmd(int32_t cmd)
-{
-	int n, ack;
-
-	switch (cmd) {
-	case CMD_DMA_START:
-		esa_info("%s: CMD_COMPR_DMA_START %d\n", __func__, cmd);
-		break;
-	case CMD_DMA_STOP:
-		esa_info("%s: CMD_COMPR_DMA_STOP %d\n", __func__, cmd);
-		break;
-	default:
-		esa_err("%s: unknown cmd %d\n", __func__, cmd);
-		return -EIO;
-	}
-
-	spin_lock(&si.cmd_lock);
-	writel(2, si.mailbox + COMPR_HANDLE_ID);
-	writel(cmd, si.mailbox + COMPR_CMD_CODE);		/* command */
-	writel(1, si.regs + SW_INTR_CA5);		/* trigger ca5 */
-
-	for (n = 0, ack = 0; n < 2000; n++) {
-		if (readl(si.mailbox + COMPR_ACK)) {	/* Wait for ACK */
-			ack = 1;
-			break;
-		}
-		udelay(100);
-	}
-	writel(0, si.mailbox + COMPR_ACK);		/* clear ACK */
-
-	spin_unlock(&si.cmd_lock);
-
-	if (!ack) {
-		esa_err("%s: No ack error!(%x)", __func__, cmd);
-		esa_dump_fw_log();
-		return -EFAULT;
-	}
-
-	return 0;
-}
-
 int esa_compr_send_cmd(int32_t cmd, struct audio_processor* ap)
 {
 	int n, ack;
@@ -224,8 +169,6 @@ int esa_compr_send_cmd(int32_t cmd, struct audio_processor* ap)
 #ifdef CONFIG_SND_ESA_SA_EFFECT
 		spin_lock(&si.cmd_lock);
 		writel(si.out_sample_rate, si.mailbox + COMPR_PARAM_RATE);
-		writel(si.left_vol, si.mailbox + COMPR_LEFT_VOL);
-		writel(si.right_vol, si.mailbox + COMPR_RIGHT_VOL);
 		spin_unlock(&si.cmd_lock);
 #endif
 		break;
@@ -302,9 +245,6 @@ int esa_compr_send_buffer(const size_t copy_size, struct audio_processor *ap)
 		esa_err("%s: can't send CMD_COMPR_WRITE (%d)\n",
 			__func__, ret);
 		spin_unlock(&si.compr_lock);
-#ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
-		esa_fw_snapshot();
-#endif
 		return ret;
 	}
 	spin_unlock(&si.compr_lock);
@@ -357,9 +297,6 @@ int esa_compr_set_param(struct audio_processor* ap, uint8_t **buffer)
 	if (ret) {
 		esa_err("%s: can't send CMD_COMPR_SET_PARAM (%d)\n",
 			__func__, ret);
-#ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
-		esa_fw_snapshot();
-#endif
 		return ret;
 	}
 
@@ -414,8 +351,6 @@ int check_esa_compr_state(void)
  * through mailbox interface */
 void esa_compr_alpa_notifier(bool on)
 {
-	if (si.mailbox == NULL)
-		return;
 	writel(on ? 1 : 0, si.mailbox + COMPR_ALPA_NOTI);
 	esa_debug("%s ALPA %s\n", __func__, (on ? "Enter" : "Exit"));
 	if (!on) {
@@ -453,15 +388,6 @@ void esa_compr_ctrl_fxintr(bool fxon)
 }
 
 #ifdef CONFIG_SND_ESA_SA_EFFECT
-void esa_compr_save_volume(int left, int right)
-{
-	esa_debug("%s output volume l = %d, r = %d \n",
-			__func__, left, right);
-	si.left_vol = left;
-	si.right_vol = right;
-	return;
-}
-
 void esa_compr_set_sample_rate(u32 rate)
 {
 	esa_debug("%s output sample_rate %d \n", __func__, rate);
@@ -475,122 +401,23 @@ u32 esa_compr_get_sample_rate(void)
 }
 #endif
 
-void esa_fw_start(void)
+void esa_compr_open(void)
 {
 	pm_runtime_get_sync(&si.pdev->dev);
-#ifdef ESA_DATA_DUMP
-	if (!sram_filp)
-		sram_filp =
-		filp_open("/data/sram.bin", O_RDWR|O_TRUNC|O_CREAT, S_IRUSR|S_IWUSR);
-#endif
-}
-
-void esa_fw_stop(void)
-{
-	pm_runtime_mark_last_busy(&si.pdev->dev);
-	pm_runtime_put_sync_autosuspend(&si.pdev->dev);
-}
-
-int esa_compr_open(void)
-{
-	int ret;
-	void __iomem	*cmu_reg;
-	u32 cfg;
-
-	pm_qos_update_request(&si.ca5_int_qos, OFFLOAD_INT_LOCK_FREQ);
-	ret = pm_runtime_get_sync(&si.pdev->dev);
-	if (ret < 0) {
-		pm_qos_update_request(&si.ca5_int_qos, 0);
-		return ret;
-	}
-
-	cmu_reg = ioremap(0x114C0000, SZ_4K);
-	cfg = readl(cmu_reg + 0x404) & ~(0xF);
-	cfg |= 0x2; /* ACLK_AUD: 102.5MHz */
-	writel(cfg, cmu_reg + 0x404);
-
-	cfg = readl(cmu_reg + 0x400) & ~(0xF); /* CA5: 410MHz */
-	writel(cfg, cmu_reg + 0x400);
-	iounmap(cmu_reg);
-
-	return 0;
 }
 
 void esa_compr_close(void)
 {
-	void __iomem	*cmu_reg;
-	u32 cfg;
-
 #ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
 	lpass_set_cpu_lock(0);
 #endif
-	cmu_reg = ioremap(0x114C0000, SZ_4K);
-	cfg = readl(cmu_reg + 0x400) & ~(0xF);
-	cfg |= 0x1; /* CA5: 205MHz */
-	writel(cfg, cmu_reg + 0x400);
-
-	cfg = readl(cmu_reg + 0x404) & ~(0xF);
-	cfg |= 0x1; /* ACLK_AUD: 102.5MHz */
-	writel(cfg, cmu_reg + 0x404);
-	iounmap(cmu_reg);
-
 	pm_runtime_mark_last_busy(&si.pdev->dev);
 	pm_runtime_put_sync_autosuspend(&si.pdev->dev);
-	pm_qos_update_request(&si.ca5_int_qos, 0);
 	ptr_ap = NULL;
 #ifdef CONFIG_SND_ESA_SA_EFFECT
 	si.out_sample_rate = 0;
 #endif
 }
-#endif
-
-#ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
-static void esa_fw_snapshot(void)
-{
-#if 0
-        struct file *sram_filp;
-        struct file *dram_filp;
-        mm_segment_t old_fs;
-
-	old_fs = get_fs();
-	set_fs(KERNEL_DS);
-
-	if (si.sram) {
-		memcpy(si.fwmem_sram_bak, si.sram, SRAM_FW_MAX);
-	} else {
-		esa_err("%s : Can't store seiren firmware\n", __func__);
-		set_fs(old_fs);
-		return;
-	}
-
-	sram_filp = filp_open("/data/seiren_fw_sram_snapsot.bin",
-			O_RDWR|O_TRUNC|O_CREAT, S_IRUSR|S_IWUSR);
-	vfs_write(sram_filp, si.fwmem_sram_bak, SRAM_FW_MAX, &sram_filp->f_pos);
-	vfs_fsync(sram_filp, 0);
-	filp_close(sram_filp, NULL);
-
-	dram_filp = filp_open("/data/seiren_fw_dram_snapsot.bin",
-			O_RDWR|O_TRUNC|O_CREAT, S_IRUSR|S_IWUSR);
-	vfs_write(dram_filp, si.fwarea[0], SZ_4M, &dram_filp->f_pos);
-	vfs_fsync(dram_filp, 0);
-	filp_close(dram_filp, NULL);
-
-	set_fs(old_fs);
-#endif
-}
-
-struct kobject *seiren_fw_snapshot_kobj = NULL;
-static ssize_t snapshot_seiren_fw(struct kobject *kobj, struct kobj_attribute *attr,
-					const char *buf, size_t count)
-{
-	pr_info("%s: %d seiren snapshot is called\n", __func__, __LINE__);
-	esa_fw_snapshot();
-
-	return count;
-}
-
-static struct kobj_attribute seiren_fw_dump_attribute =
-	__ATTR(seiren_fw_dump, S_IRUGO | S_IWUSR, NULL, snapshot_seiren_fw);
 #endif
 
 static void esa_dump_fw_log(void)
@@ -610,19 +437,10 @@ static void esa_dump_fw_log(void)
 			readl(si.mailbox + COMPR_INTR_ACK),
 			readl(si.mailbox + COMPR_CHECK_CMD));
 
-	if (addr) {
-		for (n = 0; n < FW_LOG_LINE; n++, addr += 128) {
-			memcpy(log, addr, 128);
-			esa_info("%s", log);
-		}
+	for (n = 0; n < FW_LOG_LINE; n++, addr += 128) {
+		memcpy(log, addr, 128);
+		esa_info("%s", log);
 	}
-#ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
-	if (si.sram) {
-		memcpy(si.fwmem_sram_bak, si.sram, SRAM_FW_MAX);
-	} else {
-		esa_err("%s: Can't store seiren firmware\n", __func__);
-	}
-#endif
 }
 
 #ifndef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
@@ -681,12 +499,7 @@ static int esa_send_cmd_exe(struct esa_rtd *rtd, unsigned char *ibuf,
 		obuf_offset = SRAM_IO_BUF + SRAM_OBUF_OFFSET;
 		ibuf_ca5_pa = ibuf_offset;
 		obuf_ca5_pa = obuf_offset;
-		if (si.sram) {
-			memcpy(si.sram + ibuf_offset, ibuf, size);
-		} else {
-			esa_err("%s : there is no sram input buffer", __func__);
-			return -ENOMEM;
-		}
+		memcpy(si.sram + ibuf_offset, ibuf, size);
 	} else {		/* DRAM buffer */
 		ibuf_offset = ibuf - si.fwarea[rtd->block_num];
 		obuf_offset = obuf - si.fwarea[rtd->block_num];
@@ -709,14 +522,8 @@ static int esa_send_cmd_exe(struct esa_rtd *rtd, unsigned char *ibuf,
 
 	if (rtd->use_sram) {
 		out_size = readl(si.mailbox + SIZE_OUT_DATA);
-		if ((response == 0) && (out_size > 0)) {
-			if (si.sram) {
-				memcpy(obuf, si.sram + obuf_offset, out_size);
-			} else {
-				esa_err("%s : there is no sram output buffer", __func__);
-				return -ENOMEM;
-			}
-		}
+		if ((response == 0) && (out_size > 0))
+			memcpy(obuf, si.sram + obuf_offset, out_size);
 	}
 
 	return response;
@@ -739,30 +546,20 @@ static void esa_fw_download(void)
 	if (si.fw_suspended) {
 		esa_info("%s: resume\n", __func__);
 		/* Restore SRAM */
-		if (si.sram) {
-			memcpy(si.sram, si.fwmem_sram_bak, SRAM_FW_MEMSET_SIZE);
+		memcpy(si.sram, si.fwmem_sram_bak, SRAM_FW_MAX);
 #ifndef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
-			memset(si.sram + FW_ZERO_SET_BASE, 0, FW_ZERO_SET_SIZE);
+		memset(si.sram + FW_ZERO_SET_BASE, 0, FW_ZERO_SET_SIZE);
 #else
-			esa_memcpy_mailbox(false);
+		esa_memcpy_mailbox(false);
 #endif
-		} else {
-			esa_err("%s: sram address is empty (%d)\n",
-					__func__, __LINE__);
-		}
 	} else {
 		esa_info("%s: intialize\n", __func__);
 		for (n = 0; n < FWAREA_NUM; n++)
 			memset(si.fwarea[n], 0, FWAREA_SIZE);
 
 		esa_memset_mailbox();
-		if (si.sram) {
-			memset(si.sram, 0, SRAM_FW_MEMSET_SIZE); /* for ZI area */
-			memcpy(si.sram, si.fwmem, si.fw_sbin_size);
-		} else {
-			esa_err("%s: sram address is empty (%d)\n",
-					__func__, __LINE__);
-		}
+		memset(si.sram, 0, SRAM_FW_MAX);	/* for ZI area */
+		memcpy(si.sram, si.fwmem, si.fw_sbin_size);
 		memcpy(si.fwarea[0], si.fwmem + si.fw_sbin_size,
 					si.fw_dbin_size);
 	}
@@ -782,44 +579,18 @@ static int esa_fw_startup(void)
 	if (si.fw_ready)
 		return 0;
 
-	if (!si.fwmem_loaded) {
-		lpass_update_lpclock(LPCLK_CTRLID_OFFLOAD, false);
-		/* audio firmware hasn't beed loaded yet.
-		   there is nothing to do */
-		return 0;
-	}
+	if (!si.fwmem_loaded)
+		return -EAGAIN;
 
-	/* Not to enter SICD_AUD */
-	lpass_update_lpclock(LPCLK_CTRLID_LEGACY, true);
-	lpass_mif_power_on();
 	/* power on */
 	si.fw_use_dram = true;
 	esa_debug("Turn on CA5...\n");
 	esa_fw_download();
 
 	/* wait for fw ready */
-	ret = wait_event_interruptible_timeout(esa_wq, si.fw_ready, HZ * 3);
+	ret = wait_event_interruptible_timeout(esa_wq, si.fw_ready, HZ / 2);
 	if (!ret) {
-#ifdef CONFIG_SOC_EXYNOS8890
-		u32 cfg;
-		void __iomem	*cmu_reg;
-		cmu_reg = ioremap(0x114C0000, SZ_4K);
-		cfg = readl(cmu_reg + 0x800); /* Check CA5 clock */
-		iounmap(cmu_reg);
-		esa_err("%s: fw not ready!!! (%d), clk = %x\n", __func__,
-			readl(si.mailbox + LAST_CHECKPT), cfg);
-#else
-		esa_err("%s: fw not ready!!! (%d)\n", __func__,
-			readl(si.mailbox + LAST_CHECKPT));
-#endif
-		cfg = readl(si.sram); /* Save Reset Vector */
-		writel(0xE320F003, si.sram); /* Enter CA5 into WFI */
-		lpass_reset_toggle(LPASS_IP_CA5);
-		if (!check_esa_compr_state())
-			lpass_update_lpclock(LPCLK_CTRLID_OFFLOAD, false);
-		udelay(100);
-		writel(cfg, si.sram); /* Restore Reset Vector */
-		lpass_update_lpclock(LPCLK_CTRLID_LEGACY, false);
+		esa_err("%s: fw not ready!!!\n", __func__);
 		si.fw_use_dram = false;
 		return -EBUSY;
 	}
@@ -831,7 +602,6 @@ static int esa_fw_startup(void)
 	dec_ver = dec_ver >> 8;
 	esa_debug("Decoder version : %x\n", dec_ver);
 #endif
-	lpass_update_lpclock(LPCLK_CTRLID_LEGACY, false);
 	return 0;
 }
 
@@ -845,8 +615,6 @@ static void esa_fw_shutdown(void)
 	if (!si.fwmem_loaded)
 		return;
 
-	/* Not to enter SICD_AUD */
-	lpass_update_lpclock(LPCLK_CTRLID_LEGACY, true);
 	/* SUSPEND & IDLE */
 	esa_send_cmd(SYS_SUSPEND);
 
@@ -863,10 +631,7 @@ static void esa_fw_shutdown(void)
 	esa_debug("CA5_STATUS: %X\n", val);
 
 	/* Backup SRAM */
-	if (si.sram)
-		memcpy(si.fwmem_sram_bak, si.sram, SRAM_FW_MEMSET_SIZE);
-	else
-		esa_err("%s : Failed to save seiren firmware\n", __func__);
+	memcpy(si.fwmem_sram_bak, si.sram, SRAM_FW_MAX);
 #ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
 	esa_memcpy_mailbox(true);
 #endif
@@ -875,7 +640,6 @@ static void esa_fw_shutdown(void)
 	lpass_reset(LPASS_IP_CA5, LPASS_OP_RESET);
 	si.fw_ready = false;
 	si.fw_use_dram = false;
-	lpass_update_lpclock(LPCLK_CTRLID_LEGACY, false);
 }
 
 #if !defined(CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD) && defined(CONFIG_PM_DEVFREQ)
@@ -937,22 +701,8 @@ int esa_effect_write(int type, int *value, int count)
 	int i, *effect_value;
 	int ret = 0;
 
-	if (!check_esa_compr_state())
-		return 0;
-
-	if (pm_runtime_get_sync(&si.pdev->dev) < 0)
-		return 0;
-
+	pm_runtime_get_sync(&si.pdev->dev);
 	effect_value = value;
-
-	if (!si.effect_ram) {
-		esa_err("%s: memory for effect parameters isn't ready\n",
-				__func__);
-		goto out;
-	} else if (!si.fw_ready) {
-		esa_err("%s: audio firmware isn't ready\n", __func__);
-		goto out;
-	}
 
 	switch (type) {
 	case SOUNDALIVE:
@@ -1118,10 +868,7 @@ static ssize_t esa_write(struct file *file, const char *buffer,
 	int response, consumed_size = 0;
 
 	mutex_lock(&esa_mutex);
-	if (pm_runtime_get_sync(&si.pdev->dev) < 0) {
-		mutex_unlock(&esa_mutex);
-		return 0;
-	}
+	pm_runtime_get_sync(&si.pdev->dev);
 
 	if (rtd->obuf0_filled && rtd->obuf1_filled) {
 		esa_err("%s: There is no unfilled obuf\n", __func__);
@@ -1141,12 +888,6 @@ static ssize_t esa_write(struct file *file, const char *buffer,
 		obuf_filled = &rtd->obuf1_filled;
 		obuf_filled_size = &rtd->obuf1_filled_size;
 		esa_debug("%s: use ibuf1\n", __func__);
-	}
-
-	if (size > rtd->ibuf_size) {
-		esa_err("%s: copy size is bigger than buffer size\n",
-				__func__);
-		goto err;
 	}
 
 	/* receive stream data from user */
@@ -1207,10 +948,7 @@ static ssize_t esa_read(struct file *file, char *buffer,
 	bool *obuf_filled_;
 
 	mutex_lock(&esa_mutex);
-	if (pm_runtime_get_sync(&si.pdev->dev) < 0) {
-		mutex_unlock(&esa_mutex);
-		return 0;
-	}
+	pm_runtime_get_sync(&si.pdev->dev);
 
 	/* select OBUF0 or OBUF1 */
 	if (rtd->select_obuf == 0) {
@@ -1537,7 +1275,6 @@ static int esa_get_params(struct file *file, unsigned int param,
 static irqreturn_t esa_isr(int irqno, void *id)
 {
 	unsigned int fw_stat, log_size, val;
-	int index;
 	bool wakeup = false;
 
 #ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
@@ -1561,23 +1298,6 @@ static irqreturn_t esa_isr(int irqno, void *id)
 		pr_debug("FW is ready!\n");
 		si.fw_ready = true;
 		wakeup = true;
-		break;
-	case INTR_DMA:
-		index = readl(si.mailbox + COMPR_DMA_IDX);
-#ifdef CONFIG_SND_SOC_EAX_SLOWPATH
-		pr_debug("ADMA INTR index = %d !!!!\n", index);
-		eax_slowpath_wakeup_buf_wq(index);
-#endif
-		writel(0, si.mailbox + COMPR_INTR_ACK);
-		break;
-	case INTR_DMA_INDEX:
-		index = readl(si.mailbox + RETURN_CMD) & 0xF;
-#ifdef CONFIG_SND_SOC_EAX_SLOWPATH
-		pr_debug("ADMA INTR index = %d , dma_ptr = %x!!!!\n",
-			index, readl(dma_reg + 0x440));
-		eax_slowpath_wakeup_buf_wq(index);
-#endif
-		writel(0, si.mailbox + COMPR_INTR_ACK);
 		break;
 #ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
 	case INTR_CREATED:
@@ -1731,10 +1451,7 @@ static long esa_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				rtd->idx, param, cmd);
 
 	mutex_lock(&esa_mutex);
-	if (pm_runtime_get_sync(&si.pdev->dev) < 0) {
-		mutex_unlock(&esa_mutex);
-		return 0;
-	}
+	pm_runtime_get_sync(&si.pdev->dev);
 
 	switch (cmd) {
 	case SEIREN_IOCTL_CH_CREATE:
@@ -1872,10 +1589,7 @@ ssize_t esa_copy(unsigned long hwbuf, ssize_t size)
 	int i, cnt, ret;
 
 	mutex_lock(&esa_mutex);
-	if (pm_runtime_get_sync(&si.pdev->dev) < 0) {
-		mutex_unlock(&esa_mutex);
-		return 0;
-	}
+	pm_runtime_get_sync(&si.pdev->dev);
 
 	cnt = size / FX_BUF_SIZE;
 	if (cnt && (size - (FX_BUF_SIZE * cnt))) {
@@ -1895,10 +1609,7 @@ ssize_t esa_copy(unsigned long hwbuf, ssize_t size)
 		}
 
 		si.fx_irq_done = false;
-		if (si.sram)
-			si.fx_work_buf = (unsigned char *)(si.sram + FX_BUF_OFFSET);
-		else
-			esa_err("%s: sram address is empty (%d)\n", __func__, __LINE__);
+		si.fx_work_buf = (unsigned char *)(si.sram + FX_BUF_OFFSET);
 		si.fx_work_buf += si.fx_next_idx * FX_BUF_SIZE;
 		esa_debug("%s: buf_idx = %d\n", __func__, si.fx_next_idx);
 
@@ -1922,10 +1633,7 @@ static ssize_t esa_read(struct file *file, char *buffer,
 	int ret;
 
 	mutex_lock(&esa_mutex);
-	if (pm_runtime_get_sync(&si.pdev->dev) < 0) {
-		mutex_unlock(&esa_mutex);
-		return 0;
-	}
+	pm_runtime_get_sync(&si.pdev->dev);
 
 	if (!si.fx_ext_on) {
 		esa_debug("%s: fx ext not enabled\n", __func__);
@@ -1941,10 +1649,7 @@ static ssize_t esa_read(struct file *file, char *buffer,
 	}
 
 	si.fx_irq_done = false;
-	if (si.sram)
-		si.fx_work_buf = (unsigned char *)(si.sram + FX_BUF_OFFSET);
-	else
-		esa_err("%s: sram address is empty (%d)\n", __func__, __LINE__);
+	si.fx_work_buf = (unsigned char *)(si.sram + FX_BUF_OFFSET);
 	si.fx_work_buf += si.fx_next_idx * FX_BUF_SIZE;
 	esa_debug("%s: buf_idx = %d\n", __func__, si.fx_next_idx);
 
@@ -1968,10 +1673,7 @@ static ssize_t esa_write(struct file *file, const char *buffer,
 	int ret;
 
 	mutex_lock(&esa_mutex);
-	if (pm_runtime_get_sync(&si.pdev->dev) < 0) {
-		mutex_unlock(&esa_mutex);
-		return 0;
-	}
+	pm_runtime_get_sync(&si.pdev->dev);
 
 	if (!si.fx_ext_on) {
 		esa_debug("%s: fx ext not enabled\n", __func__);
@@ -1982,12 +1684,6 @@ static ssize_t esa_write(struct file *file, const char *buffer,
 	if (!si.fx_work_buf) {
 		esa_debug("%s: fx buf not ready\n", __func__);
 		ret = -EBUSY;
-		goto out;
-	}
-
-	if (size > FX_BUF_SIZE) {
-		esa_err("%s: copy size is bigger than buffer size\n",
-				__func__);
 		goto out;
 	}
 
@@ -2011,10 +1707,7 @@ static long esa_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	int ret = 0;
 
 	mutex_lock(&esa_mutex);
-	if (pm_runtime_get_sync(&si.pdev->dev) < 0) {
-		mutex_unlock(&esa_mutex);
-		return 0;
-	}
+	pm_runtime_get_sync(&si.pdev->dev);
 
 	switch (cmd) {
 	case SEIREN_IOCTL_FX_EXT:
@@ -2023,12 +1716,8 @@ static long esa_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 #ifdef CONFIG_SND_SAMSUNG_ELPE
 	case SEIREN_IOCTL_ELPE_DONE:
-		if (si.effect_ram) {
-			writel(arg, si.effect_ram + ELPE_BASE + ELPE_RET);
-			writel(0, si.effect_ram + ELPE_BASE + ELPE_DONE);
-		} else {
-			esa_err("%s: elpe effect ram is empty\n", __func__);
-		}
+		writel(arg, si.effect_ram + ELPE_BASE + ELPE_RET);
+		writel(0, si.effect_ram + ELPE_BASE + ELPE_DONE);
 		break;
 #endif
 	default:
@@ -2251,7 +1940,6 @@ static const struct file_operations esa_proc_fops = {
 	.read = esa_proc_read,
 };
 
-#ifdef CONFIG_PM_RUNTIME
 static int esa_do_suspend(struct device *dev)
 {
 	esa_fw_shutdown();
@@ -2261,45 +1949,16 @@ static int esa_do_suspend(struct device *dev)
 
 	si.pm_on = false;
 
-#ifdef CONFIG_SOC_EXYNOS8890
-	si.sram = NULL;
-	si.fw_log_buf = NULL;
-	si.effect_ram = NULL;
-	lpeff_set_effect_addr(NULL);
-#endif
-	lpass_update_lpclock(LPCLK_CTRLID_OFFLOAD, false);
 	return 0;
 }
-#endif
 
 static int esa_do_resume(struct device *dev)
 {
-	int ret;
-
 	si.pm_on = true;
 
-	lpass_update_lpclock(LPCLK_CTRLID_OFFLOAD, true);
 	lpass_get_sync(dev);
-#ifdef CONFIG_SOC_EXYNOS8890
-	si.sram = lpass_get_mem();
-	if (!si.sram) {
-		esa_err("Failed to get lpass sram\n");
-		return -ENOMEM;
-	} else {
-		si.fw_log_buf = si.sram + FW_LOG_ADDR;
-		si.effect_ram = si.sram + EFFECT_OFFSET;
-		lpeff_set_effect_addr(si.effect_ram);
-	}
-#endif
 	clk_prepare_enable(si.clk_ca5);
-	ret = esa_fw_startup();
-	if (ret) {
-		si.pm_on = false;
-		clk_disable_unprepare(si.clk_ca5);
-		lpass_put_sync(dev);
-		lpass_update_lpclock(LPCLK_CTRLID_OFFLOAD, false);
-		return ret;
-	}
+	esa_fw_startup();
 	esa_update_qos();
 
 	return 0;
@@ -2313,17 +1972,6 @@ static int esa_suspend(struct device *dev)
 	if (!si.pm_on)
 		return 0;
 
-#ifdef CONFIG_SOC_EXYNOS8890
-	si.sram = lpass_get_mem();
-	if (!si.sram) {
-		esa_err("Failed to get lpass sram %s\n", __func__);
-		return -ENOMEM;
-	} else {
-		si.fw_log_buf = si.sram + FW_LOG_ADDR;
-		si.effect_ram = si.sram + EFFECT_OFFSET;
-		lpeff_set_effect_addr(si.effect_ram);
-	}
-#endif
 	esa_fw_shutdown();
 	clk_disable_unprepare(si.clk_ca5);
 
@@ -2334,10 +1982,6 @@ static int esa_suspend(struct device *dev)
 
 static int esa_resume(struct device *dev)
 {
-#ifdef CONFIG_SOC_EXYNOS8890
-	void __iomem	*cmu_reg;
-#endif
-
 	esa_debug("%s entered\n", __func__);
 
 	if (!si.pm_suspended)
@@ -2345,20 +1989,6 @@ static int esa_resume(struct device *dev)
 
 	si.pm_suspended = false;
 
-#ifdef CONFIG_SOC_EXYNOS8890
-	si.sram = lpass_get_mem();
-	if (!si.sram) {
-		esa_err("Failed to get lpass sram %s\n", __func__);
-		return -ENOMEM;
-	} else {
-		si.fw_log_buf = si.sram + FW_LOG_ADDR;
-		si.effect_ram = si.sram + EFFECT_OFFSET;
-		lpeff_set_effect_addr(si.effect_ram);
-	}
-	cmu_reg = ioremap(0x114C0000, SZ_4K);
-	writel(0x1, cmu_reg + 0x800); /* Enable CA5 clock */
-	iounmap(cmu_reg);
-#endif
 	clk_prepare_enable(si.clk_ca5);
 	esa_fw_startup();
 
@@ -2415,9 +2045,7 @@ static int esa_prepare_buffer(struct device *dev)
 	/* Base address for IBUF, OBUF and FW LOG  */
 	si.bufmem = si.fwarea[0] + BASEMEM_OFFSET;
 	si.bufmem_pa = si.fwarea_pa[0];
-#ifndef CONFIG_SOC_EXYNOS8890
 	si.fw_log_buf = si.sram + FW_LOG_ADDR;
-#endif
 
 	return 0;
 err1:
@@ -2457,8 +2085,6 @@ static void esa_fw_request_complete(const struct firmware *fw_sram, void *ctx)
 
 	memcpy(si.fwmem, fw_sram->data, si.fw_sbin_size);
 	memcpy(si.fwmem + si.fw_sbin_size, fw_dram->data, si.fw_dbin_size);
-
-	release_firmware(fw_dram);
 
 	esa_info("FW Loaded (SRAM = %d, DRAM = %d)\n",
 			si.fw_sbin_size, si.fw_dbin_size);
@@ -2502,18 +2128,14 @@ static int esa_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-#ifndef CONFIG_SOC_EXYNOS8890
 	si.sram = lpass_get_mem();
 	if (!si.sram) {
 		esa_err("Failed to get lpass sram\n");
 		return -ENODEV;
 	}
-#endif
 
 #ifdef CONFIG_SND_ESA_SA_EFFECT
-#ifndef CONFIG_SOC_EXYNOS8890
 	si.effect_ram = si.sram + EFFECT_OFFSET;
-#endif
 	si.out_sample_rate = 0;
 #endif
 
@@ -2588,11 +2210,13 @@ static int esa_probe(struct platform_device *pdev)
 	pm_runtime_use_autosuspend(dev);
 	pm_runtime_set_autosuspend_delay(dev, 300);
 	pm_runtime_enable(dev);
+	pm_runtime_get_sync(dev);
+	pm_runtime_put_sync(dev);
 #else
 	esa_do_resume(dev);
 #endif
 #ifdef CONFIG_SND_SAMSUNG_ELPE
-	lpeff_init(&si);
+	lpeff_init(si);
 	exynos_init_lpeffworker();
 #endif
 #ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD
@@ -2600,14 +2224,6 @@ static int esa_probe(struct platform_device *pdev)
 			kthread_run(esa_set_cpu_lock_kthread, NULL,
 					"esa-set-cpu-lock");
 	sched_setscheduler_nocheck(si.aud_cpu_lock_thrd, SCHED_NORMAL, &param);
-
-	if (!seiren_fw_snapshot_kobj) {
-		seiren_fw_snapshot_kobj	=
-			kobject_create_and_add("snapshot-seiren-fw", NULL);
-		if (sysfs_create_file(seiren_fw_snapshot_kobj, &seiren_fw_dump_attribute.attr))
-			pr_err("%s: failed to create sysfs to control PCM dump\n", __func__);
-	}
-
 #endif
 #ifdef CONFIG_PM_DEVFREQ
 	si.mif_qos = 0;
@@ -2615,8 +2231,6 @@ static int esa_probe(struct platform_device *pdev)
 	pm_qos_add_request(&si.ca5_mif_qos, PM_QOS_BUS_THROUGHPUT, 0);
 	pm_qos_add_request(&si.ca5_int_qos, PM_QOS_DEVICE_THROUGHPUT, 0);
 #endif
-	if (!dma_reg)
-		dma_reg = ioremap(0x11420000, SZ_4K);
 	return 0;
 
 err:

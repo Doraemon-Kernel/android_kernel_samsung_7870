@@ -99,12 +99,11 @@ static void ci_otg_work(struct work_struct *work)
 	if (ci->id_event) {
 		ci->id_event = false;
 		ci_handle_id_switch(ci);
-	}
-
-	if (ci->b_sess_valid_event) {
+	} else if (ci->b_sess_valid_event) {
 		ci->b_sess_valid_event = false;
 		ci_handle_vbus_change(ci);
-	}
+	} else
+		dev_err(ci->dev, "unexpected event occurs at %s\n", __func__);
 
 	enable_irq(ci->irq);
 }

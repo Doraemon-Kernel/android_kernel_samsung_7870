@@ -449,6 +449,8 @@ static void ahash_def_finup_done1(struct crypto_async_request *req, int err)
 	if (err == -EINPROGRESS) {
 		ahash_notify_einprogress(areq);
 		return;
+			ahash_notify_einprogress(areq);
+			return;
 	}
 
 	areq->base.flags &= ~CRYPTO_TFM_REQ_MAY_SLEEP;
@@ -456,6 +458,7 @@ static void ahash_def_finup_done1(struct crypto_async_request *req, int err)
 	err = ahash_def_finup_finish1(areq, err);
 	if (areq->priv)
 		return;
+			return;
 
 	areq->base.complete(&areq->base, err);
 }

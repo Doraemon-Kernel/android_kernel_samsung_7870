@@ -95,7 +95,7 @@ static int wait_for_more_packets(struct sock *sk, int *err, long *timeo_p,
 	if (error)
 		goto out_err;
 
-	if (READ_ONCE(sk->sk_receive_queue.prev) != skb)
+	if (sk->sk_receive_queue.prev != skb)
 		goto out;
 
 	/* Socket shut down? */
@@ -227,12 +227,12 @@ struct sk_buff *__skb_recv_datagram(struct sock *sk, unsigned int flags,
 					_off -= skb->len;
 					continue;
 				}
-				
+
 				skb = skb_set_peeked(skb);
 				error = PTR_ERR(skb);
 				if (IS_ERR(skb))
 					goto unlock_err;
-				
+
 				atomic_inc(&skb->users);
 			} else
 				__skb_unlink(skb, queue);

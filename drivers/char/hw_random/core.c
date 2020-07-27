@@ -43,8 +43,8 @@
 #include <linux/slab.h>
 #include <linux/random.h>
 #include <linux/err.h>
-#include <asm/uaccess.h>
 #include <linux/freezer.h>
+#include <asm/uaccess.h>
 
 
 #define RNG_MODULE_NAME		"hw_random"
@@ -87,7 +87,7 @@ static void add_early_randomness(struct hwrng *rng)
 	int bytes_read;
 
 	mutex_lock(&reading_mutex);
-	bytes_read = rng_get_data(rng, bytes, sizeof(bytes), 0);
+	bytes_read = rng_get_data(rng, bytes, sizeof(bytes), 1);
 	mutex_unlock(&reading_mutex);
 	if (bytes_read > 0)
 		add_device_randomness(bytes, bytes_read);
@@ -474,12 +474,10 @@ int hwrng_register(struct hwrng *rng)
 
 	old_rng = current_rng;
 	if (!old_rng) {
-		set_current_rng(rng);
 		err = hwrng_init(rng);
-		if (err) {
-			drop_current_rng();
+		if (err)
 			goto out_unlock;
-		}
+		set_current_rng(rng);
 	}
 	err = 0;
 	if (!old_rng) {

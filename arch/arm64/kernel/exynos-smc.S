@@ -7,9 +7,7 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-#ifdef CONFIG_RKP_CFP_FIX_SMC_BUG
-#include <asm/rkp_cfp.h>
-#endif
+
 #include <linux/linkage.h>
 
 #include <linux/smc.h>
@@ -34,23 +32,19 @@ ENTRY(__exynos_smc)
 	ldr	x3, =save_smc_id
 	str	x0, [x3]
 	mov	x3, #ESS_FLAG_IN
-	bl	__exynos_ss_irq
+	bl	exynos_ss_irq
 	ldp	x0, x1, [sp, #16]
 	ldp	x2, x3, [sp, #32]
 #endif
 	dsb	sy
-#ifdef CONFIG_RKP_CFP_FIX_SMC_BUG
-	_smc	#0
-#else
 	smc	#0
-#endif
 #ifdef CONFIG_EXYNOS_SNAPSHOT_LOGGING_SMC_CALL
 	stp	x0, x1, [sp, #16]
 	stp	x2, x3, [sp, #32]
 	ldr	x3, =save_smc_id
 	ldr	x0, [x3]
 	mov	x3, #ESS_FLAG_OUT
-	bl	__exynos_ss_irq
+	bl	exynos_ss_irq
 	ldp	x0, x1, [sp, #16]
 	ldp	x2, x3, [sp, #32]
 	ldp	x29, x30, [sp], #48
@@ -73,11 +67,7 @@ ENTRY(exynos_smc_readsfr)
 	orr	w1, w1, #SMC_REG_CLASS_SFR_R
 	mov	w0, #SMC_CMD_REG
 	dsb	sy
-#ifdef CONFIG_RKP_CFP_FIX_SMC_BUG
-	_smc	#0
-#else
 	smc	#0
-#endif
 	ldp	x1, x3, [sp], #16
 	cmp	x0, #0
 	b.ne	fail_read

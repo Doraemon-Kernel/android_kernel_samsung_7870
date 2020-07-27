@@ -20,20 +20,65 @@
 #include <linux/earlysuspend.h>
 #endif
 
-#if defined(CONFIG_TOUCHSCREEN_ATMEL_MXT874U)
-#define MXT_DEV_NAME	"MXT874U"
+#if defined(CONFIG_TOUCHSCREEN_ATMEL_MXT1664T)
+#define MXT_DEV_NAME	"MXT1664"
+#elif defined(CONFIG_TOUCHSCREEN_ATMEL_MXT2405)
+#define MXT_DEV_NAME	"MXT2405T"
+#else
+#define MXT_DEV_NAME	"Atmel MXTXXXS"
 #endif
+
+#ifdef CONFIG_SEC_DEBUG_TSP_LOG
+#include <linux/sec_debug.h>
+
+#define tsp_debug_dbg(mode, dev, fmt, ...)	\
+({								\
+	if (mode) {					\
+		dev_dbg(dev, fmt, ## __VA_ARGS__);	\
+		sec_debug_tsp_log(fmt, ## __VA_ARGS__);		\
+	}				\
+	else					\
+		dev_dbg(dev, fmt, ## __VA_ARGS__);	\
+})
+
+#define tsp_debug_info(mode, dev, fmt, ...)	\
+({								\
+	if (mode) {							\
+		dev_info(dev, fmt, ## __VA_ARGS__);		\
+		sec_debug_tsp_log(fmt, ## __VA_ARGS__);		\
+	}				\
+	else					\
+		dev_info(dev, fmt, ## __VA_ARGS__);	\
+})
+
+#define tsp_debug_err(mode, dev, fmt, ...)	\
+({								\
+	if (mode) {					\
+		dev_err(dev, fmt, ## __VA_ARGS__);	\
+		sec_debug_tsp_log(fmt, ## __VA_ARGS__);	\
+	}				\
+	else					\
+		dev_err(dev, fmt, ## __VA_ARGS__); \
+})
+#else
+#define tsp_debug_dbg(mode, dev, fmt, ...)	dev_dbg(dev, fmt, ## __VA_ARGS__)
+#define tsp_debug_info(mode, dev, fmt, ...)	dev_info(dev, fmt, ## __VA_ARGS__)
+#define tsp_debug_err(mode, dev, fmt, ...)	dev_err(dev, fmt, ## __VA_ARGS__)
+#endif
+
+
 
 /************** Feature + **************/
 #define TSP_SEC_FACTORY			1
-#define ENABLE_TOUCH_KEY		0
+#define TSP_INFORM_CHARGER		0
+#define ENABLE_TOUCH_KEY		1
 #define TSP_CHECK_ATCH			0
 #define TSP_PATCH				1
 #define TSP_USE_PALM_FLAG		1
 #define TSP_CHANGE_CONFIG_FOR_INPUT  0
 #define USE_FOR_SUFACE			0
 #ifdef CONFIG_SEC_FACTORY
-//#define REPORT_2D_Z				/* only for CONFIG_SEC_FACTORY */
+#define REPORT_2D_Z				/* only for CONFIG_SEC_FACTORY */
 #endif
 
 #define FOR_BRINGUP				0
@@ -65,17 +110,12 @@
 #define REF_MAX_VALUE		(28884 - REF_OFFSET_VALUE)
 
 #define TSP_CMD_STR_LEN			32
-#define TSP_CMD_RESULT_STR_LEN		512
+#define TSP_CMD_RESULT_STR_LEN	2000	//512
 #define TSP_CMD_PARAM_NUM		8
 
 #define MXT_FIRMWARE_INKERNEL_PATH_NAME	"/sdcard/Firmware/TSP/mxt.fw"
 
-/* Slave addresses */
-/* for slave addr 0x4a*/
 #define MXT_BOOT_ADDRESS			0x26
-/* for slave addr 0x4b*/
-#define MXT_BOOT_ADDRESS2			0x27
-
 #define MXT_MAX_FW_PATH				30
 
 
@@ -247,6 +287,12 @@ enum {
 #define MXT_PRESS_MSG_MASK		(1 << 6)
 #define MXT_DETECT_MSG_MASK		(1 << 7)
 
+/* Slave addresses */
+#define MXT_APP_LOW			0x4a
+#define MXT_APP_HIGH		0x4b
+#define MXT_BOOT_LOW		0x24
+#define MXT_BOOT_HIGH		0x25
+
 /* Bootloader mode status */
 #define MXT_WAITING_BOOTLOAD_CMD	0xc0
 #define MXT_WAITING_FRAME_DATA		0x80
@@ -361,9 +407,14 @@ enum {
 #define KEY_RELEASE     0
 #define TOUCH_KEY_NULL	0
 
+#define KEY_DUMMY_MENU		251	/* Dummy Touchkey : MENU*/
+#define KEY_DUMMY_BACK		253	/* Dummy Touchkey : BACK*/
+
 /* support 4 touch key */
-#define TOUCH_KEY_RECENT		(0x1 << 0)
-#define TOUCH_KEY_BACK		(0x1 << 1)
+#define TOUCH_KEY_D_RECENT_4	(0x1 << 0)
+#define TOUCH_KEY_D_BACK_4		(0x1 << 1)
+#define TOUCH_KEY_RECENT_4		(0x1 << 2)
+#define TOUCH_KEY_BACK_4		(0x1 << 3)
 
 struct mxt_touchkey {
 	unsigned int value;
@@ -458,8 +509,6 @@ struct mxt_platform_data {
 	int (*power_ctrl) (void *ddata, bool on);
 	int (*power_reset) (void);
 	void (*register_cb) (void *);
-
-	u32 x_y_chnage;
 #if ENABLE_TOUCH_KEY
 	unsigned int num_touchkey;
 	struct mxt_touchkey *touchkey;
@@ -495,7 +544,7 @@ struct mxt_info {
 
 struct mxt_message {
 	u8 reportid;
-	u8 message[9];
+	u8 message[10];
 };
 
 /**
@@ -608,7 +657,7 @@ struct mxt_data {
 	struct mxt_reportid *reportids;
 	struct mxt_finger fingers[MXT_MAX_FINGER];
 	u8 max_reportid;
-	u16 finger_mask ;
+	u8 finger_mask ;
 	bool mxt_enabled;
 	u16 mxt_err_cnt;
 	struct regulator *vcc_supply;
@@ -631,8 +680,17 @@ struct mxt_data {
 #if TSP_CHECK_ATCH
 	struct mxt_atch	atch;
 #endif
+#if TSP_INFORM_CHARGER
+	struct mxt_callbacks callbacks;
+	struct delayed_work noti_dwork;
+	bool charging_mode;
+	u8 chargin_status;
+#endif
 #if ENABLE_TOUCH_KEY
 	u16 tsp_keystatus;
+	bool report_dummy_key;
+	bool ignore_menu_key;
+	bool ignore_back_key;
 #endif
 #if TSP_PATCH
 	struct mxt_patch patch;

@@ -86,6 +86,16 @@
 #define PRE_YUV_WIDTH		2
 #define PRE_YUV_HEIGHT		2
 #define PRE_ROT1_YUV_HEIGHT	1
+#define PRE12_RGB_WIDTH		2
+#define PRE12_RGB_HEIGHT	2
+#define PRE12_YUV_WIDTH		4
+#define PRE12_ROT1_YUV_HEIGHT	2
+#define PRE12_YUV_HEIGHT	4
+#define PRE14_RGB_WIDTH		4
+#define PRE14_RGB_HEIGHT	4
+#define PRE14_YUV_WIDTH		8
+#define PRE14_YUV_HEIGHT	8
+#define PRE14_ROT1_YUV_HEIGHT	4
 
 #define SRC_SIZE_MULTIPLE	2
 #define SRC_ROT1_MUL_Y		1
@@ -142,10 +152,11 @@ struct vpp_size_constraints {
 struct vpp_img_format {
 	u32		vgr;
 	u32		normal;
+	u32		pre_none;
+	u32		pre_12;
+	u32		pre_14;
 	u32		rot;
 	u32		scale;
-	u32		format;
-	u32		afbc_en;
 	u32		yuv;
 	u32		yuv422;
 	u32		yuv420;
@@ -184,12 +195,12 @@ void vpp_reg_set_realtime_path(u32 id);
 void vpp_reg_set_framedone_irq(u32 id, u32 enable);
 void vpp_reg_set_deadlock_irq(u32 id, u32 enable);
 void vpp_reg_set_read_slave_err_irq(u32 id, u32 enable);
+void vpp_reg_set_sfr_update_done_irq(u32 id, u32 enable);
 void vpp_reg_set_hw_reset_done_mask(u32 id, u32 enable);
 void vpp_reg_set_lookup_table(u32 id);
 void vpp_reg_set_enable_interrupt(u32 id);
 void vpp_reg_set_rgb_type(u32 id, u32 type);
 void vpp_reg_set_dynamic_clock_gating(u32 id);
-int vpp_reg_set_debug_sfr(u32 id);
 void vpp_reg_set_plane_alpha_fixed(u32 id);
 
 /* CAL raw functions list */
@@ -197,11 +208,9 @@ int vpp_reg_set_sw_reset(u32 id);
 void vpp_reg_set_in_size(u32 id, struct vpp_size_param *p);
 void vpp_reg_set_out_size(u32 id, u32 dst_w, u32 dst_h);
 void vpp_reg_set_scale_ratio(u32 id, struct vpp_size_param *p, u32 rot_en);
-int vpp_reg_set_in_format(u32 id, struct vpp_img_format *vi);
+int vpp_reg_set_in_format(u32 id, u32 format, struct vpp_img_format *vi);
 void vpp_reg_set_in_block_size(u32 id, u32 enable, struct vpp_size_param *p);
-void vpp_reg_set_in_afbc_en(u32 id, u32 enable);
-u64 vpp_reg_print_buf_addr(u32 id);
-void vpp_reg_set_in_buf_addr(u32 id, struct vpp_size_param *p, struct vpp_img_format *vi);
+void vpp_reg_set_in_buf_addr(u32 id, struct vpp_size_param *p);
 void vpp_reg_set_smart_if_pix_num(u32 id, u32 dst_w, u32 dst_h);
 void vpp_reg_set_sfr_update_force(u32 id);
 int vpp_reg_wait_op_status(u32 id);
@@ -210,10 +219,8 @@ void vpp_reg_set_plane_alpha(u32 id, u32 plane_alpha);
 void vpp_reg_wait_idle(u32 id);
 int vpp_reg_get_irq_status(u32 id);
 void vpp_reg_set_clear_irq(u32 id, u32 irq);
-void vpp_constraints_params(struct vpp_size_constraints *vc,
-					struct vpp_img_format *vi);
+void vpp_constraints_params(struct vpp_size_constraints *vc, struct vpp_img_format *vi);
 void vpp_reg_init(u32 id);
 void vpp_reg_deinit(u32 id, u32 reset_en);
 void vpp_reg_wait_pingpong_clear(u32 id);
-void vpp_reg_set_deadlock_num(u32 id, u32 num);
 #endif /* ___SAMSUNG_VPP_COMMON_H__ */

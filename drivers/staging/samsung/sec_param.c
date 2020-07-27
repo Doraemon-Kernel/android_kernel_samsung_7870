@@ -60,8 +60,7 @@ static void sec_param_update(struct work_struct *work)
 		pr_err("%s: write error! %d\n", __func__, ret);
 
 close_fp_out:
-	if (fp)
-		filp_close(fp, NULL);
+	filp_close(fp, NULL);
 	pr_info("%s: exit %d\n", __func__, ret);
 }
 
@@ -90,8 +89,7 @@ static void sec_param_update_str(struct work_struct *work)
 		pr_err("%s: write error! %d\n", __func__, ret);
 
 close_fp_out:
-	if (fp)
-		filp_close(fp, NULL);
+	filp_close(fp, NULL);
 	pr_info("%s: exit %d\n", __func__, ret);
 }
 
@@ -105,7 +103,8 @@ int sec_set_param(unsigned long offset, char val)
 
 	mutex_lock(&sec_param_mutex);
 
-	if ((offset < CM_OFFSET) || (offset > CM_OFFSET + CM_OFFSET_LIMIT))
+	if ((offset != CM_OFFSET) && (offset != CM_OFFSET + CM_OFFSET_LIMIT)
+		&& (offset != GSP_OFFSET))
 		goto unlock_out;
 
 	switch (val) {
@@ -113,8 +112,6 @@ int sec_set_param(unsigned long offset, char val)
 	case PARAM_ON:
 		goto set_param;
 	default:
-		if (val >= PARAM_TEST0 && val < PARAM_MAX)
-			goto set_param;
 		goto unlock_out;
 	}
 

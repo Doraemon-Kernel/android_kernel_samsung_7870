@@ -57,13 +57,8 @@ static int sensor_dw9714_write_position(struct i2c_client *client, u32 val)
 	val_low = ((val & 0x0F) << 4) | 0xF;
 
 	ret = fimc_is_sensor_data_write16(client, val_high, val_low);
-	if (ret < 0)
-		goto p_err;
-
-	return ret;
 
 p_err:
-	ret = -ENODEV;
 	return ret;
 }
 
@@ -146,6 +141,10 @@ int sensor_dw9714_actuator_init(struct v4l2_subdev *subdev, u32 val)
 	int ret = 0;
 	struct fimc_is_actuator *actuator;
 	struct i2c_client *client = NULL;
+#ifdef USE_CAMERA_HW_BIG_DATA
+	struct fimc_is_device_sensor *device = NULL;
+	struct cam_hw_param *hw_param = NULL;
+#endif
 #ifdef DEBUG_ACTUATOR_TIME
 	struct timeval st, end;
 	do_gettimeofday(&st);
@@ -174,8 +173,21 @@ int sensor_dw9714_actuator_init(struct v4l2_subdev *subdev, u32 val)
 
 	/* STEP 1 : Protect Off */
 	ret = fimc_is_sensor_data_write16(client, 0xEC, 0xA3);
-	if (ret < 0)
+	if (ret < 0) {
+#ifdef USE_CAMERA_HW_BIG_DATA
+		device = v4l2_get_subdev_hostdata(subdev);
+		if (device) {
+			if (device->position == SENSOR_POSITION_REAR) {
+				fimc_is_sec_get_rear_hw_param(&hw_param);
+			} else if (device->position == SENSOR_POSITION_FRONT) {
+				fimc_is_sec_get_front_hw_param(&hw_param);
+			}
+		}
+		if (hw_param)
+			hw_param->i2c_af_err_cnt++;
+#endif
 		goto p_err;
+	}
 
 	/* SETP 2 : T_SRC setting (default is 0x00) */
 	ret = fimc_is_sensor_data_write16(client, 0xF2, (0x9 << 3));
@@ -389,15 +401,15 @@ int sensor_dw9714_actuator_probe(struct i2c_client *client,
 
 	device = &core->sensor[sensor_id];
 	if (!device) {
-		probe_err("sensor peri is net yet probed");
-		return -EPROBE_DEFER;
+		err("sensor device is NULL");
+		ret = -ENOMEM;
+		goto p_err;
 	}
 
 	sensor_peri = find_peri_by_act_id(device, ACTUATOR_NAME_DWXXXX);
 	if (!sensor_peri) {
-		err("sensor peri is NULL");
-		ret = -ENOMEM;
-		goto p_err;
+		probe_info("sensor peri is net yet probed");
+		return -EPROBE_DEFER;
 	}
 
 	actuator = &sensor_peri->actuator;
@@ -459,6 +471,7 @@ MODULE_DEVICE_TABLE(of, exynos_fimc_is_dw9714_match);
 
 static const struct i2c_device_id actuator_dw9714_idt[] = {
 	{ ACTUATOR_NAME, 0 },
+	{},
 };
 
 static struct i2c_driver actuator_dw9714_driver = {

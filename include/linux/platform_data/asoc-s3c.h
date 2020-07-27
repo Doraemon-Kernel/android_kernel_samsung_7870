@@ -46,7 +46,8 @@ struct samsung_i2s {
 /* If the Secondary DAI operate as compress DAI */
 #define QUIRK_SEC_DAI_COMPR	(1 << 8)
 #define QUIRK_I2S_MASTER_MODE	(1 << 9)
-
+#define QUIRK_I2S_STR_MODE	(1 << 10)
+#define QUIRK_I2S_DAI_AMP	(1 << 11)
 	u32 quirks;
 	dma_addr_t idma_addr;
 };

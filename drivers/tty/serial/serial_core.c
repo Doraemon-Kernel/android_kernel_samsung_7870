@@ -38,12 +38,10 @@
 #include <asm/irq.h>
 #include <asm/uaccess.h>
 
-#if defined(CONFIG_BT_BCM4339) || defined(CONFIG_BT_BCM4354) || defined(CONFIG_BT_BCM4358) || defined(CONFIG_BT_BCM4359) /* This is just temporary features*/
-#define BT4339_LINE 1
+#if defined(CONFIG_BT_BCM43XX) || defined(CONFIG_BT_QCA9377)
+#define BT4339_LINE 0
 #endif
-#if defined(CONFIG_BCM4359)
-#define WIFI_UART_PORT_LINE 3
-#endif
+
 /*
  * This is used to lock changes in serial line configuration.
  */
@@ -192,20 +190,15 @@ static int uart_port_startup(struct tty_struct *tty, struct uart_state *state,
 		spin_lock_irq(&uport->lock);
 		if (uart_cts_enabled(uport) &&
 		    !(uport->ops->get_mctrl(uport) & TIOCM_CTS)) {
-
-#if defined(CONFIG_BT_BCM4339) || defined(CONFIG_BT_BCM4354) || defined(CONFIG_BT_BCM4358) || defined(CONFIG_BT_BCM4359)
-#if defined(CONFIG_BCM4359)
-			if ((uport->line != BT4339_LINE) && (uport->line != WIFI_UART_PORT_LINE))
+#if defined(CONFIG_BT_BCM43XX) || defined(CONFIG_BT_QCA9377)
+				if (uport->line != BT4339_LINE)
 				uport->hw_stopped = 1;
 #else
-			if (uport->line != BT4339_LINE)
 				uport->hw_stopped = 1;
 #endif
-#endif
-		}
+			}
 		else
 			uport->hw_stopped = 0;
-
 		spin_unlock_irq(&uport->lock);
 	}
 
@@ -1020,7 +1013,7 @@ static int uart_break_ctl(struct tty_struct *tty, int break_state)
 
 	mutex_lock(&port->mutex);
 
-	if (uport->type != PORT_UNKNOWN && uport->ops->break_ctl)
+	if (uport->type != PORT_UNKNOWN)
 		uport->ops->break_ctl(uport, break_state);
 
 	mutex_unlock(&port->mutex);
@@ -1331,14 +1324,12 @@ static void uart_set_termios(struct tty_struct *tty,
 	else if (!(old_termios->c_cflag & CRTSCTS) && (cflag & CRTSCTS)) {
 		spin_lock_irq(&uport->lock);
 		if (!(uport->ops->get_mctrl(uport) & TIOCM_CTS)) {
-#if defined(CONFIG_BT_BCM4339) || defined(CONFIG_BT_BCM4354) || defined(CONFIG_BT_BCM4358) || defined(CONFIG_BT_BCM4359)
-#if defined(CONFIG_BCM4359)
-			if ((uport->line != BT4339_LINE) && (uport->line != WIFI_UART_PORT_LINE))
-#else
+#if defined(CONFIG_BT_BCM43XX) || defined(CONFIG_BT_QCA9377)
 			if (uport->line != BT4339_LINE)
-#endif
-#endif
 				uport->hw_stopped = 1;
+#else
+			uport->hw_stopped = 1;
+#endif
 			uport->ops->stop_tx(uport);
 		}
 		spin_unlock_irq(&uport->lock);
@@ -2640,7 +2631,6 @@ int uart_add_one_port(struct uart_driver *drv, struct uart_port *uport)
 	if (uport->cons && uport->dev)
 		of_console_check(uport->dev->of_node, uport->cons->name, uport->line);
 
-	tty_port_link_device(port, drv->tty_driver, uport->line);
 	uart_configure_port(drv, state, uport);
 
 	num_groups = 2;

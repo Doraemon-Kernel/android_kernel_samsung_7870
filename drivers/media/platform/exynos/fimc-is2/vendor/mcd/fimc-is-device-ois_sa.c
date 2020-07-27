@@ -314,15 +314,6 @@ bool fimc_is_ois_diff_test_impl(struct fimc_is_core *core, int *x_diff, int *y_d
 	}
 }
 
-bool fimc_is_ois_auto_test_impl(struct fimc_is_core *core,
-		            int threshold, bool *x_result, bool *y_result, int *sin_x, int *sin_y);
-
-{
-	bool value = false;
-
-	return value;
-}
-
 bool fimc_is_ois_fw_version(struct fimc_is_core *core)
 {
 	int ret = 0;

@@ -118,7 +118,8 @@ struct fimc_is_subdev * video2subdev(enum fimc_is_subdev_device_type device_type
 		subdev = &ischain->group_vra.leader;
 		break;
 	default:
-		err("[%d] vid %d is NOT found", (ischain ? ischain->instance : sensor->instance), vid);
+		err("[%d] vid %d is NOT found", ((device_type == FIMC_IS_SENSOR_SUBDEV) ?
+				 (ischain ? ischain->instance : 0) : (sensor ? sensor->instance : 0)), vid);
 		break;
 	}
 
@@ -151,6 +152,7 @@ int fimc_is_subdev_open(struct fimc_is_subdev *subdev,
 	void *ctl_data)
 {
 	int ret = 0;
+	struct fimc_is_video *video = GET_VIDEO(vctx);
 	const struct param_control *init_ctl = (const struct param_control *)ctl_data;
 
 	BUG_ON(!subdev);
@@ -162,7 +164,7 @@ int fimc_is_subdev_open(struct fimc_is_subdev *subdev,
 	}
 
 	subdev->vctx = vctx;
-	subdev->vid = (GET_VIDEO(vctx)) ? GET_VIDEO(vctx)->id : 0;
+	subdev->vid = (video) ? video->id : 0;
 	subdev->cid = CAPTURE_NODE_MAX;
 	subdev->input.width = 0;
 	subdev->input.height = 0;
@@ -432,12 +434,6 @@ static int fimc_is_ischain_subdev_start(void *qdevice,
 	BUG_ON(!queue);
 
 	vctx = container_of(queue, struct fimc_is_video_ctx, queue);
-	if (!vctx) {
-		merr("vctx is NULL", device);
-		ret = -EINVAL;
-		goto p_err;
-	}
-
 	subdev = vctx->subdev;
 	if (!subdev) {
 		merr("subdev is NULL", device);
@@ -526,12 +522,6 @@ static int fimc_is_sensor_subdev_stop(void *qdevice,
 	BUG_ON(!queue);
 
 	vctx = container_of(queue, struct fimc_is_video_ctx, queue);
-	if (!vctx) {
-		merr("vctx is NULL", device);
-		ret = -EINVAL;
-		goto p_err;
-	}
-
 	subdev = vctx->subdev;
 	if (!subdev) {
 		merr("subdev is NULL", device);
@@ -582,12 +572,6 @@ static int fimc_is_ischain_subdev_stop(void *qdevice,
 	BUG_ON(!queue);
 
 	vctx = container_of(queue, struct fimc_is_video_ctx, queue);
-	if (!vctx) {
-		merr("vctx is NULL", device);
-		ret = -EINVAL;
-		goto p_err;
-	}
-
 	subdev = vctx->subdev;
 	if (!subdev) {
 		merr("subdev is NULL", device);
@@ -693,12 +677,6 @@ static int fimc_is_sensor_subdev_s_format(void *qdevice,
 	BUG_ON(!queue);
 
 	vctx = container_of(queue, struct fimc_is_video_ctx, queue);
-	if (!vctx) {
-		merr("vctx is NULL", device);
-		ret = -EINVAL;
-		goto p_err;
-	}
-
 	subdev = vctx->subdev;
 	if (!subdev) {
 		merr("subdev is NULL", device);
@@ -728,12 +706,6 @@ static int fimc_is_ischain_subdev_s_format(void *qdevice,
 	BUG_ON(!queue);
 
 	vctx = container_of(queue, struct fimc_is_video_ctx, queue);
-	if (!vctx) {
-		merr("vctx is NULL", device);
-		ret = -EINVAL;
-		goto p_err;
-	}
-
 	subdev = vctx->subdev;
 	if (!subdev) {
 		merr("subdev is NULL", device);
@@ -769,12 +741,6 @@ int fimc_is_sensor_subdev_reqbuf(void *qdevice,
 		goto p_err;
 
 	vctx = container_of(queue, struct fimc_is_video_ctx, queue);
-	if (!vctx) {
-		merr("vctx is NULL", device);
-		ret = -EINVAL;
-		goto p_err;
-	}
-
 	subdev = vctx->subdev;
 	if (!subdev) {
 		merr("subdev is NULL", device);
@@ -810,20 +776,9 @@ int fimc_is_subdev_buffer_queue(struct fimc_is_subdev *subdev,
 	BUG_ON(!GET_SUBDEV_FRAMEMGR(subdev));
 	BUG_ON(index >= framemgr->num_frames);
 
-	/* 1. check frame validation */
 	frame = &framemgr->frames[index];
-	if (!frame) {
-		mserr("frame is null\n", subdev, subdev);
-		ret = EINVAL;
-		goto p_err;
-	}
 
-	if (index >= framemgr->num_frames) {
-		mserr("index(%d) is invalid", subdev, subdev, index);
-		ret = -EINVAL;
-		goto p_err;
-	}
-
+	/* 1. check frame validation */
 	if (unlikely(!test_bit(FRAME_MEM_INIT, &frame->mem_state))) {
 		mserr("frame %d is NOT init", subdev, subdev, index);
 		ret = EINVAL;

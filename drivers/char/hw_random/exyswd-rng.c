@@ -298,7 +298,9 @@ static int exyswd_rng_resume(struct device *dev)
 
 	spin_lock_irqsave(&hwrandom_lock, flag);
 #if defined(CONFIG_EXYRNG_FIPS_COMPLIANCE)
-	exynos_smc(SMC_CMD_RANDOM, HWRNG_RESUME, 0, 0);
+	ret = exynos_smc(SMC_CMD_RANDOM, HWRNG_RESUME, 0, 0);
+	if (ret != HWRNG_RET_OK)
+		printk("[ExyRNG] failed to resume with %d\n", ret);
 #endif
 	if (hwrng_read_flag) {
 		ret = exynos_smc(SMC_CMD_RANDOM, HWRNG_INIT, 0, 0);

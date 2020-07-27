@@ -11,9 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-int update_fmp_hmac(const char *, const char *, unsigned long);
-int collect_fmp_bytes(const char *, const char *, unsigned long,
-                      unsigned long, const char *);
+int update_fmp_hmac(const char *vmlinux_path, const char *hmac_path, unsigned long offset);
+int collect_fmp_bytes(const char *in_file, const char *section_name, unsigned long offset,
+			unsigned long size, const char *out_file);
 
 int main(int argc, char **argv)
 {
@@ -220,3 +220,4 @@ int update_fmp_hmac(const char *vmlinux_path, const char *hmac_path, unsigned lo
 
 	return 0;
 }
+

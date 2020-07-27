@@ -27,8 +27,8 @@
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
-#include <exynos-fimc-is-sensor.h>
 
+#include <exynos-fimc-is-sensor.h>
 #include "fimc-is-hw.h"
 #include "fimc-is-core.h"
 #include "fimc-is-device-sensor.h"
@@ -163,7 +163,7 @@ int sensor_module_6b2_probe(struct platform_device *pdev)
 
 	core = (struct fimc_is_core *)dev_get_drvdata(fimc_is_dev);
 	if (!core) {
-		probe_err("core device is not yet probed");
+		probe_info("core device is not yet probed");
 		return -EPROBE_DEFER;
 	}
 
@@ -190,10 +190,14 @@ int sensor_module_6b2_probe(struct platform_device *pdev)
 	module->subdev = subdev_module;
 	module->device = pdata->id;
 	module->client = NULL;
-	module->active_width = 1920;
-	module->active_height = 1080;
-	module->pixel_width = module->active_width + 16;
-	module->pixel_height = module->active_height + 10;
+	module->active_width = 1920 + 16;
+	module->active_height = 1080 + 10;
+	module->margin_left = 0;
+	module->margin_right = 0;
+	module->margin_top = 0;
+	module->margin_bottom = 0;
+	module->pixel_width = module->active_width;
+	module->pixel_height = module->active_height;
 	module->max_framerate = 30;
 	module->position = pdata->position;
 	module->mode = CSI_MODE_DT_ONLY;

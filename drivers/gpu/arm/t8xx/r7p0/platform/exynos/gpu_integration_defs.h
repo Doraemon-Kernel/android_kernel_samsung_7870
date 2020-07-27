@@ -34,7 +34,9 @@
 #define CTX_NAME_SIZE 32
 
 /* MALI_SEC_SECURE_RENDERING */
-#define SMC_GPU_CRC_REGION_NUM		8
+/* if the smc call is successfully done, ret value will be 2 */
+#define SMC_CALL_SUCCESS  0x2
+#define SMC_CALL_ERROR    0x1
 
 /* MALI_SEC_INTEGRATION */
 #define KBASE_PM_TIME_SHIFT			8

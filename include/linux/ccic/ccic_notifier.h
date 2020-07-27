@@ -21,6 +21,9 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  *
  */
+#if defined(CONFIG_IFPMIC_SUPPORT)
+#include <linux/ifpmic/ccic/ccic_notifier.h>
+#endif
 
 #ifndef __CCIC_NOTIFIER_H__
 #define __CCIC_NOTIFIER_H__
@@ -51,6 +54,7 @@ typedef enum {
 #endif
 	CCIC_NOTIFY_ID_WATER,
 	CCIC_NOTIFY_ID_VCONN,
+	CCIC_NOTIFY_ID_TA,
 	CCIC_NOTIFY_ID_DP_CONNECT,
 	CCIC_NOTIFY_ID_DP_HPD,
 	CCIC_NOTIFY_ID_DP_LINK_CONF,
@@ -190,6 +194,7 @@ extern int ccic_notifier_notify(CC_NOTI_TYPEDEF *, void *, int);
 extern int ccic_notifier_register(struct notifier_block *nb,
 		notifier_fn_t notifier, ccic_notifier_device_t listener);
 extern int ccic_notifier_unregister(struct notifier_block *nb);
+extern int ccic_notifier_init(void);
 
 #define CCIC_NOTI_DEST_NUM	(10)
 #define CCIC_NOTI_ID_NUM	(13)
@@ -200,5 +205,7 @@ extern char CCIC_NOTI_DEST_Print[CCIC_NOTI_DEST_NUM][10];
 extern char CCIC_NOTI_ID_Print[CCIC_NOTI_ID_NUM][20];
 extern char CCIC_NOTI_RID_Print[CCIC_NOTI_RID_NUM][15];
 extern char CCIC_NOTI_USB_STATUS_Print[CCIC_NOTI_USB_STATUS_NUM][20];
+
+extern void ccic_uevent_work(int id, int state);
 
 #endif /* __CCIC_NOTIFIER_H__ */

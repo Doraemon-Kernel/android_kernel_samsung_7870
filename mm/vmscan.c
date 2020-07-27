@@ -53,7 +53,6 @@
 
 #include <linux/swapops.h>
 #include <linux/balloon_compaction.h>
-#include <linux/migrate.h>
 
 #include "internal.h"
 
@@ -140,7 +139,12 @@ struct scan_control {
 /*
  * From 0 .. 100.  Higher means more swappy.
  */
+#if CONFIG_MEMCG_HIGHER_SWAPPINESS
+int vm_swappiness = CONFIG_MEMCG_HIGHER_SWAPPINESS;
+#else
 int vm_swappiness = 60;
+#endif
+
 /*
  * The total number of pages which are beyond the high watermark within all
  * zones.
@@ -1219,53 +1223,6 @@ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
 	return ret;
 }
 
-/* A caller should guarantee that start and end pfns are in the same zone */
-void reclaim_contig_migrate_range(unsigned long start,
-						unsigned long end, bool drain)
-{
-	/* This function is based on __alloc_contig_migrate_range */
-	unsigned long nr_reclaimed;
-	unsigned long pfn = start;
-	struct compact_control cc = {
-		.mode = MIGRATE_SYNC_LIGHT,
-	};
-	unsigned long total_reclaimed = 0;
-
-	cc.nr_freepages = 0;
-	cc.nr_migratepages = 0;
-	cc.zone = page_zone(pfn_to_page(start));
-	INIT_LIST_HEAD(&cc.freepages);
-	INIT_LIST_HEAD(&cc.migratepages);
-
-	if (drain)
-		migrate_prep();
-
-	while (pfn < end) {
-		if (fatal_signal_pending(current)) {
-			pr_warn_once("%s %d got fatal signal\n",
-						__func__, __LINE__);
-			break;
-		}
-
-		if (list_empty(&cc.migratepages)) {
-			cc.nr_migratepages = 0;
-			pfn = isolate_migratepages_range(&cc, pfn, end);
-			if (!pfn)
-				break;
-		}
-
-		nr_reclaimed = reclaim_clean_pages_from_list(cc.zone,
-							&cc.migratepages);
-		cc.nr_migratepages -= nr_reclaimed;
-		total_reclaimed += nr_reclaimed;
-
-		/* Skip pages not reclaimed in the above */
-		if (cc.nr_migratepages)
-			putback_movable_pages(&cc.migratepages);
-	}
-	trace_printk("%lu\n", total_reclaimed << PAGE_SHIFT);
-}
-
 /*
  * Attempt to remove the specified page from its LRU.  Only take this page
  * if it is of the appropriate PageActive status.  Pages which are being
@@ -1461,31 +1418,30 @@ int isolate_lru_page(struct page *page)
 	return ret;
 }
 
-static int __too_many_isolated(struct zone *zone, int file,
-	struct scan_control *sc, int safe)
+/*
+ * A direct reclaimer may isolate SWAP_CLUSTER_MAX pages from the LRU list and
+ * then get resheduled. When there are massive number of tasks doing page
+ * allocation, such sleeping direct reclaimers may keep piling up on each CPU,
+ * the LRU list will go small and be scanned faster than necessary, leading to
+ * unnecessary swapping, thrashing and OOM.
+ */
+static int too_many_isolated(struct zone *zone, int file,
+		struct scan_control *sc)
 {
 	unsigned long inactive, isolated;
 
+	if (current_is_kswapd())
+		return 0;
+
+	if (!global_reclaim(sc))
+		return 0;
+
 	if (file) {
-		if (safe) {
-			inactive = zone_page_state_snapshot(zone,
-					NR_INACTIVE_FILE);
-			isolated = zone_page_state_snapshot(zone,
-					NR_ISOLATED_FILE);
-		} else {
-			inactive = zone_page_state(zone, NR_INACTIVE_FILE);
-			isolated = zone_page_state(zone, NR_ISOLATED_FILE);
-		}
+		inactive = zone_page_state(zone, NR_INACTIVE_FILE);
+		isolated = zone_page_state(zone, NR_ISOLATED_FILE);
 	} else {
-		if (safe) {
-			inactive = zone_page_state_snapshot(zone,
-					NR_INACTIVE_ANON);
-			isolated = zone_page_state_snapshot(zone,
-					NR_ISOLATED_ANON);
-		} else {
-			inactive = zone_page_state(zone, NR_INACTIVE_ANON);
-			isolated = zone_page_state(zone, NR_ISOLATED_ANON);
-		}
+		inactive = zone_page_state(zone, NR_INACTIVE_ANON);
+		isolated = zone_page_state(zone, NR_ISOLATED_ANON);
 	}
 
 	/*
@@ -1497,32 +1453,6 @@ static int __too_many_isolated(struct zone *zone, int file,
 		inactive >>= 3;
 
 	return isolated > inactive;
-}
-
-/*
- * A direct reclaimer may isolate SWAP_CLUSTER_MAX pages from the LRU list and
- * then get resheduled. When there are massive number of tasks doing page
- * allocation, such sleeping direct reclaimers may keep piling up on each CPU,
- * the LRU list will go small and be scanned faster than necessary, leading to
- * unnecessary swapping, thrashing and OOM.
- */
-static int too_many_isolated(struct zone *zone, int file,
-		struct scan_control *sc, int safe)
-{
-	if (current_is_kswapd())
-		return 0;
-
-	if (!global_reclaim(sc))
-		return 0;
-
-	if (unlikely(__too_many_isolated(zone, file, sc, 0))) {
-		if (safe)
-			return __too_many_isolated(zone, file, sc, safe);
-		else
-			return 1;
-	}
-
-	return 0;
 }
 
 static noinline_for_stack void
@@ -1614,20 +1544,17 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	unsigned long nr_immediate = 0;
 	isolate_mode_t isolate_mode = 0;
 	int file = is_file_lru(lru);
-	int safe = 0;
 	struct zone *zone = lruvec_zone(lruvec);
 	struct zone_reclaim_stat *reclaim_stat = &lruvec->reclaim_stat;
 	bool force_reclaim = false;
 	enum ttu_flags ttu = TTU_UNMAP;
 
-	while (unlikely(too_many_isolated(zone, file, sc, safe))) {
+	while (unlikely(too_many_isolated(zone, file, sc))) {
 		congestion_wait(BLK_RW_ASYNC, HZ/10);
 
 		/* We are about to die and free our memory. Return now. */
 		if (fatal_signal_pending(current))
 			return SWAP_CLUSTER_MAX;
-
-		safe = 1;
 	}
 
 	lru_add_drain();
@@ -2020,41 +1947,11 @@ static bool memory_boosting_disabled = false;
 #define MEM_BOOST_MAX_TIME (5 * HZ) /* 5 sec */
 
 #ifdef CONFIG_SYSFS
-enum rbin_alloc_policy {
-	RBIN_ALLOW = 0,
-	RBIN_DENY = 1,
-};
-
-#ifdef CONFIG_RBIN
-static void set_rbin_alloc_policy(enum rbin_alloc_policy val)
-{
-	struct zone *zone;
-
-	if (val == RBIN_ALLOW)
-		wake_ion_rbin_heap_shrink();
-	for_each_populated_zone(zone) {
-		atomic_set(&zone->rbin_alloc, val);
-		if (val)
-			wakeup_kswapd(zone, 0, gfp_zone(GFP_KERNEL));
-	}
-}
-#else
-static inline void set_rbin_alloc_policy(enum rbin_alloc_policy val) {}
-#endif
-
-void test_and_set_mem_boost_timeout(void)
-{
-	if ((mem_boost_mode != NO_BOOST) &&
-	    time_after(jiffies, last_mode_change + MEM_BOOST_MAX_TIME)) {
-		mem_boost_mode = NO_BOOST;
-		set_rbin_alloc_policy(RBIN_ALLOW);
-	}
-}
-
 static ssize_t mem_boost_mode_show(struct kobject *kobj,
 				    struct kobj_attribute *attr, char *buf)
 {
-	test_and_set_mem_boost_timeout();
+	if (time_after(jiffies, last_mode_change + MEM_BOOST_MAX_TIME))
+		mem_boost_mode = NO_BOOST;
 	return sprintf(buf, "%d\n", mem_boost_mode);
 }
 
@@ -2070,14 +1967,32 @@ static ssize_t mem_boost_mode_store(struct kobject *kobj,
 		return -EINVAL;
 
 	mem_boost_mode = mode;
-	trace_printk("memboost start\n");
 	last_mode_change = jiffies;
-	if (mem_boost_mode == BOOST_HIGH) {
-#ifdef CONFIG_ION_RBIN_HEAP
-		wake_ion_rbin_heap_prereclaim();
-#endif
-		set_rbin_alloc_policy(RBIN_DENY);
-	}
+
+	return count;
+}
+
+static ssize_t am_mem_boost_mode_show(struct kobject *kobj,
+				    struct kobj_attribute *attr, char *buf)
+{
+	if (time_after(jiffies, last_mode_change + MEM_BOOST_MAX_TIME))
+		mem_boost_mode = NO_BOOST;
+	return sprintf(buf, "%d\n", mem_boost_mode);
+}
+
+static ssize_t am_mem_boost_mode_store(struct kobject *kobj,
+				     struct kobj_attribute *attr,
+				     const char *buf, size_t count)
+{
+	int mode;
+	int err;
+
+	err = kstrtoint(buf, 10, &mode);
+	if (err || mode > BOOST_HIGH || mode < NO_BOOST)
+		return -EINVAL;
+
+	mem_boost_mode = mode;
+	last_mode_change = jiffies;
 
 	return count;
 }
@@ -2111,10 +2026,12 @@ static ssize_t disable_mem_boost_store(struct kobject *kobj,
 	static struct kobj_attribute _name##_attr = \
 		__ATTR(_name, 0644, _name##_show, _name##_store)
 MEM_BOOST_ATTR(mem_boost_mode);
+MEM_BOOST_ATTR(am_mem_boost_mode);
 MEM_BOOST_ATTR(disable_mem_boost);
 
 static struct attribute *mem_boost_attrs[] = {
 	&mem_boost_mode_attr.attr,
+	&am_mem_boost_mode_attr.attr,
 	&disable_mem_boost_attr.attr,
 	NULL,
 };
@@ -2134,7 +2051,8 @@ static inline bool need_memory_boosting(struct zone *zone)
 {
 	bool ret;
 
-	test_and_set_mem_boost_timeout();
+	if (time_after(jiffies, last_mode_change + MEM_BOOST_MAX_TIME))
+		mem_boost_mode = NO_BOOST;
 
 	if (memory_boosting_disabled)
 		return false;
@@ -2254,7 +2172,8 @@ static void get_scan_count(struct lruvec *lruvec, int swappiness,
 	 * There is enough inactive page cache, do not reclaim
 	 * anything from the anonymous working set right now.
 	 */
-	if (!inactive_file_is_low(lruvec)) {
+	if (!IS_ENABLED(CONFIG_BALANCE_ANON_FILE_RECLAIM) &&
+			!inactive_file_is_low(lruvec)) {
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
@@ -3015,6 +2934,7 @@ unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 				gfp_mask);
 
 	nr_reclaimed = do_try_to_free_pages(zonelist, &sc);
+
 	trace_mm_vmscan_direct_reclaim_end(nr_reclaimed);
 
 	return nr_reclaimed;
@@ -3120,16 +3040,11 @@ static void age_active_anon(struct zone *zone, struct scan_control *sc)
 	} while (memcg);
 }
 
-#define MEM_BOOST_WMARK_SCALE_FACTOR 1
 static bool zone_balanced(struct zone *zone, int order,
 			  unsigned long balance_gap, int classzone_idx)
 {
-	unsigned long mark = high_wmark_pages(zone);
-
-	if (current_is_kswapd() && need_memory_boosting(zone))
-		mark *= MEM_BOOST_WMARK_SCALE_FACTOR;
-
-	if (!zone_watermark_ok_safe(zone, order, mark + balance_gap, classzone_idx, 0))
+	if (!zone_watermark_ok_safe(zone, order, high_wmark_pages(zone) +
+				    balance_gap, classzone_idx, 0))
 		return false;
 
 	if (IS_ENABLED(CONFIG_COMPACTION) && order &&
@@ -3712,14 +3627,9 @@ void wakeup_kswapd(struct zone *zone, int order, enum zone_type classzone_idx)
 	}
 	if (!waitqueue_active(&pgdat->kswapd_wait))
 		return;
-
-	if (need_memory_boosting(zone))
-		goto wakeup;
-
 	if (zone_balanced(zone, order, 0, 0))
 		return;
 
-wakeup:
 	trace_mm_vmscan_wakeup_kswapd(pgdat->node_id, zone_idx(zone), order);
 	wake_up_interruptible(&pgdat->kswapd_wait);
 }
@@ -3743,8 +3653,8 @@ unsigned long shrink_all_memory(unsigned long nr_to_reclaim)
 		.may_writepage = 1,
 		.may_unmap = 1,
 		.may_swap = 1,
-		.hibernation_mode = 1,
 		.swappiness = vm_swappiness,
+		.hibernation_mode = 1,
 	};
 	struct zonelist *zonelist = node_zonelist(numa_node_id(), sc.gfp_mask);
 	struct task_struct *p = current;

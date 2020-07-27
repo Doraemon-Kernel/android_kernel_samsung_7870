@@ -308,4 +308,3 @@ static inline void circ_write(u8 *dst, u8 *src, unsigned int qsize,
 #endif
 
 #endif
-

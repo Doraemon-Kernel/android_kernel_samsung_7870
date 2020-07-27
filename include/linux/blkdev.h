@@ -40,7 +40,7 @@ struct blk_flush_queue;
 
 #define BLKDEV_MIN_RQ	4
 #ifdef CONFIG_LARGE_DIRTY_BUFFER
-#define BLKDEV_MAX_RQ	256
+#define BLKDEV_MAX_RQ  256
 #else
 #define BLKDEV_MAX_RQ  128     /* Default maximum */
 #endif
@@ -218,11 +218,6 @@ struct request {
 	int			lat_hist_enabled;
 };
 
-static inline bool blk_rq_is_passthrough(struct request *rq)
-{
-	return rq->cmd_type != REQ_TYPE_FS;
-}
-
 static inline unsigned short req_get_ioprio(struct request *req)
 {
 	return req->ioprio;
@@ -298,7 +293,6 @@ struct queue_limits {
 	unsigned int		max_sectors;
 	unsigned int		max_segment_size;
 	unsigned int		physical_block_size;
-	unsigned int		logical_block_size;
 	unsigned int		alignment_offset;
 	unsigned int		io_min;
 	unsigned int		io_opt;
@@ -307,6 +301,7 @@ struct queue_limits {
 	unsigned int		discard_granularity;
 	unsigned int		discard_alignment;
 
+	unsigned short		logical_block_size;
 	unsigned short		max_segments;
 	unsigned short		max_integrity_segments;
 
@@ -524,9 +519,6 @@ struct request_queue {
 #define QUEUE_FLAG_INIT_DONE   20	/* queue is initialized */
 #define QUEUE_FLAG_NO_SG_MERGE 21	/* don't attempt to merge SG segments*/
 #define QUEUE_FLAG_SG_GAPS     22	/* queue doesn't support SG gaps */
-#ifdef CONFIG_JOURNAL_DATA_TAG
-#define QUEUE_FLAG_JOURNAL_TAG     31      /* supports JOURNAL_DATA_TAG */
-#endif
 
 #define QUEUE_FLAG_DEFAULT	((1 << QUEUE_FLAG_IO_STAT) |		\
 				 (1 << QUEUE_FLAG_STACKABLE)	|	\
@@ -615,18 +607,13 @@ static inline void queue_flag_clear(unsigned int flag, struct request_queue *q)
 #define blk_queue_secdiscard(q)	(blk_queue_discard(q) && \
 	test_bit(QUEUE_FLAG_SECDISCARD, &(q)->queue_flags))
 
-#ifdef CONFIG_JOURNAL_DATA_TAG
-#define blk_queue_journal_tag(q)   test_bit(QUEUE_FLAG_JOURNAL_TAG, &(q)->queue_flags)
-#endif
-
 #define blk_noretry_request(rq) \
 	((rq)->cmd_flags & (REQ_FAILFAST_DEV|REQ_FAILFAST_TRANSPORT| \
 			     REQ_FAILFAST_DRIVER))
 
-static inline bool blk_account_rq(struct request *rq)
-{
-	return (rq->cmd_flags & REQ_STARTED) && !blk_rq_is_passthrough(rq);
-}
+#define blk_account_rq(rq) \
+	(((rq)->cmd_flags & REQ_STARTED) && \
+	 ((rq)->cmd_type == REQ_TYPE_FS))
 
 #define blk_pm_request(rq)	\
 	((rq)->cmd_type == REQ_TYPE_PM_SUSPEND || \
@@ -691,7 +678,7 @@ static inline void blk_clear_rl_full(struct request_list *rl, bool sync)
 
 static inline bool rq_mergeable(struct request *rq)
 {
-	if (blk_rq_is_passthrough(rq))
+	if (rq->cmd_type != REQ_TYPE_FS)
 		return false;
 
 	if (rq->cmd_flags & REQ_NOMERGE_FLAGS)
@@ -807,7 +794,6 @@ static inline void rq_flush_dcache_pages(struct request *rq)
 }
 #endif
 
-extern void __blk_drain_queue(struct request_queue *q, bool drain_all);
 extern int blk_register_queue(struct gendisk *disk);
 extern void blk_unregister_queue(struct gendisk *disk);
 extern void generic_make_request(struct bio *bio);
@@ -1031,7 +1017,7 @@ extern void blk_queue_max_discard_sectors(struct request_queue *q,
 		unsigned int max_discard_sectors);
 extern void blk_queue_max_write_same_sectors(struct request_queue *q,
 		unsigned int max_write_same_sectors);
-extern void blk_queue_logical_block_size(struct request_queue *, unsigned int);
+extern void blk_queue_logical_block_size(struct request_queue *, unsigned short);
 extern void blk_queue_physical_block_size(struct request_queue *, unsigned int);
 extern void blk_queue_alignment_offset(struct request_queue *q,
 				       unsigned int alignment);
@@ -1180,7 +1166,7 @@ static inline struct request *blk_map_queue_find_tag(struct blk_queue_tag *bqt,
 }
 
 #define BLKDEV_DISCARD_SECURE  0x01    /* secure discard */
-#define BLKDEV_DISCARD_SYNC    0x02    /* sync discard   */
+#define BLKDEV_DISCARD_SYNC    0x02    /* handle discard command as sync req */
 
 extern int blkdev_issue_flush(struct block_device *, gfp_t, sector_t *);
 extern int __blkdev_issue_discard(struct block_device *bdev, sector_t sector,
@@ -1250,7 +1236,7 @@ static inline unsigned int queue_max_segment_size(struct request_queue *q)
 	return q->limits.max_segment_size;
 }
 
-static inline unsigned queue_logical_block_size(struct request_queue *q)
+static inline unsigned short queue_logical_block_size(struct request_queue *q)
 {
 	int retval = 512;
 
@@ -1260,7 +1246,7 @@ static inline unsigned queue_logical_block_size(struct request_queue *q)
 	return retval;
 }
 
-static inline unsigned int bdev_logical_block_size(struct block_device *bdev)
+static inline unsigned short bdev_logical_block_size(struct block_device *bdev)
 {
 	return queue_logical_block_size(bdev_get_queue(bdev));
 }
@@ -1752,5 +1738,12 @@ static inline int blkdev_issue_flush(struct block_device *bdev, gfp_t gfp_mask,
 }
 
 #endif /* CONFIG_BLOCK */
+
+#if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
+#define SIO_PATCH_VERSION(name, major, minor, description)	\
+	static const char *sio_##name##_##major##_##minor __attribute__ ((used, section("sio_patches"))) = (#name " " #major "." #minor " " description)
+#else
+#define SIO_PATCH_VERSION(name, major, minor, description)
+#endif
 
 #endif

@@ -22,6 +22,7 @@
 #include <asm/compat.h>
 #include <asm/page.h>
 #include <asm/dma-contiguous.h>
+#include <linux/cma.h>
 
 #include <linux/memblock.h>
 #include <linux/err.h>
@@ -41,9 +42,6 @@ struct cma {
 	unsigned long	*bitmap;
 	unsigned long	carved_out_count;
 	bool isolated;
-#ifdef CONFIG_RBIN
-	bool is_rbin;
-#endif
 };
 
 struct cma *dma_contiguous_default_area;
@@ -220,27 +218,16 @@ void __init dma_contiguous_reserve(phys_addr_t limit)
 
 		__dma_contiguous_reserve_area(selected_size, 0, limit,
 					    &dma_contiguous_default_area);
+		if (dma_contiguous_default_area) {
+			record_memsize_reserved("default_CMA",
+				cma_get_base(dma_contiguous_default_area),
+				cma_get_size(dma_contiguous_default_area),
+				false, true);
+		}
 	}
 };
 
 static DEFINE_MUTEX(cma_mutex);
-
-#ifdef CONFIG_RBIN
-void dev_set_cma_rbin(struct cma *cma)
-{
-	cma->is_rbin = true;
-}
-
-unsigned long dev_get_cma_base_pfn(struct cma *cma)
-{
-	return cma->base_pfn;
-}
-
-unsigned long dev_get_cma_count(struct cma *cma)
-{
-	return cma->count;
-}
-#endif
 
 #ifndef CMA_NO_MIGRATION
 static int __init cma_activate_area(struct cma *cma)
@@ -249,11 +236,6 @@ static int __init cma_activate_area(struct cma *cma)
 	unsigned long base_pfn = cma->base_pfn, pfn = base_pfn;
 	unsigned i = cma->count >> pageblock_order;
 	struct zone *zone;
-#ifdef CONFIG_RBIN
-	bool is_rbin = cma->is_rbin;
-#else
-	bool is_rbin = false;
-#endif
 
 	cma->bitmap = kzalloc(bitmap_size, GFP_KERNEL);
 
@@ -271,7 +253,7 @@ static int __init cma_activate_area(struct cma *cma)
 			if (page_zone(pfn_to_page(pfn)) != zone)
 				return -EINVAL;
 		}
-		init_cma_reserved_pageblock(pfn_to_page(base_pfn), is_rbin);
+		init_cma_reserved_pageblock(pfn_to_page(base_pfn));
 	} while (--i);
 	return 0;
 }
@@ -368,9 +350,7 @@ struct page *dma_alloc_from_contiguous(struct device *dev, size_t count,
 	struct cma *cma = dev_get_cma_area(dev);
 	struct page *page = NULL;
 	int ret;
-#ifdef CONFIG_RBIN
-	bool is_rbin = cma ? cma->is_rbin : false;
-#endif
+
 	if (!cma || !cma->count)
 		return NULL;
 
@@ -394,11 +374,6 @@ struct page *dma_alloc_from_contiguous(struct device *dev, size_t count,
 			break;
 
 		pfn = cma->base_pfn + pageno;
-#ifdef CONFIG_RBIN
-		if (is_rbin)
-			ret = alloc_contig_range_fast(pfn, pfn + count, MIGRATE_RBIN);
-		else
-#endif
 		ret = cma->isolated ?
 			0 : alloc_contig_range(pfn, pfn + count, MIGRATE_CMA);
 		if (ret == 0) {

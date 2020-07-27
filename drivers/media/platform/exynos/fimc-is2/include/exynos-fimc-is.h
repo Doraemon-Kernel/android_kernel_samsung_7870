@@ -31,7 +31,6 @@ enum FIMC_IS_DVFS_QOS_TYPE {
 	FIMC_IS_DVFS_I2C,
 	FIMC_IS_DVFS_CAM,
 	FIMC_IS_DVFS_DISP,
-	FIMC_IS_DVFS_HPG,
 	FIMC_IS_DVFS_END,
 };
 
@@ -124,6 +123,8 @@ struct exynos_platform_fimc_is {
 
 	/* For host clock gating */
 	struct exynos_fimc_is_clk_gate_info *gate_info;
+	u32 rear_sensor_id;
+	u32 front_sensor_id;
 };
 
 extern struct device *fimc_is_dev;

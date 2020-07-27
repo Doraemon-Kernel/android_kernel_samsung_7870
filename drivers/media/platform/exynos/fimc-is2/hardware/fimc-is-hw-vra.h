@@ -31,12 +31,14 @@ struct fimc_is_hw_vra_setfile{
     u32 tracking_smoothness;
     u32 lock_frame_number;
     u32 front_orientation;
-    u32 use_sensor_orientation;    // Not used
+    u32 use_sensor_orientation;    /* Not used */
 };
 
 struct fimc_is_hw_vra {
-	struct fimc_is_lib_vra lib_vra;
-	struct fimc_is_hw_vra_setfile setfile;
+	struct fimc_is_lib_vra		lib_vra;
+	struct fimc_is_hw_vra_setfile	setfile;
+	u32				orientation;
+	atomic_t			ch1_count;
 };
 
 int fimc_is_hw_vra_probe(struct fimc_is_hw_ip *hw_ip, struct fimc_is_interface *itf,
@@ -49,8 +51,10 @@ int fimc_is_hw_vra_enable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_ma
 int fimc_is_hw_vra_disable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_map);
 int fimc_is_hw_vra_shot(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame,
 	ulong hw_map);
-int fimc_is_hw_vra_set_param(struct fimc_is_hw_ip *hw_ip, struct is_region *region,
-	u32 lindex, u32 hindex, u32 instance, ulong hw_map);
+int fimc_is_hw_vra_set_param(struct fimc_is_hw_ip *hw_ip,
+	struct is_region *region, u32 lindex, u32 hindex, u32 instance, ulong hw_map);
+int fimc_is_hw_vra_update_param(struct fimc_is_hw_ip *hw_ip,
+	struct vra_param *param, u32 lindex, u32 hindex, u32 instance, u32 fcount);
 int fimc_is_hw_vra_frame_ndone(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame,
 	u32 instance, bool late_flag);
 void fimc_is_hw_vra_reset(struct fimc_is_hw_ip *hw_ip);
@@ -61,6 +65,5 @@ int fimc_is_hw_vra_apply_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 int fimc_is_hw_vra_delete_setfile(struct fimc_is_hw_ip *hw_ip, u32 instance,
 	ulong hw_map);
 int fimc_is_hw_vra_get_meta(struct fimc_is_hw_ip *hw_ip,
-		struct fimc_is_frame *frame, unsigned long hw_map);
-
+	struct fimc_is_frame *frame, unsigned long hw_map);
 #endif

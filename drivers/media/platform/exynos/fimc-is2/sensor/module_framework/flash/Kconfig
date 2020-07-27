@@ -19,3 +19,11 @@ config CAMERA_FLASH_RT5033_OBJ
         default n
         help
           Use to build RT5033 driver.
+
+config CAMERA_FLASH_GPIO_OBJ
+        bool "Use GPIO"
+	depends on USE_DIRECT_IS_CONTROL
+	depends on CAMERA_FLASH_SELECT
+        default n
+        help
+          Use to build GPIO driver.

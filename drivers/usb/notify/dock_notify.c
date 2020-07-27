@@ -382,7 +382,7 @@ static int dev_notify(struct notifier_block *self,
 		break;
 	case USB_DEVICE_REMOVE:
 		call_battery_notify(dev, 0);
-		check_device_speed(dev, 0);		
+		check_device_speed(dev, 0);
 		break;
 	}
 	return NOTIFY_OK;

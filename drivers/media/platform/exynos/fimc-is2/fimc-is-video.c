@@ -45,6 +45,7 @@
 #include "fimc-is-regs.h"
 #include "fimc-is-err.h"
 #include "fimc-is-debug.h"
+#include "fimc-is-mem.h"
 #include "fimc-is-video.h"
 
 #define SPARE_PLANE 1
@@ -195,17 +196,7 @@ struct fimc_is_fmt fimc_is_formats[] = {
 		.hw_bitwidth	= DMA_OUTPUT_BIT_WIDTH_8BIT,
 		.hw_plane	= 3,
 	}, {
-		.name		= "BAYER 8 bit(GRBG)",
-		.pixelformat	= V4L2_PIX_FMT_SGRBG8,
-		.num_planes	= 1 + SPARE_PLANE,
-		.bitwidth	= 8,
-		.bitsperpixel	= { 8 },
-		.hw_format	= DMA_OUTPUT_FORMAT_BAYER,
-		.hw_order	= DMA_OUTPUT_ORDER_GB_BG,
-		.hw_bitwidth	= DMA_OUTPUT_BIT_WIDTH_8BIT,
-		.hw_plane	= 1,
-	}, {
-		.name		= "BAYER 8 bit(BA81)",
+		.name		= "BAYER 8 bit",
 		.pixelformat	= V4L2_PIX_FMT_SBGGR8,
 		.num_planes	= 1 + SPARE_PLANE,
 		.bitwidth	= 8,
@@ -350,11 +341,6 @@ void fimc_is_set_plane_size(struct fimc_is_frame_cfg *frame, unsigned int sizes[
 		sizes[2] = width[2] * frame->height / 2;
 		sizes[3] = SPARE_SIZE;
 		break;
-	case V4L2_PIX_FMT_SGRBG8:
-		dbg("V4L2_PIX_FMT_SGRBG8(w:%d)(h:%d)\n", frame->width, frame->height);
-		sizes[0] = frame->width * frame->height;
-		sizes[1] = SPARE_SIZE;
-		break;
 	case V4L2_PIX_FMT_SBGGR8:
 		dbg("V4L2_PIX_FMT_SBGGR8(w:%d)(h:%d)\n", frame->width, frame->height);
 		sizes[0] = frame->width * frame->height;
@@ -459,8 +445,9 @@ static int queue_init(void *priv, struct vb2_queue *vbq,
 	vbq->type		= type;
 	vbq->io_modes		= VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
 	vbq->drv_priv		= vctx;
+	vbq->buf_struct_size = sizeof(struct fimc_is_vb2_buf);
 	vbq->ops		= vctx->vb2_ops;
-	vbq->mem_ops		= vctx->mem_ops;
+	vbq->mem_ops		= vctx->vb2_mem_ops;
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,18,0))
 	vbq->timestamp_flags	= V4L2_BUF_FLAG_TIMESTAMP_COPY;
 #elif (LINUX_VERSION_CODE < KERNEL_VERSION(3,18,0)) && (LINUX_VERSION_CODE >= KERNEL_VERSION(3,9,0))
@@ -652,7 +639,7 @@ int fimc_is_queue_buffer_queue(struct fimc_is_queue *queue,
 	struct fimc_is_video_ctx *vctx;
 	struct fimc_is_framemgr *framemgr;
 	struct fimc_is_frame *frame;
-	const struct fimc_is_vb2 *vb2;
+	struct fimc_is_vb2_buf *vbuf = vb_to_fimc_is_vb2_buf(vb);
 
 	index = vb->v4l2_buf.index;
 	framemgr = &queue->framemgr;
@@ -660,14 +647,13 @@ int fimc_is_queue_buffer_queue(struct fimc_is_queue *queue,
 	vctx = container_of(queue, struct fimc_is_video_ctx, queue);
 	video = GET_VIDEO(vctx);
 	BUG_ON(!video);
-	vb2 = video->vb2;
 
 	/* plane address is updated for checking everytime */
 	for (i = 0; i < vb->num_planes; i++) {
-		queue->buf_box[index][i] = vb2->plane_cookie(vb, i);
-		queue->buf_dva[index][i] = vb2->plane_dvaddr(queue->buf_box[index][i], i);
+		queue->buf_box[index][i] = vbuf->ops->plane_cookie(vbuf, i);
+		queue->buf_dva[index][i] = vbuf->ops->plane_dvaddr(vbuf, i);
 #ifdef DBG_IMAGE_KMAPPING
-		queue->buf_kva[index][i] = vb2->plane_kvaddr(vb, i);
+		queue->buf_kva[index][i] = vbuf->ops->plane_kvaddr(vbuf, i);
 #endif
 	}
 
@@ -722,7 +708,7 @@ set_info:
 		ext_size = sizeof(struct camera2_shot_ext) - sizeof(struct camera2_shot);
 
 		/* Create Kvaddr for Metadata */
-		queue->buf_kva[index][spare] = vb2->plane_kvaddr(vb, spare);
+		queue->buf_kva[index][spare] = vbuf->ops->plane_kvaddr(vbuf, spare);
 		if (!queue->buf_kva[index][spare]) {
 			mverr("plane_kvaddr is fail(%08X)", vctx, video, framemgr->id);
 			ret = -EINVAL;
@@ -740,7 +726,7 @@ set_info:
 #endif
 	} else {
 		/* Create Kvaddr for frame sync */
-		queue->buf_kva[index][spare] = vb2->plane_kvaddr(vb, spare);
+		queue->buf_kva[index][spare] = vbuf->ops->plane_kvaddr(vbuf, spare);
 		if (!queue->buf_kva[index][spare]) {
 			mverr("plane_kvaddr is fail(%08X)", vctx, video, framemgr->id);
 			ret = -EINVAL;
@@ -764,6 +750,22 @@ set_info:
 exit:
 	queue->buf_que++;
 	return ret;
+}
+
+int fimc_is_buffer_init(struct vb2_buffer *vb)
+{
+	struct fimc_is_vb2_buf *vbuf = vb_to_fimc_is_vb2_buf(vb);
+	struct fimc_is_video_ctx *vctx = vb->vb2_queue->drv_priv;
+	unsigned int plane;
+
+	vbuf->ops = vctx->fimc_is_vb2_buf_ops;
+
+	for (plane = 0; plane < vb->num_planes; ++plane) {
+		vbuf->kva[plane] = vbuf->ops->plane_kvaddr(vbuf, plane);
+		vbuf->dva[plane] = vbuf->ops->plane_dvaddr(vbuf, plane);
+	}
+
+	return 0;
 }
 
 int fimc_is_queue_prepare(struct vb2_buffer *vb)
@@ -896,8 +898,9 @@ int fimc_is_video_probe(struct fimc_is_video *video,
 	video->try_smp		= false;
 	snprintf(video->vd.name, sizeof(video->vd.name), "%s", video_name);
 	video->id		= video_number;
-	video->vb2		= mem->vb2;
-	video->alloc_ctx	= mem->alloc_ctx;
+	video->vb2_mem_ops	= mem->vb2_mem_ops;
+	video->fimc_is_vb2_buf_ops = mem->fimc_is_vb2_buf_ops;
+	video->alloc_ctx	= mem->default_ctx;
 	video->type		= (vfl_dir == VFL_DIR_RX) ? FIMC_IS_VIDEO_TYPE_CAPTURE : FIMC_IS_VIDEO_TYPE_LEADER;
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0))
 	video->vd.vfl_dir	= vfl_dir;
@@ -934,7 +937,7 @@ int fimc_is_video_open(struct fimc_is_video_ctx *vctx,
 
 	BUG_ON(!vctx);
 	BUG_ON(!video);
-	BUG_ON(!video->vb2);
+	BUG_ON(!video->vb2_mem_ops);
 	BUG_ON(!vb2_ops);
 
 	if (!(vctx->state & BIT(FIMC_IS_VIDEO_CLOSE))) {
@@ -950,7 +953,8 @@ int fimc_is_video_open(struct fimc_is_video_ctx *vctx,
 	vctx->subdev		= NULL;
 	vctx->video		= video;
 	vctx->vb2_ops		= vb2_ops;
-	vctx->mem_ops		= video->vb2->ops;
+	vctx->vb2_mem_ops	= video->vb2_mem_ops;
+	vctx->fimc_is_vb2_buf_ops = video->fimc_is_vb2_buf_ops;
 	vctx->vops.qbuf		= fimc_is_video_qbuf;
 	vctx->vops.dqbuf	= fimc_is_video_dqbuf;
 	vctx->vops.done 	= fimc_is_video_buffer_done;
@@ -1147,8 +1151,6 @@ int fimc_is_video_querybuf(struct file *file,
 {
 	int ret = 0;
 	struct fimc_is_queue *queue;
-
-	BUG_ON(!vctx);
 
 	queue = GET_QUEUE(vctx);
 
@@ -1347,7 +1349,8 @@ int fimc_is_video_prepare(struct file *file,
 		memcpy(&pipe->buf[PIPE_SLOT_DST][index], buf, sizeof(struct v4l2_buffer));
 		memcpy(pipe->planes[PIPE_SLOT_DST][index], buf->m.planes, sizeof(struct v4l2_plane) * buf->length);
 		pipe->buf[PIPE_SLOT_DST][index].m.planes = (struct v4l2_plane *)pipe->planes[PIPE_SLOT_DST][index];
-	} else if ((pipe->vctx[PIPE_SLOT_JUNCTION]) && (pipe->vctx[PIPE_SLOT_JUNCTION]->video->id == video->id)) {
+	} else if ((pipe->dst) && (pipe->vctx[PIPE_SLOT_JUNCTION]) &&
+			(pipe->vctx[PIPE_SLOT_JUNCTION]->video->id == video->id)) {
 		/* Junction */
 		if ((pipe->dst) && test_bit(FIMC_IS_GROUP_PIPE_INPUT, &pipe->dst->state)) {
 			memcpy(&pipe->buf[PIPE_SLOT_JUNCTION][index], buf, sizeof(struct v4l2_buffer));

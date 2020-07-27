@@ -2,7 +2,7 @@
  * Copyright (c) 2015 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
  *
- * EXYNOS - MP CPU frequency scaling support for EXYNOS Big.Little series
+ * EXYNOS - CPU frequency scaling support
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -34,67 +34,43 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/apm-exynos.h>
+#ifdef CONFIG_SW_SELF_DISCHARGING
+#include <linux/cpuidle.h>
+#endif
 
 #include <asm/smp_plat.h>
 #include <asm/cputype.h>
-
-#if defined(CONFIG_SEC_PM) && defined(CONFIG_MUIC_NOTIFIER)
-#include <linux/muic/muic.h>
-#include <linux/muic/muic_notifier.h>
-#endif
 
 #include <soc/samsung/cpufreq.h>
 #include <soc/samsung/exynos-powermode.h>
 #include <soc/samsung/asv-exynos.h>
 #include <soc/samsung/tmu.h>
 #include <soc/samsung/ect_parser.h>
-#include <soc/samsung/exynos-pmu.h>
 
-#define POWER_COEFF_15P		68 /* percore param */
-#define POWER_COEFF_7P		10 /* percore  param */
+#ifdef CONFIG_SEC_EXT
+#include <linux/sec_ext.h>
+#endif
 
 #define VOLT_RANGE_STEP		25000
 #define CLUSTER_ID(cl)		(cl ? ID_CL1 : ID_CL0)
 
-#define LIMIT_FREQ_DIVIDER	4
-
-#ifdef CONFIG_SMP
-struct lpj_info {
-	unsigned long   ref;
-	unsigned int    freq;
-};
-
-static struct lpj_info global_lpj_ref;
-#endif
-
-/* For switcher */
-static unsigned int freq_min[CL_END] __read_mostly;	/* Minimum (Big/Little) clock frequency */
-static unsigned int freq_max[CL_END] __read_mostly;	/* Maximum (Big/Little) clock frequency */
+#define FREQ_OSCCLK			26000
 
 static struct exynos_dvfs_info *exynos_info[CL_END];
-static unsigned int volt_offset;
 static struct cpufreq_freqs *freqs[CL_END];
+
+static unsigned int freq_min[CL_END] __read_mostly;	/* Minimum (Big/Little) clock frequency */
+static unsigned int freq_max[CL_END] __read_mostly;	/* Maximum (Big/Little) clock frequency */
 
 static DEFINE_MUTEX(cpufreq_lock);
 static DEFINE_MUTEX(cpufreq_scale_lock);
 
-bool exynos_cpufreq_init_done;
-static bool suspend_prepared = false;
-#ifdef CONFIG_PM
-#ifdef CONFIG_SCHED_HMP
-static bool hmp_boosted = false;
-#endif
-static bool cluster1_hotplugged = false;
-#endif
-
-#ifdef CONFIG_SW_SELF_DISCHARGING
-static int self_discharging;
-#endif
+unsigned int g_clamp_cpufreqs[CL_END];
 
 /* Include CPU mask of each cluster */
-cluster_type exynos_boot_cluster;
-static cluster_type boot_cluster;
 static struct cpumask cluster_cpus[CL_END];
+
+static const char *regulator_name[CL_END];
 
 DEFINE_PER_CPU(cluster_type, cpu_cur_cluster);
 
@@ -109,167 +85,20 @@ static struct pm_qos_request core_max_qos_real[CL_END];
 static struct pm_qos_request exynos_mif_qos[CL_END];
 static struct pm_qos_request ipa_max_qos[CL_END];
 static struct pm_qos_request reboot_max_qos[CL_END];
-#if defined(CONFIG_SEC_PM) && defined(CONFIG_MUIC_NOTIFIER)
-static struct pm_qos_request jig_boot_max_qos[CL_END];
-#endif
+static bool need_sync;
 
 static int qos_max_class[CL_END] = {PM_QOS_CLUSTER0_FREQ_MAX, PM_QOS_CLUSTER1_FREQ_MAX};
 static int qos_min_class[CL_END] = {PM_QOS_CLUSTER0_FREQ_MIN, PM_QOS_CLUSTER1_FREQ_MIN};
-//static int qos_max_default_value[CL_END] = {PM_QOS_CLUSTER0_FREQ_MAX_DEFAULT_VALUE, PM_QOS_CLUSTER1_FREQ_MAX_DEFAULT_VALUE};
-static int qos_min_default_value[CL_END] = {PM_QOS_CLUSTER0_FREQ_MIN_DEFAULT_VALUE, PM_QOS_CLUSTER1_FREQ_MIN_DEFAULT_VALUE};
+static int qos_min_default_value[CL_END] =
+	{PM_QOS_CLUSTER0_FREQ_MIN_DEFAULT_VALUE, PM_QOS_CLUSTER1_FREQ_MIN_DEFAULT_VALUE};
 
-/* For limit number of online cpus through cpuhotplug */
-struct pm_qos_request cpufreq_cpu_hotplug_max_request;
-
-/*
- * CPUFREQ init notifier
- */
-static BLOCKING_NOTIFIER_HEAD(exynos_cpufreq_init_notifier_list);
-
-int exynos_cpufreq_init_register_notifier(struct notifier_block *nb)
-{
-	return blocking_notifier_chain_register(&exynos_cpufreq_init_notifier_list, nb);
-}
-EXPORT_SYMBOL(exynos_cpufreq_init_register_notifier);
-
-int exynos_cpufreq_init_unregister_notifier(struct notifier_block *nb)
-{
-	return blocking_notifier_chain_unregister(&exynos_cpufreq_init_notifier_list, nb);
-}
-EXPORT_SYMBOL(exynos_cpufreq_init_unregister_notifier);
-
-static int exynos_cpufreq_init_notify_call_chain(unsigned long val)
-{
-	int ret = blocking_notifier_call_chain(&exynos_cpufreq_init_notifier_list, val, NULL);
-
-	return notifier_to_errno(ret);
-}
-
-static BLOCKING_NOTIFIER_HEAD(exynos_cpufreq_smpl_warn_notifier_list);
-
-static int exynos_cpufreq_smpl_warn_register_notifier(struct notifier_block *nb)
-{
-	return blocking_notifier_chain_register(&exynos_cpufreq_smpl_warn_notifier_list, nb);
-}
-
-static int exynos_cpufreq_smpl_warn_unregister_notifier(struct notifier_block *nb)
-{
-	return blocking_notifier_chain_unregister(&exynos_cpufreq_smpl_warn_notifier_list, nb);
-}
-
-int exynos_cpufreq_smpl_warn_notify_call_chain(void)
-{
-	int ret = blocking_notifier_call_chain(&exynos_cpufreq_smpl_warn_notifier_list, 0, NULL);
-	return notifier_to_errno(ret);
-}
-EXPORT_SYMBOL(exynos_cpufreq_smpl_warn_notify_call_chain);
-
-static int exynos_cpufreq_smpl_warn_notifier_call(
-					struct notifier_block *notifer,
-					unsigned long event, void *v)
-{
-	if (!exynos_info[CL_ONE]->en_smpl)
-		return NOTIFY_OK;
-
-	if (exynos_info[CL_ONE]->clear_smpl)
-		exynos_info[CL_ONE]->clear_smpl();
-
-	pr_info("%s : SMPL_WARN is cleared\n",__func__);
-
-	return NOTIFY_OK;
-}
-
-static struct notifier_block exynos_cpufreq_smpl_warn_notifier = {
-	.notifier_call = exynos_cpufreq_smpl_warn_notifier_call,
-};
-
-
-#if defined(CONFIG_EXYNOS_BIG_FREQ_BOOST)
-static void exynos_cpufreq_print_max_freq(void)
-{
-	int i, idx;
-
-	pr_info("Boost Frequency\n");
-	for (i = 1; i <= NR_CLUST1_CPUS; i++) {
-		idx = exynos_info[CL_ONE]->max_support_idx_table[i];
-		pr_info("Number of onlince core: %d -> max frequency: %d\n",
-			i, exynos_info[CL_ONE]->freq_table[idx].frequency);
-	}
-}
-
-/* input num of online core, return possible max freq */
-static unsigned int exynos_cpufreq_get_possible_max_freq(int num_of_online)
-{
-	int idx;
-
-	if (num_of_online > NR_CLUST1_CPUS) {
-		pr_err("Input value is invalied! return possible max frequency\n");
-		idx = exynos_info[CL_ONE]->max_support_idx_table[NR_CLUST1_CPUS];
-	} else {
-		idx = exynos_info[CL_ONE]->max_support_idx_table[num_of_online];
-	}
-
-	return  exynos_info[CL_ONE]->freq_table[idx].frequency;
-}
-
-static void exynos_cpufreq_verify_possible_freq(int *new_index)
-{
-	unsigned int cpu;
-	unsigned int off_cnt = 0;
-
-	for (cpu = nr_cpu_ids - 1; cpu >= NR_CLUST0_CPUS; cpu--)
-		if (!cpu_online(cpu) && !exynos_cpu.power_state(cpu))
-			off_cnt++;
-
-	/* Check whether new freq is possible freq */
-	if (*new_index >= exynos_info[CL_ONE]->max_support_idx_table[NR_CLUST1_CPUS - off_cnt])
-		return;
-
-	pr_err("Can't use boost freq (freq %d -> %d, big off_cnt %d\n",
-			freqs[CL_ONE]->old, freqs[CL_ONE]->new, off_cnt);
-	BUG();
-
-	/* change index and new_freq to possible value */
-	*new_index = exynos_info[CL_ONE]->max_support_idx_table[NR_CLUST1_CPUS - off_cnt];
-	freqs[CL_ONE]->new = exynos_info[CL_ONE]->freq_table[*new_index].frequency;
-}
+#ifdef CONFIG_SW_SELF_DISCHARGING
+static int self_discharging;
 #endif
 
-static unsigned int get_limit_voltage(unsigned int voltage)
-{
-	BUG_ON(!voltage);
-	if (voltage > LIMIT_COLD_VOLTAGE)
-		return voltage;
-
-	if (voltage + volt_offset > LIMIT_COLD_VOLTAGE)
-		return LIMIT_COLD_VOLTAGE;
-
-	if (ENABLE_MIN_COLD && volt_offset
-		&& (voltage + volt_offset) < MIN_COLD_VOLTAGE)
-		return MIN_COLD_VOLTAGE;
-
-	return voltage + volt_offset;
-}
-
-static void init_cpumask_cluster_set(cluster_type cluster)
-{
-	unsigned int i;
-	cluster_type set_cluster;
-
-	for_each_cpu(i, cpu_possible_mask) {
-		set_cluster = cluster;
-
-		if ((cluster == CL_ZERO) && (i >= NR_CLUST0_CPUS)) {
-			set_cluster = CL_ONE;
-		} else if ((cluster == CL_ONE) && (i >= NR_CLUST1_CPUS)) {
-			set_cluster = CL_ZERO;
-		}
-
-		cpumask_set_cpu(i, &cluster_cpus[set_cluster]);
-		per_cpu(cpu_cur_cluster, i) = set_cluster;
-	}
-}
-
+/********************************************************************************
+ *                                 Helper function                              *
+ ********************************************************************************/
 /*
  * get_cur_cluster - return current cluster
  *
@@ -295,26 +124,32 @@ static unsigned int clk_get_freq(cluster_type cl)
 	return 0;
 }
 
-static void set_boot_freq(cluster_type cluster)
+#ifdef CONFIG_SEC_BOOTSTAT
+void sec_bootstat_get_cpuinfo(int *freq, int *online)
 {
+	int cpu;
+	int cluster;
+	struct cpufreq_policy *policy;
 
-	if (exynos_info[cluster]) {
-		exynos_info[cluster]->boot_freq
-				= clk_get_freq(cluster);
-		pr_info("Cluster[%d] BootFreq: %dKHz\n", cluster,
-						exynos_info[cluster]->boot_freq);
+	get_online_cpus();
+	*online = cpumask_bits(cpu_online_mask)[0];
+	for_each_online_cpu(cpu) {
+		if (cpumask_test_cpu(cpu, &cluster_cpus[CL_ZERO]))
+			cluster = 0;
+		else
+			cluster = 1;
+
+		if (freq[cluster] == 0) {
+			policy = cpufreq_cpu_get(cpu);
+			if (!policy)
+				continue;
+			freq[cluster] = policy->cur;
+			cpufreq_cpu_put(policy);
+		}
 	}
-
-	return;
+	put_online_cpus();
 }
-
-static void set_resume_freq(cluster_type cluster)
-{
-
-	if (exynos_info[cluster])
-		exynos_info[cluster]->resume_freq
-				= clk_get_freq(cluster);
-}
+#endif
 
 static unsigned int get_freq_volt(int cluster, unsigned int target_freq, int *idx)
 {
@@ -363,47 +198,33 @@ static unsigned int get_boot_volt(int cluster)
 	return get_freq_volt(cluster, boot_freq, NULL);
 }
 
-static unsigned int get_resume_freq(unsigned int cluster)
+#ifdef CONFIG_CPU_IDLE
+static void exynos_qos_nop(void *info)
 {
-	if (exynos_info[cluster] == NULL) {
-		BUG_ON(1);
-		return 0;
-	}
-	return exynos_info[cluster]->resume_freq;
 }
 
-int exynos_verify_speed(struct cpufreq_policy *policy)
+static int exynos_enable_cpd(int cpu)
 {
-	unsigned int cur = get_cur_cluster(policy->cpu);
+	release_cpd();
 
-	return cpufreq_frequency_table_verify(policy,
-				exynos_info[cur]->freq_table);
+	return 1;
 }
 
-struct cpufreq_frequency_table *cpufreq_get_info_table(unsigned int cpu)
+static int exynos_disable_cpd(int cpu)
 {
-	unsigned int cur = get_cur_cluster(cpu);
-	struct cpufreq_frequency_table *freq_table
-					= exynos_info[cur]->freq_table;
-
-	return freq_table;
-}
-
-unsigned int exynos_getspeed_cluster(cluster_type cluster)
-{
-	return clk_get_freq(cluster);
-}
-
-unsigned int exynos_getspeed(unsigned int cpu)
-{
-	unsigned int cur = get_cur_cluster(cpu);
+	block_cpd();
 
 	if (check_cluster_idle_state(cpu))
-		return freqs[cur]->old;
-	else
-		return exynos_getspeed_cluster(cur);
-}
+		smp_call_function_single(cpu, exynos_qos_nop, NULL, 0);
 
+	return 1;
+}
+#endif
+
+
+/********************************************************************************
+ *                         Scaling frequency and voltage                        *
+ ********************************************************************************/
 static unsigned int exynos_get_safe_volt(unsigned int old_index,
 					unsigned int new_index,
 					unsigned int cur)
@@ -464,23 +285,22 @@ int exynos5_frequency_table_target(struct cpufreq_policy *policy,
 	return 0;
 }
 
-static int exynos_set_voltage(unsigned int cur_index,
-								unsigned int new_index,
-								unsigned int volt,
-								unsigned int cluster)
+static int exynos_set_voltage(unsigned int cur_index, unsigned int new_index,
+					unsigned int volt, unsigned int cluster)
 {
 	struct regulator *regulator = exynos_info[cluster]->regulator;
+	int regulator_max_support_volt = exynos_info[cluster]->regulator_max_support_volt;
 	struct cpufreq_frequency_table *freq_table = exynos_info[cluster]->freq_table;
 	bool set_abb_first_than_volt = false;
 	int ret = 0;
 
 	if (exynos_info[cluster]->abb_table)
 		set_abb_first_than_volt = is_set_abb_first(CLUSTER_ID(cluster),
-										freq_table[cur_index].frequency,
-										freq_table[new_index].frequency);
+						freq_table[cur_index].frequency,
+						freq_table[new_index].frequency);
 
 	if (!set_abb_first_than_volt) {
-		ret = regulator_set_voltage(regulator, volt, volt + VOLT_RANGE_STEP);
+		ret = regulator_set_voltage(regulator, volt, regulator_max_support_volt);
 		if (ret)
 			goto out;
 
@@ -491,7 +311,7 @@ static int exynos_set_voltage(unsigned int cur_index,
 		set_match_abb(CLUSTER_ID(cluster), exynos_info[cluster]->abb_table[new_index]);
 
 	if (set_abb_first_than_volt) {
-		ret = regulator_set_voltage(regulator, volt, volt + VOLT_RANGE_STEP);
+		ret = regulator_set_voltage(regulator, volt, regulator_max_support_volt);
 		if (ret)
 			goto out;
 
@@ -502,6 +322,32 @@ out:
 	return ret;
 }
 
+static unsigned int volt_offset;
+static unsigned int get_limit_voltage(unsigned int voltage)
+{
+	BUG_ON(!voltage);
+	if (voltage > LIMIT_COLD_VOLTAGE)
+		return voltage;
+
+	if (voltage + volt_offset > LIMIT_COLD_VOLTAGE)
+		return LIMIT_COLD_VOLTAGE;
+
+	if (ENABLE_MIN_COLD && volt_offset
+		&& (voltage + volt_offset) < MIN_COLD_VOLTAGE)
+		return MIN_COLD_VOLTAGE;
+
+	return voltage + volt_offset;
+}
+
+#ifdef CONFIG_SMP
+struct lpj_info {
+	unsigned long   ref;
+	unsigned int    freq;
+};
+
+static struct lpj_info global_lpj_ref;
+#endif
+
 static int exynos_cpufreq_scale(unsigned int target_freq, unsigned int cpu)
 {
 	unsigned int cur = get_cur_cluster(cpu);
@@ -511,7 +357,6 @@ static int exynos_cpufreq_scale(unsigned int target_freq, unsigned int cpu)
 	unsigned int new_index, old_index;
 	unsigned int volt, safe_volt = 0;
 	int ret = 0;
-	unsigned int current_freq = freqs[cur]->old;
 
 	if (!policy)
 		return -EINVAL;
@@ -530,16 +375,6 @@ static int exynos_cpufreq_scale(unsigned int target_freq, unsigned int cpu)
 		ret = -EINVAL;
 		goto put_policy;
 	}
-
-#if defined(CONFIG_EXYNOS_BIG_FREQ_BOOST)
-	/*
-	 * check whether new freq is possilbe
-	 * if not change new freq to possible max freq
-	 */
-	if (cur == CL_ONE &&
-		new_index < exynos_info[cur]->max_support_idx_table[NR_CLUST1_CPUS])
-		exynos_cpufreq_verify_possible_freq(&new_index);
-#endif
 
 	if (old_index == new_index)
 		goto put_policy;
@@ -567,33 +402,33 @@ static int exynos_cpufreq_scale(unsigned int target_freq, unsigned int cpu)
 		exynos_cl_dvfs_stop(CLUSTER_ID(cur), new_index);
 #endif
 
-	if (old_index > new_index) {
-		if (pm_qos_request_active(&exynos_mif_qos[cur]))
-			pm_qos_update_request(&exynos_mif_qos[cur],
-					exynos_info[cur]->bus_table[new_index]);
-	}
-
 	/* When the new frequency is higher than current frequency */
 	if ((old_index > new_index) && !safe_volt) {
 		/* Firstly, voltage up to increase frequency */
 		ret = exynos_set_voltage(old_index, new_index, volt, cur);
 		if (ret)
 			goto fail_dvfs;
-
-		if (exynos_info[cur]->set_ema)
-			exynos_info[cur]->set_ema(volt);
 	}
 
 	if (safe_volt) {
 		ret = exynos_set_voltage(old_index, new_index, safe_volt, cur);
 		if (ret)
 			goto fail_dvfs;
+	}
 
-		if (exynos_info[cur]->set_ema)
-			exynos_info[cur]->set_ema(safe_volt);
+	if (old_index > new_index) {
+		if (pm_qos_request_active(&exynos_mif_qos[cur]))
+			pm_qos_update_request(&exynos_mif_qos[cur],
+					exynos_info[cur]->bus_table[new_index]);
 	}
 
 	exynos_info[cur]->set_freq(old_index, new_index);
+
+	if (old_index < new_index) {
+		if (pm_qos_request_active(&exynos_mif_qos[cur]))
+			pm_qos_update_request(&exynos_mif_qos[cur],
+					exynos_info[cur]->bus_table[new_index]);
+	}
 
 #ifdef CONFIG_SMP
 	if (!global_lpj_ref.freq) {
@@ -612,21 +447,12 @@ static int exynos_cpufreq_scale(unsigned int target_freq, unsigned int cpu)
 	/* When the new frequency is lower than current frequency */
 	if ((old_index < new_index) || ((old_index > new_index) && safe_volt)) {
 		/* down the voltage after frequency change */
-		if (exynos_info[cur]->set_ema)
-			 exynos_info[cur]->set_ema(volt);
-
 		ret = exynos_set_voltage(old_index, new_index, volt, cur);
 		if (ret) {
 			/* save current frequency as frequency is changed*/
 			freqs[cur]->old = target_freq;
 			goto put_policy;
 		}
-	}
-
-	if (old_index < new_index) {
-		if (pm_qos_request_active(&exynos_mif_qos[cur]))
-			pm_qos_update_request(&exynos_mif_qos[cur],
-					exynos_info[cur]->bus_table[new_index]);
 	}
 
 	if (old_index < new_index)
@@ -644,16 +470,207 @@ static int exynos_cpufreq_scale(unsigned int target_freq, unsigned int cpu)
 
 fail_dvfs:
 	cpufreq_freq_transition_end(policy, freqs[cur], ret);
-
-	/* Recover old freq when voltage set failed */
-	freqs[cur]->old = current_freq;
-
 put_policy:
 	cpufreq_cpu_put(policy);
 
 	return ret;
 }
 
+/********************************************************************************
+ *                               Driver callback                                *
+ ********************************************************************************/
+int exynos_verify_speed(struct cpufreq_policy *policy)
+{
+	unsigned int cur = get_cur_cluster(policy->cpu);
+
+	return cpufreq_frequency_table_verify(policy,
+				exynos_info[cur]->freq_table);
+}
+
+unsigned int exynos_getspeed_cluster(cluster_type cluster)
+{
+	return clk_get_freq(cluster);
+}
+
+unsigned int exynos_getspeed(unsigned int cpu)
+{
+	unsigned int cur = get_cur_cluster(cpu);
+
+	if (check_cluster_idle_state(cpu))
+		return freqs[cur]->old;
+	else
+		return exynos_getspeed_cluster(cur);
+}
+
+static unsigned int exynos_verify_pm_qos_limit(struct cpufreq_policy *policy,
+		unsigned int target_freq, cluster_type cur)
+{
+#if defined(CONFIG_CPU_FREQ_GOV_USERSPACE) || defined(CONFIG_CPU_FREQ_GOV_PERFORMANCE)
+	if ((strcmp(policy->governor->name, "userspace") == 0)
+			|| strcmp(policy->governor->name, "performance") == 0)
+		return target_freq;
+#endif
+	target_freq = max((unsigned int)pm_qos_request(qos_min_class[cur]), target_freq);
+	target_freq = min((unsigned int)pm_qos_request(qos_max_class[cur]), target_freq);
+
+#ifndef CONFIG_SCHED_HMP
+	/* If cluster1 is turned on, first freq should be higher than cluster 0 */
+	if (need_sync && (cur == CL_ONE)) {
+		target_freq = max(target_freq, clk_get_freq(CL_ZERO));
+		need_sync = false;
+	}
+#endif
+
+	target_freq = min(g_clamp_cpufreqs[cur], target_freq); /* add IPA clamp */
+
+	return target_freq;
+}
+
+/* Set clock frequency */
+static int exynos_target(struct cpufreq_policy *policy,
+			  unsigned int target_freq,
+			  unsigned int relation)
+{
+	cluster_type cur = get_cur_cluster(policy->cpu);
+	struct cpufreq_frequency_table *freq_table = exynos_info[cur]->freq_table;
+	unsigned int index;
+	int ret = 0;
+#ifdef CONFIG_CPU_THERMAL_IPA_DEBUG
+	trace_printk("IPA:%s:%d Called by %x, with target_freq %d", __PRETTY_FUNCTION__, __LINE__,
+			(unsigned int) __builtin_return_address (0), target_freq);
+#endif
+
+	mutex_lock(&cpufreq_lock);
+
+	if (exynos_info[cur]->blocked)
+		goto out;
+
+	if (target_freq == 0)
+		target_freq = policy->min;
+
+	if (exynos_info[cur]->check_smpl && exynos_info[cur]->check_smpl())
+		goto out;
+
+	/* if PLL bypass, frequency scale is skip */
+	if (exynos_getspeed(policy->cpu) <= FREQ_OSCCLK)
+		goto out;
+
+	/* verify old frequency */
+	if (freqs[cur]->old != exynos_getspeed(policy->cpu)) {
+		printk("oops, sombody change clock  old clk:%d, cur clk:%d \n",
+					freqs[cur]->old, exynos_getspeed(policy->cpu));
+		BUG_ON(freqs[cur]->old != exynos_getspeed(policy->cpu));
+	}
+
+	/* verify pm_qos_lock */
+	target_freq = exynos_verify_pm_qos_limit(policy, target_freq, cur);
+
+#ifdef CONFIG_CPU_THERMAL_IPA_DEBUG
+	trace_printk("IPA:%s:%d will apply %d ", __PRETTY_FUNCTION__, __LINE__, target_freq);
+#endif
+
+	if (cpufreq_frequency_table_target(policy, freq_table,
+				target_freq, relation, &index)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	target_freq = freq_table[index].frequency;
+
+#ifdef CONFIG_CPU_IDLE
+	/* disable cluster power down during scale */
+	if (cur == CL_ONE)
+		exynos_disable_cpd(policy->cpu);
+#endif
+
+	pr_debug("%s[%d]: new_freq[%d], index[%d]\n",
+				__func__, cur, target_freq, index);
+
+	exynos_ss_freq(cur, freqs[cur]->old, target_freq, ESS_FLAG_IN);
+	/* frequency and volt scaling */
+	ret = exynos_cpufreq_scale(target_freq, policy->cpu);
+	exynos_ss_freq(cur, freqs[cur]->old, target_freq, ESS_FLAG_OUT);
+
+#ifdef CONFIG_CPU_IDLE
+	/* enable cluster power down  */
+	if (cur == CL_ONE)
+		exynos_enable_cpd(policy->cpu);
+#endif
+
+	if (ret < 0)
+		goto out;
+
+	/* save current frequency */
+	freqs[cur]->old = target_freq;
+
+out:
+	mutex_unlock(&cpufreq_lock);
+
+	return ret;
+}
+
+#ifdef CONFIG_PM
+static int exynos_cpufreq_suspend(struct cpufreq_policy *policy)
+{
+	return 0;
+}
+
+static int exynos_cpufreq_resume(struct cpufreq_policy *policy)
+{
+	int cl, cur;
+
+	for_each_cluster(cl)
+		freqs[cl]->old = exynos_getspeed_cluster(cl);
+
+	/* Update policy->cur value to resume frequency */
+	cur = get_cur_cluster(policy->cpu);
+	policy->cur = exynos_getspeed_cluster(cur);
+
+	return 0;
+}
+#endif
+
+static int exynos_cpufreq_init(struct cpufreq_policy *policy)
+{
+	unsigned int cur = get_cur_cluster(policy->cpu);
+
+	pr_debug("%s: cpu[%d]\n", __func__, policy->cpu);
+
+	policy->cur = policy->min = policy->max = exynos_getspeed(policy->cpu);
+
+	cpufreq_table_validate_and_show(policy, exynos_info[cur]->freq_table);
+
+	/* set the transition latency value */
+	policy->cpuinfo.transition_latency = 100000;
+
+	if (cpumask_test_cpu(policy->cpu, &cluster_cpus[CL_ONE])) {
+		cpumask_copy(policy->cpus, &cluster_cpus[CL_ONE]);
+		cpumask_copy(policy->related_cpus, &cluster_cpus[CL_ONE]);
+		need_sync = true;
+	} else {
+		cpumask_copy(policy->cpus, &cluster_cpus[CL_ZERO]);
+		cpumask_copy(policy->related_cpus, &cluster_cpus[CL_ZERO]);
+	}
+
+	return cpufreq_frequency_table_cpuinfo(policy, exynos_info[cur]->freq_table);
+}
+
+static struct cpufreq_driver exynos_driver = {
+	.flags		= CPUFREQ_STICKY | CPUFREQ_HAVE_GOVERNOR_PER_POLICY,
+	.verify		= exynos_verify_speed,
+	.get		= exynos_getspeed,
+	.target		= exynos_target,
+	.init		= exynos_cpufreq_init,
+	.name		= "exynos_cpufreq",
+#ifdef CONFIG_PM
+	.suspend	= exynos_cpufreq_suspend,
+	.resume		= exynos_cpufreq_resume,
+#endif
+};
+
+/********************************************************************************
+ *                     External driver reference function                       *
+ ********************************************************************************/
 void exynos_set_max_freq(int max_freq, unsigned int cpu)
 {
 	cluster_type cluster = get_cur_cluster(cpu);
@@ -670,6 +687,9 @@ struct cpu_power_info {
 	cluster_type cluster;
 	unsigned int temp;
 };
+
+#define POWER_COEFF_15P		68 /* percore param */
+#define POWER_COEFF_7P		10 /* percore  param */
 
 unsigned int get_power_value(struct cpu_power_info *power_info)
 {
@@ -719,7 +739,7 @@ unsigned int get_power_value(struct cpu_power_info *power_info)
 
 	/* TODO: pde_p is not linear to load, need to update equation */
 	pd_tot = 0;
-	temp = ((u64)(coeff * freq * volt * volt)) / 1000000;
+	temp = (u64)coeff * freq * volt * volt / 1000000;
 	/* adding an extra 0 for division in order to compensate for the frequency unit change */
 	for (i = 0; i < 4; i++) {
 		if (power_info->load[i] > 100) {
@@ -742,125 +762,6 @@ unsigned int get_power_value(struct cpu_power_info *power_info)
 int get_real_max_freq(cluster_type cluster)
 {
 	return freq_max[cluster];
-}
-
-static void exynos_qos_nop(void *info)
-{
-}
-
-static int exynos_enable_cpd(int cpu)
-{
-	release_cpd();
-
-	return 1;
-}
-
-static int exynos_disable_cpd(int cpu)
-{
-	block_cpd();
-
-	if (check_cluster_idle_state(cpu))
-		smp_call_function_single(cpu, exynos_qos_nop, NULL, 0);
-
-	return 1;
-}
-
-unsigned int g_clamp_cpufreqs[CL_END];
-
-static unsigned int exynos_verify_pm_qos_limit(struct cpufreq_policy *policy,
-		unsigned int target_freq, cluster_type cur)
-{
-#if defined(CONFIG_CPU_FREQ_GOV_USERSPACE) || defined(CONFIG_CPU_FREQ_GOV_PERFORMANCE)
-	if ((strcmp(policy->governor->name, "userspace") == 0)
-			|| strcmp(policy->governor->name, "performance") == 0)
-		return target_freq;
-#endif
-	target_freq = max((unsigned int)pm_qos_request(qos_min_class[cur]), target_freq);
-	target_freq = min((unsigned int)pm_qos_request(qos_max_class[cur]), target_freq);
-	target_freq = min(g_clamp_cpufreqs[cur], target_freq); /* add IPA clamp */
-
-	return target_freq;
-}
-
-/* Set clock frequency */
-static int exynos_target(struct cpufreq_policy *policy,
-			  unsigned int target_freq,
-			  unsigned int relation)
-{
-	cluster_type cur = get_cur_cluster(policy->cpu);
-	struct cpufreq_frequency_table *freq_table = exynos_info[cur]->freq_table;
-	unsigned int index;
-	int ret = 0;
-#ifdef CONFIG_CPU_THERMAL_IPA_DEBUG
-	trace_printk("IPA:%s:%d Called by %x, with target_freq %d", __PRETTY_FUNCTION__, __LINE__,
-			(unsigned int) __builtin_return_address (0), target_freq);
-#endif
-
-	mutex_lock(&cpufreq_lock);
-
-	if (exynos_info[cur]->blocked)
-		goto out;
-
-	if (target_freq == 0)
-		target_freq = policy->min;
-
-	if (exynos_info[cur]->check_smpl && exynos_info[cur]->check_smpl())
-		goto out;
-
-	/* if PLL bypass, frequency scale is skip */
-	if (exynos_getspeed(policy->cpu) <= 24000)
-		goto out;
-
-	/* verify old frequency */
-	if (freqs[cur]->old != exynos_getspeed(policy->cpu)) {
-		printk("oops, sombody change clock  old clk:%d, cur clk:%d \n", freqs[cur]->old, exynos_getspeed(policy->cpu));
-		BUG_ON(freqs[cur]->old != exynos_getspeed(policy->cpu));
-	}
-
-	/* verify pm_qos_lock */
-	target_freq = exynos_verify_pm_qos_limit(policy, target_freq, cur);
-
-#ifdef CONFIG_CPU_THERMAL_IPA_DEBUG
-	trace_printk("IPA:%s:%d will apply %d ", __PRETTY_FUNCTION__, __LINE__, target_freq);
-#endif
-
-	if (cpufreq_frequency_table_target(policy, freq_table,
-				target_freq, relation, &index)) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	target_freq = freq_table[index].frequency;
-	if (target_freq > policy->max)
-		target_freq = policy->max;
-
-	/* disable cluster power down during scale */
-	if (cur == CL_ONE)
-		exynos_disable_cpd(policy->cpu);
-
-	pr_debug("%s[%d]: new_freq[%d], index[%d]\n",
-				__func__, cur, target_freq, index);
-
-	exynos_ss_freq(cur, freqs[cur]->old, target_freq, ESS_FLAG_IN);
-	/* frequency and volt scaling */
-	ret = exynos_cpufreq_scale(target_freq, policy->cpu);
-	exynos_ss_freq(cur, freqs[cur]->old, target_freq, ESS_FLAG_OUT);
-
-	/* enable cluster power down  */
-	if (cur == CL_ONE)
-		exynos_enable_cpd(policy->cpu);
-
-	if (ret < 0)
-		goto out;
-
-	/* save current frequency */
-	freqs[cur]->old = target_freq;
-
-out:
-
-	mutex_unlock(&cpufreq_lock);
-
-	return ret;
 }
 
 void ipa_set_clamp(int cpu, unsigned int clamp_freq, unsigned int gov_target)
@@ -910,392 +811,25 @@ void ipa_set_clamp(int cpu, unsigned int clamp_freq, unsigned int gov_target)
 	cpufreq_cpu_put(policy);
 }
 
+/********************************************************************************
+ *                               Sysfs interface                                *
+ ********************************************************************************/
 #ifdef CONFIG_PM
-static int exynos_cpufreq_suspend(struct cpufreq_policy *policy)
+struct pm_qos_request cpufreq_cpu_hotplug_request;
+
+#ifdef CONFIG_SCHED_HMP
+static void enable_nonboot_cluster_cpus(void)
 {
-	return 0;
+	pm_qos_update_request(&cpufreq_cpu_hotplug_request, NR_CPUS);
 }
 
-static int exynos_cpufreq_resume(struct cpufreq_policy *policy)
+static void disable_nonboot_cluster_cpus(void)
 {
-	int cl, cur;
-
-	for (cl = 0; cl < CL_END; cl++)
-		freqs[cl]->old = exynos_getspeed_cluster(cl);
-
-	/* Update policy->cur value to resume frequency */
-	cur = get_cur_cluster(policy->cpu);
-	policy->cur = exynos_getspeed_cluster(cur);
-
-	return 0;
-}
-#endif
-
-static int __cpuinit exynos_cpufreq_cpu_up_notifier(struct notifier_block *notifier,
-					unsigned long action, void *hcpu)
-{
-	unsigned int cpu = (unsigned long)hcpu;
-	struct device *dev;
-	struct cpumask mask;
-	int cluster;
-
-	dev = get_cpu_device(cpu);
-	if (dev) {
-		switch (action) {
-		case CPU_ONLINE:
-			cluster = get_cur_cluster(cpu);
-			if (cluster == CL_ONE) {
-				cpumask_and(&mask, cpu_coregroup_mask(cpu), cpu_online_mask);
-				if (cpumask_weight(&mask) == 1)
-					pm_qos_update_request(&boot_max_qos[cluster], freq_max[cluster]);
-			}
-			break;
-		}
-	}
-
-	return NOTIFY_OK;
+	pm_qos_update_request(&cpufreq_cpu_hotplug_request, NR_CLUST1_CPUS);
 }
 
-static int __cpuinit exynos_cpufreq_cpu_down_notifier(struct notifier_block *notifier,
-					unsigned long action, void *hcpu)
-{
-	unsigned int cpu = (unsigned long)hcpu;
-	struct device *dev;
-	struct cpumask mask;
-	int cluster;
-
-	if (suspend_prepared)
-		return NOTIFY_OK;
-
-	dev = get_cpu_device(cpu);
-	if (dev) {
-		switch (action) {
-		case CPU_DOWN_PREPARE:
-			cluster = get_cur_cluster(cpu);
-			if (cluster == CL_ONE) {
-				cpumask_and(&mask, cpu_coregroup_mask(cpu), cpu_online_mask);
-				if (cpumask_weight(&mask) == 1)
-					pm_qos_update_request(&boot_max_qos[cluster], freq_min[cluster]);
-			}
-			break;
-		case CPU_DOWN_PREPARE_FROZEN:
-		case CPU_DOWN_LATE_PREPARE:
-			mutex_lock(&cpufreq_lock);
-			exynos_info[CL_ZERO]->blocked = true;
-			exynos_info[CL_ONE]->blocked = true;
-			mutex_unlock(&cpufreq_lock);
-			break;
-		case CPU_DOWN_FAILED:
-		case CPU_DOWN_FAILED_FROZEN:
-		case CPU_DEAD:
-			mutex_lock(&cpufreq_lock);
-			exynos_info[CL_ZERO]->blocked = false;
-			exynos_info[CL_ONE]->blocked = false;
-			mutex_unlock(&cpufreq_lock);
-			break;
-		}
-	}
-	return NOTIFY_OK;
-}
-
-static struct notifier_block __refdata exynos_cpufreq_cpu_up_nb = {
-	.notifier_call = exynos_cpufreq_cpu_up_notifier,
-	.priority = INT_MIN,
-};
-
-/*
- * This notifier should be perform before
- * cpufreq_cpu_notifier performs.
- */
-static struct notifier_block __refdata exynos_cpufreq_cpu_down_nb = {
-	.notifier_call = exynos_cpufreq_cpu_down_notifier,
-	.priority = INT_MIN + 2,
-};
-
-/*
- * exynos_cpufreq_pm_notifier - block CPUFREQ's activities in suspend-resume
- *			context
- * @notifier
- * @pm_event
- * @v
- *
- * While cpufreq_disable == true, target() ignores every frequency but
- * boot_freq. The boot_freq value is the initial frequency,
- * which is set by the bootloader. In order to eliminate possible
- * inconsistency in clock values, we save and restore frequencies during
- * suspend and resume and block CPUFREQ activities. Note that the standard
- * suspend/resume cannot be used as they are too deep (syscore_ops) for
- * regulator actions.
- */
-static int exynos_cpufreq_pm_notifier(struct notifier_block *notifier,
-				       unsigned long pm_event, void *v)
-{
-	struct cpufreq_frequency_table *freq_table = NULL;
-	unsigned int bootfreq;
-	unsigned int abb_freq = 0;
-	bool set_abb_first_than_volt = false;
-	int volt, i, cl;
-	int cl_index;
-
-	switch (pm_event) {
-	case PM_SUSPEND_PREPARE:
-		/* Fix min/max freq to bootfreq for boot cluster */
-		pm_qos_update_request(&boot_min_qos[CL_ZERO],
-					exynos_info[CL_ZERO]->boot_freq);
-		pm_qos_update_request(&boot_max_qos[CL_ZERO],
-					exynos_info[CL_ZERO]->boot_freq);
-
-		pm_qos_update_request(&boot_max_qos[CL_ONE], freq_min[CL_ONE]);
-
-		mutex_lock(&cpufreq_lock);
-		exynos_info[CL_ZERO]->blocked = true;
-		exynos_info[CL_ONE]->blocked = true;
-
-		for (cl = 0; cl < CL_END; cl++) {
-			bootfreq = get_resume_freq(cl);
-
-			volt = max(get_boot_volt(cl), get_freq_volt(cl, freqs[cl]->old, &cl_index));
-			if ( volt <= 0) {
-				printk("oops, strange voltage %s -> boot volt:%d, get_freq_volt:%d, freq:%d \n",
-					(cl ? "CL_ONE" : "CL_ZERO"), get_boot_volt(cl),
-					get_freq_volt(cl, freqs[cl]->old, &cl_index), freqs[cl]->old);
-				BUG_ON(volt <= 0);
-			}
-			volt = get_limit_voltage(volt);
-
-			if (exynos_info[cl]->abb_table)
-				set_abb_first_than_volt = is_set_abb_first(CLUSTER_ID(cl), freqs[cl]->old, bootfreq);
-#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
-			exynos_cl_dvfs_stop(CLUSTER_ID(cl), cl_index);
-#endif
-			if (!set_abb_first_than_volt)
-				if (regulator_set_voltage(exynos_info[cl]->regulator, volt, volt + VOLT_RANGE_STEP))
-					goto err;
-
-			exynos_info[cl]->cur_volt = volt;
-
-			if (exynos_info[cl]->abb_table) {
-				abb_freq = max(bootfreq, freqs[cl]->old);
-				freq_table = exynos_info[cl]->freq_table;
-				for (i = 0; (freq_table[i].frequency != CPUFREQ_TABLE_END); i++) {
-					if (freq_table[i].frequency == CPUFREQ_ENTRY_INVALID)
-						continue;
-					if (freq_table[i].frequency == abb_freq) {
-						set_match_abb(CLUSTER_ID(cl), exynos_info[cl]->abb_table[i]);
-						break;
-					}
-				}
-			}
-
-			if (set_abb_first_than_volt)
-				if (regulator_set_voltage(exynos_info[cl]->regulator, volt, volt + VOLT_RANGE_STEP))
-					goto err;
-
-			exynos_info[cl]->cur_volt = volt;
-
-			if (exynos_info[cl]->set_ema)
-				exynos_info[cl]->set_ema(volt);
-#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
-			exynos_cl_dvfs_start(CLUSTER_ID(cl));
-#endif
-			set_abb_first_than_volt = false;
-		}
-
-		suspend_prepared = true;
-		mutex_unlock(&cpufreq_lock);
-
-		pr_debug("PM_SUSPEND_PREPARE for CPUFREQ\n");
-
-		break;
-	case PM_POST_SUSPEND:
-		pr_debug("PM_POST_SUSPEND for CPUFREQ\n");
-		for (cl = 0; cl < CL_END; cl++) {
-			set_resume_freq(cl);
-
-			mutex_lock(&cpufreq_lock);
-			exynos_info[cl]->blocked = false;
-			mutex_unlock(&cpufreq_lock);
-		}
-
-		/* Recovery min/max frequency normally for boot cluster */
-		pm_qos_update_request(&boot_min_qos[CL_ZERO], freq_min[CL_ZERO]);
-		pm_qos_update_request(&boot_max_qos[CL_ZERO], freq_max[CL_ZERO]);
-
-		pm_qos_update_request(&boot_max_qos[CL_ONE], INT_MAX);
-
-		suspend_prepared = false;
-
-		break;
-	}
-	return NOTIFY_OK;
-err:
-	pr_err("%s: failed to set voltage\n", __func__);
-
-	return NOTIFY_BAD;
-}
-
-static struct notifier_block exynos_cpufreq_nb = {
-	.notifier_call = exynos_cpufreq_pm_notifier,
-};
-
-#ifdef CONFIG_EXYNOS_THERMAL
-static int exynos_cpufreq_tmu_notifier(struct notifier_block *notifier,
-				       unsigned long event, void *v)
-{
-	int volt, cl;
-	int *on = v;
-	int ret = NOTIFY_OK;
-#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
-	int cl_index = 0;
-#endif
-	int cold_offset = 0;
-
-	if (event != TMU_COLD)
-		return NOTIFY_OK;
-
-	mutex_lock(&cpufreq_lock);
-	if (*on) {
-		if (volt_offset)
-			goto out;
-		else
-			volt_offset = COLD_VOLT_OFFSET;
-
-		for (cl = 0; cl < CL_END; cl++) {
-#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
-			get_freq_volt(cl, freqs[cl]->old, &cl_index);
-#endif
-			volt = exynos_info[cl]->cur_volt;
-#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
-			exynos_cl_dvfs_stop(CLUSTER_ID(cl), cl_index);
-#endif
-			volt = get_limit_voltage(volt);
-			ret = regulator_set_voltage(exynos_info[cl]->regulator, volt, volt + VOLT_RANGE_STEP);
-			if (ret) {
-				ret = NOTIFY_BAD;
-				goto out;
-			}
-
-			exynos_info[cl]->cur_volt = volt;
-
-			if (exynos_info[cl]->set_ema)
-				exynos_info[cl]->set_ema(volt);
-		}
-	} else {
-		if (!volt_offset)
-			goto out;
-		else {
-			cold_offset = volt_offset;
-			volt_offset = 0;
-		}
-		for (cl = 0; cl < CL_END; cl++) {
-			volt = get_limit_voltage(exynos_info[cl]->cur_volt - cold_offset);
-#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
-			exynos_cl_dvfs_stop(CLUSTER_ID(cl), cl_index);
-#endif
-			if (exynos_info[cl]->set_ema)
-				exynos_info[cl]->set_ema(volt);
-
-			ret = regulator_set_voltage(exynos_info[cl]->regulator, volt, volt + VOLT_RANGE_STEP);
-			if (ret) {
-				ret = NOTIFY_BAD;
-				goto out;
-			}
-
-			exynos_info[cl]->cur_volt = volt;
-
-#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
-			exynos_cl_dvfs_start(CLUSTER_ID(cl));
-#endif
-		}
-	}
-
-out:
-	mutex_unlock(&cpufreq_lock);
-
-	return ret;
-}
-
-static struct notifier_block exynos_tmu_nb = {
-	.notifier_call = exynos_cpufreq_tmu_notifier,
-};
-#endif
-
-static int exynos_cpufreq_cpu_init(struct cpufreq_policy *policy)
-{
-	unsigned int cur = get_cur_cluster(policy->cpu);
-
-	pr_debug("%s: cpu[%d]\n", __func__, policy->cpu);
-
-	policy->cur = policy->min = policy->max = exynos_getspeed(policy->cpu);
-
-	cpufreq_table_validate_and_show(policy, exynos_info[cur]->freq_table);
-
-	/* set the transition latency value */
-	policy->cpuinfo.transition_latency = 100000;
-
-	if (cpumask_test_cpu(policy->cpu, &cluster_cpus[CL_ONE])) {
-		cpumask_copy(policy->cpus, &cluster_cpus[CL_ONE]);
-		cpumask_copy(policy->related_cpus, &cluster_cpus[CL_ONE]);
-	} else {
-		cpumask_copy(policy->cpus, &cluster_cpus[CL_ZERO]);
-		cpumask_copy(policy->related_cpus, &cluster_cpus[CL_ZERO]);
-	}
-
-	return cpufreq_frequency_table_cpuinfo(policy, exynos_info[cur]->freq_table);
-}
-
-static struct cpufreq_driver exynos_driver = {
-	.flags		= CPUFREQ_STICKY | CPUFREQ_HAVE_GOVERNOR_PER_POLICY,
-	.verify		= exynos_verify_speed,
-	.target		= exynos_target,
-	.get		= exynos_getspeed,
-	.init		= exynos_cpufreq_cpu_init,
-	.name		= "exynos_cpufreq",
-#ifdef CONFIG_PM
-	.suspend	= exynos_cpufreq_suspend,
-	.resume		= exynos_cpufreq_resume,
-#endif
-};
-
-/************************** sysfs interface ************************/
-#ifdef CONFIG_PM
-static ssize_t show_cpufreq_smpl_warn_ctrl(struct kobject *kobj,
-				struct attribute *attr, char *buf)
-{
-	ssize_t	nsize = 0;
-	int cluster;
-
-	for (cluster = 0; cluster < CL_END; cluster++)
-		nsize += snprintf(&buf[nsize], 20, "cl[%d]:%d ", cluster, exynos_info[cluster]->en_smpl);
-
-	nsize += snprintf(&buf[nsize], 2, "\n");
-
-	return nsize;
-}
-
-static ssize_t store_cpufreq_smpl_warn_ctrl(struct kobject *kobj, struct attribute *attr,
-					const char *buf, size_t count)
-{
-	int input, cluster;
-
-	if (!sscanf(buf, "%1d %1d", &cluster, &input))
-		return -EINVAL;
-
-	if (!cluster) {
-		pr_err("Do not support smpl_warn for little cluster.\n");
-		return -EBUSY;
-	}
-
-	if (exynos_info[cluster]->check_smpl()) {
-		pr_err("Already happened smpl_warn.\n");
-		return -EBUSY;
-	}
-
-	input ? exynos_info[cluster]->init_smpl() : exynos_info[cluster]->deinit_smpl();
-	exynos_info[cluster]->en_smpl = !!input;
-
-	return count;
-}
+static bool hmp_boosted = false;
+static bool cluster1_hotplugged = false;
 
 static ssize_t show_cpufreq_table(struct kobject *kobj,
 				struct attribute *attr, char *buf)
@@ -1325,7 +859,7 @@ static ssize_t show_cpufreq_table(struct kobject *kobj,
 	for (i = 0; freq_table_cluster0[i].frequency != CPUFREQ_TABLE_END; i++) {
 		if (freq_table_cluster0[i].frequency != CPUFREQ_ENTRY_INVALID)
 			count += snprintf(&buf[count], pr_len, "%d ",
-					freq_table_cluster0[i].frequency / LIMIT_FREQ_DIVIDER);
+					freq_table_cluster0[i].frequency / 2);
 	}
 
 	count += snprintf(&buf[count - 1], 2, "\n");
@@ -1356,10 +890,10 @@ static ssize_t show_cpufreq_min_limit(struct kobject *kobj,
 			cluster0_qos_min = freq_max[CL_ZERO];
 		if (cluster0_qos_min < freq_min[CL_ZERO])
 			cluster0_qos_min = freq_min[CL_ZERO];
-		nsize = snprintf(buf, 10, "%u\n", cluster0_qos_min / LIMIT_FREQ_DIVIDER);
+		nsize = snprintf(buf, 10, "%u\n", cluster0_qos_min / 2);
 	} else if (cluster0_qos_min == 0) {
 		cluster0_qos_min = freq_min[CL_ZERO];
-		nsize = snprintf(buf, 10, "%u\n", cluster0_qos_min / LIMIT_FREQ_DIVIDER);
+		nsize = snprintf(buf, 10, "%u\n", cluster0_qos_min / 2);
 	}
 
 	return nsize;
@@ -1384,10 +918,10 @@ static ssize_t store_cpufreq_min_limit(struct kobject *kobj, struct attribute *a
 		}
 #endif
 		cluster1_input = min(cluster1_input, (int)freq_max[CL_ONE]);
-		if (cluster1_input >= exynos_info[CL_ONE]->boost_freq)
-			cluster0_input = core_max_qos_const[CL_ZERO].default_value;
+		if (exynos_info[CL_ZERO]->boost_freq)
+			cluster0_input = exynos_info[CL_ZERO]->boost_freq;
 		else
-			cluster0_input = exynos_info[CL_ZERO]->min_qos_freq;
+			cluster0_input = core_max_qos_const[CL_ZERO].default_value;
 	} else if (cluster1_input < (int)freq_min[CL_ONE]) {
 #ifdef CONFIG_SCHED_HMP
 		if (hmp_boosted) {
@@ -1402,7 +936,7 @@ static ssize_t store_cpufreq_min_limit(struct kobject *kobj, struct attribute *a
 			cluster1_input = qos_min_default_value[CL_ONE];
 			cluster0_input = qos_min_default_value[CL_ZERO];
 		} else {
-			cluster0_input = cluster1_input * LIMIT_FREQ_DIVIDER;
+			cluster0_input = cluster1_input * 2;
 			if (cluster0_input > 0)
 				cluster0_input = min(cluster0_input, (int)freq_max[CL_ZERO]);
 			cluster1_input = qos_min_default_value[CL_ONE];
@@ -1435,23 +969,13 @@ static ssize_t show_cpufreq_max_limit(struct kobject *kobj,
 			cluster0_qos_max = freq_min[CL_ZERO];
 		if (cluster0_qos_max > freq_max[CL_ZERO])
 			cluster0_qos_max = freq_max[CL_ZERO];
-		nsize = snprintf(buf, 10, "%u\n", cluster0_qos_max / LIMIT_FREQ_DIVIDER);
+		nsize = snprintf(buf, 10, "%u\n", cluster0_qos_max / 2);
 	} else if (cluster0_qos_max == 0) {
 		cluster0_qos_max = freq_min[CL_ZERO];
-		nsize = snprintf(buf, 10, "%u\n", cluster0_qos_max / LIMIT_FREQ_DIVIDER);
+		nsize = snprintf(buf, 10, "%u\n", cluster0_qos_max / 2);
 	}
 
 	return nsize;
-}
-
-static void enable_nonboot_cluster_cpus(void)
-{
-	pm_qos_update_request(&cpufreq_cpu_hotplug_max_request, NR_CPUS);
-}
-
-static void disable_nonboot_cluster_cpus(void)
-{
-	pm_qos_update_request(&cpufreq_cpu_hotplug_max_request, NR_CLUST1_CPUS);
 }
 
 static ssize_t store_cpufreq_max_limit(struct kobject *kobj, struct attribute *attr,
@@ -1480,7 +1004,7 @@ static ssize_t store_cpufreq_max_limit(struct kobject *kobj, struct attribute *a
 			cluster1_input = core_max_qos_const[CL_ONE].default_value;
 			cluster0_input = core_max_qos_const[CL_ZERO].default_value;
 		} else {
-			cluster0_input = cluster1_input * LIMIT_FREQ_DIVIDER;
+			cluster0_input = cluster1_input * 2;
 			if (cluster0_input > 0)
 				cluster0_input = max(cluster0_input, (int)freq_min[CL_ZERO]);
 			cluster1_input = qos_min_default_value[CL_ONE];
@@ -1499,7 +1023,89 @@ static ssize_t store_cpufreq_max_limit(struct kobject *kobj, struct attribute *a
 
 	return count;
 }
+#else
+static ssize_t show_cpufreq_table(struct kobject *kobj, struct attribute *attr,
+		char *buf)
+{
+	unsigned int i;
+	ssize_t count = 0;
+	struct cpufreq_frequency_table *table = exynos_info[CL_ZERO]->freq_table;
+
+	for (i = 0; (table[i].frequency != CPUFREQ_TABLE_END); i++) {
+		if (table[i].frequency == CPUFREQ_ENTRY_INVALID)
+			continue;
+		count += sprintf(&buf[count], "%d ", table[i].frequency);
+	}
+	count += sprintf(&buf[count], "\n");
+
+	return count;
+}
+
+static ssize_t show_cpufreq_min_limit(struct kobject *kobj, struct attribute *attr,
+			     char *buf)
+{
+	int len;
+
+	len = sprintf(buf, "%u\n", pm_qos_request(PM_QOS_CLUSTER0_FREQ_MIN));
+	len += sprintf(buf + len, "%u\n", pm_qos_request(PM_QOS_CLUSTER1_FREQ_MIN));
+
+	return len;
+}
+
+static ssize_t store_cpufreq_min_limit(struct kobject *kobj, struct attribute *attr,
+			      const char *buf, size_t n)
+{
+	int i;
+	int ret, freq;
+
+	ret = sscanf(buf, "%d", &freq);
+	if (ret != 1)
+		return -EINVAL;
+
+#ifdef CONFIG_SW_SELF_DISCHARGING
+	if (freq < self_discharging) {
+		freq = self_discharging;
+	}
 #endif
+
+	if (freq < 0)
+		freq = 0;
+
+	for (i = 0; i < CL_END; i++)
+		pm_qos_update_request(&core_min_qos[i], freq);
+
+	return n;
+}
+
+static ssize_t show_cpufreq_max_limit(struct kobject *kobj, struct attribute *attr,
+			     char *buf)
+{
+	int len;
+
+	len = sprintf(buf, "%u\n", pm_qos_request(PM_QOS_CLUSTER0_FREQ_MAX));
+	len += sprintf(buf + len, "%u\n", pm_qos_request(PM_QOS_CLUSTER1_FREQ_MAX));
+
+	return len;
+}
+
+static ssize_t store_cpufreq_max_limit(struct kobject *kobj, struct attribute *attr,
+			      const char *buf, size_t n)
+{
+	int i;
+	int ret, freq;
+
+	ret = sscanf(buf, "%d", &freq);
+	if (ret != 1)
+		return -EINVAL;
+
+	for (i = 0; i < CL_END; i++)
+		if (freq < 0)
+			pm_qos_update_request(&core_max_qos[i], freq_max[i]);
+		else
+			pm_qos_update_request(&core_max_qos[i], freq);
+
+	return n;
+}
 
 #ifdef CONFIG_SW_SELF_DISCHARGING
 static ssize_t show_cpufreq_self_discharging(struct kobject *kobj,
@@ -1512,6 +1118,7 @@ static ssize_t store_cpufreq_self_discharging(struct kobject *kobj, struct attri
 			      const char *buf, size_t count)
 {
 	int input;
+	int i;
 
 	if (!sscanf(buf, "%d", &input))
 		return -EINVAL;
@@ -1525,8 +1132,14 @@ static ssize_t store_cpufreq_self_discharging(struct kobject *kobj, struct attri
 		cpu_idle_poll_ctrl(false);
 	}
 
+	for (i = 0; i < CL_END; i++) {
+		pm_qos_update_request(&core_min_qos[i], self_discharging);
+	}
+
 	return count;
 }
+#endif	/* CONFIG_SW_SELF_DISCHARGING */
+#endif
 #endif
 
 inline ssize_t show_core_freq_table(char *buf, cluster_type cluster)
@@ -1675,9 +1288,6 @@ static struct attribute_group mp_attr_group = {
 };
 
 #ifdef CONFIG_PM
-static struct global_attr smpl_warn_ctrl =
-		__ATTR(smpl_warn_ctrl, S_IRUGO | S_IWUSR,
-			show_cpufreq_smpl_warn_ctrl, store_cpufreq_smpl_warn_ctrl);
 static struct global_attr cpufreq_table =
 		__ATTR(cpufreq_table, S_IRUGO, show_cpufreq_table, NULL);
 static struct global_attr cpufreq_min_limit =
@@ -1687,14 +1297,360 @@ static struct global_attr cpufreq_max_limit =
 		__ATTR(cpufreq_max_limit, S_IRUGO | S_IWUSR,
 			show_cpufreq_max_limit, store_cpufreq_max_limit);
 #endif
-
 #ifdef CONFIG_SW_SELF_DISCHARGING
 static struct global_attr cpufreq_self_discharging =
 		__ATTR(cpufreq_self_discharging, S_IRUGO | S_IWUSR,
 			show_cpufreq_self_discharging, store_cpufreq_self_discharging);
 #endif
 
-/************************** sysfs end ************************/
+/********************************************************************************
+ *                            Notify call chain                                 *
+ ********************************************************************************/
+/*
+ * CPUFREQ init notifier
+ */
+static BLOCKING_NOTIFIER_HEAD(exynos_cpufreq_init_notifier_list);
+
+int exynos_cpufreq_init_register_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&exynos_cpufreq_init_notifier_list, nb);
+}
+EXPORT_SYMBOL(exynos_cpufreq_init_register_notifier);
+
+int exynos_cpufreq_init_unregister_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&exynos_cpufreq_init_notifier_list, nb);
+}
+EXPORT_SYMBOL(exynos_cpufreq_init_unregister_notifier);
+
+static int exynos_cpufreq_init_notify_call_chain(unsigned long val)
+{
+	int ret = blocking_notifier_call_chain(&exynos_cpufreq_init_notifier_list, val, NULL);
+
+	return notifier_to_errno(ret);
+}
+
+static BLOCKING_NOTIFIER_HEAD(exynos_cpufreq_smpl_warn_notifier_list);
+
+static int exynos_cpufreq_smpl_warn_register_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&exynos_cpufreq_smpl_warn_notifier_list, nb);
+}
+
+static int exynos_cpufreq_smpl_warn_unregister_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&exynos_cpufreq_smpl_warn_notifier_list, nb);
+}
+
+int exynos_cpufreq_smpl_warn_notify_call_chain(void)
+{
+	int ret = blocking_notifier_call_chain(&exynos_cpufreq_smpl_warn_notifier_list, 0, NULL);
+	return notifier_to_errno(ret);
+}
+EXPORT_SYMBOL(exynos_cpufreq_smpl_warn_notify_call_chain);
+
+static int exynos_cpufreq_smpl_warn_notifier_call(
+					struct notifier_block *notifer,
+					unsigned long event, void *v)
+{
+	if (exynos_info[CL_ONE]->clear_smpl)
+		exynos_info[CL_ONE]->clear_smpl();
+
+	pr_info("%s : SMPL_WARN is cleared\n",__func__);
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block exynos_cpufreq_smpl_warn_notifier = {
+	.notifier_call = exynos_cpufreq_smpl_warn_notifier_call,
+};
+
+static bool suspend_prepared = false;
+static int __cpuinit exynos_cpufreq_cpu_up_notifier(struct notifier_block *notifier,
+					unsigned long action, void *hcpu)
+{
+	unsigned int cpu = (unsigned long)hcpu;
+	struct device *dev;
+	struct cpumask mask;
+	int cluster;
+
+	dev = get_cpu_device(cpu);
+	if (dev) {
+		switch (action) {
+		case CPU_ONLINE:
+			cluster = get_cur_cluster(cpu);
+			if (cluster == CL_ONE) {
+				cpumask_and(&mask, cpu_coregroup_mask(cpu), cpu_online_mask);
+				if (cpumask_weight(&mask) == 1)
+					pm_qos_update_request(&boot_max_qos[cluster], freq_max[cluster]);
+			}
+			break;
+		}
+	}
+
+	return NOTIFY_OK;
+}
+
+static int __cpuinit exynos_cpufreq_cpu_down_notifier(struct notifier_block *notifier,
+					unsigned long action, void *hcpu)
+{
+	unsigned int cpu = (unsigned long)hcpu;
+	struct device *dev;
+	struct cpumask mask;
+	int cluster;
+
+	if (suspend_prepared)
+		return NOTIFY_OK;
+
+	dev = get_cpu_device(cpu);
+	if (dev) {
+		switch (action) {
+		case CPU_DOWN_PREPARE:
+			cluster = get_cur_cluster(cpu);
+			if (cluster == CL_ONE) {
+				cpumask_and(&mask, cpu_coregroup_mask(cpu), cpu_online_mask);
+				if (cpumask_weight(&mask) == 1)
+					pm_qos_update_request(&boot_max_qos[cluster], freq_min[cluster]);
+			}
+		case CPU_DOWN_PREPARE_FROZEN:
+			mutex_lock(&cpufreq_lock);
+			exynos_info[CL_ZERO]->blocked = true;
+			exynos_info[CL_ONE]->blocked = true;
+			mutex_unlock(&cpufreq_lock);
+			break;
+		case CPU_DOWN_FAILED:
+		case CPU_DOWN_FAILED_FROZEN:
+		case CPU_DEAD:
+			mutex_lock(&cpufreq_lock);
+			exynos_info[CL_ZERO]->blocked = false;
+			exynos_info[CL_ONE]->blocked = false;
+			mutex_unlock(&cpufreq_lock);
+			break;
+		}
+	}
+	return NOTIFY_OK;
+}
+
+static struct notifier_block __refdata exynos_cpufreq_cpu_up_nb = {
+	.notifier_call = exynos_cpufreq_cpu_up_notifier,
+	.priority = INT_MIN,
+};
+
+static struct notifier_block __refdata exynos_cpufreq_cpu_down_nb = {
+	.notifier_call = exynos_cpufreq_cpu_down_notifier,
+	.priority = INT_MIN + 2,
+};
+
+static unsigned int get_resume_freq(unsigned int cluster)
+{
+	if (exynos_info[cluster] == NULL) {
+		BUG_ON(1);
+		return 0;
+	}
+	return exynos_info[cluster]->resume_freq;
+}
+
+static void set_resume_freq(cluster_type cluster)
+{
+
+	if (exynos_info[cluster])
+		exynos_info[cluster]->resume_freq
+				= clk_get_freq(cluster);
+}
+
+/*
+ * exynos_cpufreq_pm_notifier - block CPUFREQ's activities in suspend-resume
+ *			context
+ * @notifier
+ * @pm_event
+ * @v
+ *
+ * While cpufreq_disable == true, target() ignores every frequency but
+ * boot_freq. The boot_freq value is the initial frequency,
+ * which is set by the bootloader. In order to eliminate possible
+ * inconsistency in clock values, we save and restore frequencies during
+ * suspend and resume and block CPUFREQ activities. Note that the standard
+ * suspend/resume cannot be used as they are too deep (syscore_ops) for
+ * regulator actions.
+ */
+static int exynos_cpufreq_pm_notifier(struct notifier_block *notifier,
+				       unsigned long pm_event, void *v)
+{
+	struct cpufreq_frequency_table *freq_table = NULL;
+	unsigned int bootfreq;
+	unsigned int abb_freq = 0;
+	bool set_abb_first_than_volt = false;
+	int volt, i, cl;
+	int cl_index;
+
+	switch (pm_event) {
+	case PM_SUSPEND_PREPARE:
+		pm_qos_update_request(&boot_max_qos[CL_ONE], freq_min[CL_ONE]);
+
+		mutex_lock(&cpufreq_lock);
+		exynos_info[CL_ZERO]->blocked = true;
+		exynos_info[CL_ONE]->blocked = true;
+		mutex_unlock(&cpufreq_lock);
+
+		for_each_cluster(cl) {
+			bootfreq = get_resume_freq(cl);
+
+			volt = max(get_boot_volt(cl), get_freq_volt(cl, freqs[cl]->old, &cl_index));
+			if ( volt <= 0) {
+				printk("oops, strange voltage %s -> boot volt:%d, get_freq_volt:%d, freq:%d \n",
+					(cl ? "CL_ONE" : "CL_ZERO"), get_boot_volt(cl),
+					get_freq_volt(cl, freqs[cl]->old, &cl_index), freqs[cl]->old);
+				BUG_ON(volt <= 0);
+			}
+			volt = get_limit_voltage(volt);
+
+			if (exynos_info[cl]->abb_table)
+				set_abb_first_than_volt =
+					is_set_abb_first(CLUSTER_ID(cl), freqs[cl]->old, bootfreq);
+#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
+			exynos_cl_dvfs_stop(CLUSTER_ID(cl), cl_index);
+#endif
+			if (!set_abb_first_than_volt)
+				if (regulator_set_voltage(exynos_info[cl]->regulator,
+							volt, exynos_info[cl]->regulator_max_support_volt))
+					goto err;
+
+			exynos_info[cl]->cur_volt = volt;
+
+			if (exynos_info[cl]->abb_table) {
+				abb_freq = max(bootfreq, freqs[cl]->old);
+				freq_table = exynos_info[cl]->freq_table;
+				for (i = 0; (freq_table[i].frequency != CPUFREQ_TABLE_END); i++) {
+					if (freq_table[i].frequency == CPUFREQ_ENTRY_INVALID)
+						continue;
+					if (freq_table[i].frequency == abb_freq) {
+						set_match_abb(CLUSTER_ID(cl), exynos_info[cl]->abb_table[i]);
+						break;
+					}
+				}
+			}
+
+			if (set_abb_first_than_volt)
+				if (regulator_set_voltage(exynos_info[cl]->regulator,
+							volt, exynos_info[cl]->regulator_max_support_volt))
+					goto err;
+
+			exynos_info[cl]->cur_volt = volt;
+#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
+			exynos_cl_dvfs_start(CLUSTER_ID(cl));
+#endif
+			set_abb_first_than_volt = false;
+		}
+
+		suspend_prepared = true;
+
+		pr_debug("PM_SUSPEND_PREPARE for CPUFREQ\n");
+
+		break;
+	case PM_POST_SUSPEND:
+		pr_debug("PM_POST_SUSPEND for CPUFREQ\n");
+		for_each_cluster(cl) {
+			set_resume_freq(cl);
+
+			mutex_lock(&cpufreq_lock);
+			exynos_info[cl]->blocked = false;
+			mutex_unlock(&cpufreq_lock);
+		}
+
+		pm_qos_update_request(&boot_max_qos[CL_ONE], INT_MAX);
+
+		suspend_prepared = false;
+
+		break;
+	}
+	return NOTIFY_OK;
+err:
+	pr_err("%s: failed to set voltage\n", __func__);
+
+	return NOTIFY_BAD;
+}
+
+static struct notifier_block exynos_cpufreq_nb = {
+	.notifier_call = exynos_cpufreq_pm_notifier,
+};
+
+#ifdef CONFIG_EXYNOS_THERMAL
+static int exynos_cpufreq_tmu_notifier(struct notifier_block *notifier,
+				       unsigned long event, void *v)
+{
+	int volt, cl;
+	int *on = v;
+	int ret = NOTIFY_OK;
+#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
+	int cl_index = 0;
+#endif
+	int cold_offset = 0;
+
+	if (event != TMU_COLD)
+		return NOTIFY_OK;
+
+	mutex_lock(&cpufreq_lock);
+	if (*on) {
+		if (volt_offset)
+			goto out;
+		else
+			volt_offset = COLD_VOLT_OFFSET;
+
+		for_each_cluster(cl) {
+#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
+			get_freq_volt(cl, freqs[cl]->old, &cl_index);
+#endif
+			volt = exynos_info[cl]->cur_volt;
+#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
+			exynos_cl_dvfs_stop(CLUSTER_ID(cl), cl_index);
+#endif
+			volt = get_limit_voltage(volt);
+			ret = regulator_set_voltage(exynos_info[cl]->regulator,
+						volt, exynos_info[cl]->regulator_max_support_volt);
+			if (ret) {
+				ret = NOTIFY_BAD;
+				goto out;
+			}
+
+			exynos_info[cl]->cur_volt = volt;
+		}
+	} else {
+		if (!volt_offset)
+			goto out;
+		else {
+			cold_offset = volt_offset;
+			volt_offset = 0;
+		}
+		for_each_cluster(cl) {
+			volt = get_limit_voltage(exynos_info[cl]->cur_volt - cold_offset);
+#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
+			exynos_cl_dvfs_stop(CLUSTER_ID(cl), cl_index);
+#endif
+			ret = regulator_set_voltage(exynos_info[cl]->regulator,
+						volt, exynos_info[cl]->regulator_max_support_volt);
+			if (ret) {
+				ret = NOTIFY_BAD;
+				goto out;
+			}
+
+			exynos_info[cl]->cur_volt = volt;
+
+#ifdef CONFIG_EXYNOS_CL_DVFS_CPU
+			exynos_cl_dvfs_start(CLUSTER_ID(cl));
+#endif
+		}
+	}
+
+out:
+	mutex_unlock(&cpufreq_lock);
+
+	return ret;
+}
+
+static struct notifier_block exynos_tmu_nb = {
+	.notifier_call = exynos_cpufreq_tmu_notifier,
+};
+#endif
 
 static int exynos_cpufreq_reboot_notifier_call(struct notifier_block *this,
 				   unsigned long code, void *_cmd)
@@ -1705,7 +1661,7 @@ static int exynos_cpufreq_reboot_notifier_call(struct notifier_block *this,
 	bool set_abb_first_than_volt = false;
 	int volt, i, cl, cl_index;
 
-	for (cl = 0; cl < CL_END; cl++) {
+	for_each_cluster(cl) {
 		if (exynos_info[cl]->reboot_limit_freq)
 			pm_qos_add_request(&reboot_max_qos[cl], qos_max_class[cl],
 						exynos_info[cl]->reboot_limit_freq);
@@ -1721,13 +1677,16 @@ static int exynos_cpufreq_reboot_notifier_call(struct notifier_block *this,
 		volt = get_limit_voltage(volt);
 
 		if (exynos_info[cl]->abb_table)
-			set_abb_first_than_volt = is_set_abb_first(CLUSTER_ID(cl), freqs[cl]->old, max(bootfreq, freqs[cl]->old));
+			set_abb_first_than_volt =
+				is_set_abb_first(CLUSTER_ID(cl), freqs[cl]->old,
+							max(bootfreq, freqs[cl]->old));
 
 #ifdef CONFIG_EXYNOS_CL_DVFS_CPU
 		exynos_cl_dvfs_stop(CLUSTER_ID(cl), cl_index);
 #endif
 		if (!set_abb_first_than_volt)
-			if (regulator_set_voltage(exynos_info[cl]->regulator, volt, volt + VOLT_RANGE_STEP))
+			if (regulator_set_voltage(exynos_info[cl]->regulator,
+						volt, exynos_info[cl]->regulator_max_support_volt))
 				goto err;
 
 		exynos_info[cl]->cur_volt = volt;
@@ -1746,13 +1705,11 @@ static int exynos_cpufreq_reboot_notifier_call(struct notifier_block *this,
 		}
 
 		if (set_abb_first_than_volt)
-			if (regulator_set_voltage(exynos_info[cl]->regulator, volt, volt + VOLT_RANGE_STEP))
+			if (regulator_set_voltage(exynos_info[cl]->regulator,
+						volt, exynos_info[cl]->regulator_max_support_volt))
 				goto err;
 
 		exynos_info[cl]->cur_volt = volt;
-
-		if (exynos_info[cl]->set_ema)
-			exynos_info[cl]->set_ema(volt);
 
 		set_abb_first_than_volt = false;
 	}
@@ -1768,103 +1725,13 @@ static struct notifier_block exynos_cpufreq_reboot_notifier = {
 	.notifier_call = exynos_cpufreq_reboot_notifier_call,
 };
 
-static int exynos_cluster1_min_qos_handler(struct notifier_block *b, unsigned long val, void *v)
+static int exynos_cluster0_min_qos_handler(struct notifier_block *b,
+						unsigned long val, void *v)
 {
 	int ret;
 	unsigned long freq;
 	struct cpufreq_policy *policy;
-	int cpu = boot_cluster ? 0 : NR_CLUST0_CPUS;
-
-	freq = exynos_getspeed(cpu);
-	if (freq >= val)
-		goto good;
-
-	policy = cpufreq_cpu_get(cpu);
-
-	if (!policy)
-		goto bad;
-
-	if (!policy->user_policy.governor) {
-		cpufreq_cpu_put(policy);
-		goto bad;
-	}
-
-#if defined(CONFIG_CPU_FREQ_GOV_USERSPACE) || defined(CONFIG_CPU_FREQ_GOV_PERFORMANCE)
-	if ((strcmp(policy->user_policy.governor->name, "userspace") == 0)
-			|| strcmp(policy->user_policy.governor->name, "performance") == 0) {
-		cpufreq_cpu_put(policy);
-		goto good;
-	}
-#endif
-
-	ret = __cpufreq_driver_target(policy, val, CPUFREQ_RELATION_H);
-	cpufreq_cpu_put(policy);
-
-	if (ret < 0)
-		goto bad;
-
-good:
-	return NOTIFY_OK;
-bad:
-	return NOTIFY_BAD;
-}
-
-static struct notifier_block exynos_cluster1_min_qos_notifier = {
-	.notifier_call = exynos_cluster1_min_qos_handler,
-	.priority = INT_MAX,
-};
-
-static int exynos_cluster1_max_qos_handler(struct notifier_block *b, unsigned long val, void *v)
-{
-	int ret;
-	unsigned long freq;
-	struct cpufreq_policy *policy;
-	int cpu = boot_cluster ? 0 : NR_CLUST0_CPUS;
-
-	freq = exynos_getspeed(cpu);
-	if (freq <= val)
-		goto good;
-
-	policy = cpufreq_cpu_get(cpu);
-
-	if (!policy)
-		goto bad;
-
-	if (!policy->user_policy.governor) {
-		cpufreq_cpu_put(policy);
-		goto bad;
-	}
-
-#if defined(CONFIG_CPU_FREQ_GOV_USERSPACE) || defined(CONFIG_CPU_FREQ_GOV_PERFORMANCE)
-	if ((strcmp(policy->user_policy.governor->name, "userspace") == 0)
-			|| strcmp(policy->user_policy.governor->name, "performance") == 0) {
-		cpufreq_cpu_put(policy);
-		goto good;
-	}
-#endif
-	ret = __cpufreq_driver_target(policy, val, CPUFREQ_RELATION_H);
-	cpufreq_cpu_put(policy);
-
-	if (ret < 0)
-		goto bad;
-
-good:
-	return NOTIFY_OK;
-bad:
-	return NOTIFY_BAD;
-}
-
-static struct notifier_block exynos_cluster1_max_qos_notifier = {
-	.notifier_call = exynos_cluster1_max_qos_handler,
-	.priority = INT_MAX,
-};
-
-static int exynos_cluster0_min_qos_handler(struct notifier_block *b, unsigned long val, void *v)
-{
-	int ret;
-	unsigned long freq;
-	struct cpufreq_policy *policy;
-	int cpu = boot_cluster ? NR_CLUST1_CPUS : 0;
+	int cpu = CL0_POLICY_CPU;
 	unsigned int threshold_freq;
 
 #if defined(CONFIG_CPU_FREQ_GOV_INTERACTIVE)
@@ -1884,14 +1751,14 @@ static int exynos_cluster0_min_qos_handler(struct notifier_block *b, unsigned lo
 	if (!policy)
 		goto bad;
 
-	if (!policy->user_policy.governor) {
+	if (!policy->user_policy.governor || !policy->governor_enabled) {
 		cpufreq_cpu_put(policy);
 		goto bad;
 	}
 
 #if defined(CONFIG_CPU_FREQ_GOV_USERSPACE) || defined(CONFIG_CPU_FREQ_GOV_PERFORMANCE)
-	if ((strcmp(policy->user_policy.governor->name, "userspace") == 0)
-			|| strcmp(policy->user_policy.governor->name, "performance") == 0) {
+	if ((strcmp(policy->governor->name, "userspace") == 0)
+			|| strcmp(policy->governor->name, "performance") == 0) {
 		cpufreq_cpu_put(policy);
 		goto good;
 	}
@@ -1914,12 +1781,67 @@ static struct notifier_block exynos_cluster0_min_qos_notifier = {
 	.priority = INT_MAX,
 };
 
-static int exynos_cluster0_max_qos_handler(struct notifier_block *b, unsigned long val, void *v)
+static int exynos_cluster1_min_qos_handler(struct notifier_block *b,
+						unsigned long val, void *v)
 {
 	int ret;
 	unsigned long freq;
 	struct cpufreq_policy *policy;
-	int cpu = boot_cluster ? NR_CLUST1_CPUS : 0;
+	int cpu = CL1_POLICY_CPU;
+
+#ifdef CONFIG_SCHED_HMP
+	if (val)
+		enable_nonboot_cluster_cpus();
+	else
+		disable_nonboot_cluster_cpus();
+#endif
+
+	freq = exynos_getspeed(cpu);
+	if (freq >= val)
+		goto good;
+
+	policy = cpufreq_cpu_get(cpu);
+
+	if (!policy)
+		goto bad;
+
+	if (!policy->user_policy.governor || !policy->governor_enabled) {
+		cpufreq_cpu_put(policy);
+		goto bad;
+	}
+
+#if defined(CONFIG_CPU_FREQ_GOV_USERSPACE) || defined(CONFIG_CPU_FREQ_GOV_PERFORMANCE)
+	if ((strcmp(policy->governor->name, "userspace") == 0)
+			|| strcmp(policy->governor->name, "performance") == 0) {
+		cpufreq_cpu_put(policy);
+		goto good;
+	}
+#endif
+
+	ret = __cpufreq_driver_target(policy, val, CPUFREQ_RELATION_H);
+	cpufreq_cpu_put(policy);
+
+	if (ret < 0)
+		goto bad;
+
+good:
+	return NOTIFY_OK;
+bad:
+	return NOTIFY_BAD;
+}
+
+static struct notifier_block exynos_cluster1_min_qos_notifier = {
+	.notifier_call = exynos_cluster1_min_qos_handler,
+	.priority = INT_MAX,
+};
+
+static int exynos_cluster0_max_qos_handler(struct notifier_block *b,
+						unsigned long val, void *v)
+{
+	int ret;
+	unsigned long freq;
+	struct cpufreq_policy *policy;
+	int cpu = CL0_POLICY_CPU;
 
 	freq = exynos_getspeed(cpu);
 	if (freq <= val)
@@ -1930,14 +1852,14 @@ static int exynos_cluster0_max_qos_handler(struct notifier_block *b, unsigned lo
 	if (!policy)
 		goto bad;
 
-	if (!policy->user_policy.governor) {
+	if (!policy->user_policy.governor || !policy->governor_enabled) {
 		cpufreq_cpu_put(policy);
 		goto bad;
 	}
 
 #if defined(CONFIG_CPU_FREQ_GOV_USERSPACE) || defined(CONFIG_CPU_FREQ_GOV_PERFORMANCE)
-	if ((strcmp(policy->user_policy.governor->name, "userspace") == 0)
-			|| strcmp(policy->user_policy.governor->name, "performance") == 0) {
+	if ((strcmp(policy->governor->name, "userspace") == 0)
+			|| strcmp(policy->governor->name, "performance") == 0) {
 		cpufreq_cpu_put(policy);
 		goto good;
 	}
@@ -1960,388 +1882,109 @@ static struct notifier_block exynos_cluster0_max_qos_notifier = {
 	.priority = INT_MAX,
 };
 
-#if defined(CONFIG_EXYNOS_BIG_FREQ_BOOST)
-extern struct cpumask hmp_fast_cpu_mask;
-static int big_cpu_cnt;
-
-static int cpufreq_policy_notifier(struct notifier_block *nb,
-				    unsigned long event, void *data)
+static int exynos_cluster1_max_qos_handler(struct notifier_block *b,
+						unsigned long val, void *v)
 {
-	struct cpufreq_policy *policy = data;
-	unsigned long max_freq;
-
-	if (event != CPUFREQ_ADJUST || !policy->cpu)
-		return 0;
-
-	max_freq = exynos_cpufreq_get_possible_max_freq(big_cpu_cnt);
-
-	if (policy->max != max_freq)
-		cpufreq_verify_within_limits(policy, 0, max_freq);
-
-	return 0;
-}
-
-/* Notifier for cpufreq policy change */
-static struct notifier_block exynos_cpufreq_policy_nb = {
-	.notifier_call = cpufreq_policy_notifier,
-};
-
-static int exynos_cpufreq_cpus_notifier(struct notifier_block *nb,
-				    unsigned long event, void *data)
-{
-	struct cpumask mask;
-	struct cpumask policy_update_mask;
-	unsigned long timeout;
-
-	switch (event) {
-	case CPUS_DOWN_COMPLETE:
-	case CPUS_UP_PREPARE:
-		cpumask_copy(&mask, data);
-		cpumask_and(&mask, &mask, &hmp_fast_cpu_mask);
-		big_cpu_cnt = cpumask_weight(&mask);
-
-		/*
-		 * if policy_update_mask is 0, it means first hotplug in or last hotplug out
-		 * of fast_cpu domain
-		 */
-		cpumask_clear(&policy_update_mask);
-		cpumask_and(&policy_update_mask, &hmp_fast_cpu_mask, cpu_online_mask);
-		if (!cpumask_weight(&policy_update_mask))
-			return NOTIFY_OK;
-
-		/* if cpufreq_update_policy is failed after 50ms, cancel cpu_up */
-		timeout = jiffies + msecs_to_jiffies(50);
-		while(cpufreq_update_policy(cpumask_first(&policy_update_mask))
-							&& event == CPUS_UP_PREPARE) {
-			if (time_after(jiffies, timeout))
-				return NOTIFY_BAD;
-		}
-	}
-
-	if (event == CPUS_UP_PREPARE) {
-		mutex_lock(&cpufreq_lock);
-
-		if (unlikely(freqs[CL_ONE]->old > exynos_cpufreq_get_possible_max_freq(big_cpu_cnt))) {
-			pr_err("frequency(%d) is higher than possible max frequency of big cpu cnt: %d\n",
-			freqs[CL_ONE]->old, big_cpu_cnt);
-			mutex_unlock(&cpufreq_lock);
-
-			return NOTIFY_BAD;
-		}
-		mutex_unlock(&cpufreq_lock);
-	}
-
-	return NOTIFY_OK;
-}
-
-static struct notifier_block exynos_cpufreq_cpus_nb = {
-	.notifier_call = exynos_cpufreq_cpus_notifier,
-	.priority = INT_MIN,
-};
-#endif
-
-static int exynos_cpufreq_init(void)
-{
-	int i, ret = -EINVAL;
-	cluster_type cluster;
-	struct cpufreq_frequency_table *freq_table;
+	int ret;
+	unsigned long freq;
 	struct cpufreq_policy *policy;
+	int cpu = CL1_POLICY_CPU;
 
-	boot_cluster = 0;
+	freq = exynos_getspeed(cpu);
+	if (freq <= val)
+		goto good;
 
-	g_clamp_cpufreqs[CL_ONE] = UINT_MAX;
-	g_clamp_cpufreqs[CL_ZERO] = UINT_MAX;
+	policy = cpufreq_cpu_get(cpu);
 
-	/* Get to boot_cluster_num - 0 for CL_ZERO; 1 for CL_ONE */
-	boot_cluster = !MPIDR_AFFINITY_LEVEL(cpu_logical_map(0), 1);
-	pr_debug("%s: boot_cluster is %s\n", __func__,
-					boot_cluster == CL_ZERO ? "CL_ZERO" : "CL_ONE");
-	exynos_boot_cluster = boot_cluster;
-
-	init_cpumask_cluster_set(boot_cluster);
-
-	for (cluster = 0; cluster < CL_END; cluster++) {
-		exynos_info[cluster]->regulator = regulator_get(NULL, (cluster ? "vdd_mngs" : "vdd_apollo"));
-		if (IS_ERR(exynos_info[cluster]->regulator)) {
-			exynos_info[cluster]->regulator = regulator_get(NULL, (cluster ? "vdd_eagle" : "vdd_kfc"));
-			if (IS_ERR(exynos_info[cluster]->regulator)) {
-				pr_err("%s:failed to get resource vdd_%score\n", __func__,
-												(cluster ? "cluster1" : "cluster0"));
-				goto err_init;
-			}
-		}
-
-		if (exynos_info[cluster]->set_freq == NULL) {
-			pr_err("%s: No set_freq function (ERR)\n", __func__);
-			goto err_init;
-		}
-
-		freq_max[cluster] = exynos_info[cluster]->
-			freq_table[exynos_info[cluster]->max_support_idx].frequency;
-
-		freq_min[cluster] = exynos_info[cluster]->
-			freq_table[exynos_info[cluster]->min_support_idx].frequency;
-
-		set_boot_freq(cluster);
-		set_resume_freq(cluster);
-
-		exynos_info[cluster]->cur_volt = regulator_get_voltage(exynos_info[cluster]->regulator);
-
-		/* set initial old frequency */
-		freqs[cluster]->old = exynos_getspeed_cluster(cluster);
-
-		/*
-		 * boot freq index is needed if minimum supported frequency
-		 * greater than boot freq
-		 */
-			freq_table = exynos_info[cluster]->freq_table;
-			exynos_info[cluster]->boot_freq_idx = -1;
-			pr_debug("%s Core Max-Min frequency[%d - %d]KHz\n",
-				cluster ? "CL_ONE" : "CL_ZERO", freq_max[cluster], freq_min[cluster]);
-
-			for (i = L0; (freq_table[i].frequency != CPUFREQ_TABLE_END); i++) {
-				if (exynos_info[cluster]->boot_freq == freq_table[i].frequency) {
-					exynos_info[cluster]->boot_freq_idx = i;
-					pr_debug("boot frequency[%d] index %d\n",
-							exynos_info[cluster]->boot_freq, i);
-				}
-
-				if (freq_table[i].frequency > freq_max[cluster] ||
-					freq_table[i].frequency < freq_min[cluster])
-					freq_table[i].frequency = CPUFREQ_ENTRY_INVALID;
-			}
-
-		/* setup default qos constraints */
-		core_max_qos_const[cluster].target_value = freq_max[cluster];
-		core_max_qos_const[cluster].default_value = freq_max[cluster];
-		pm_qos_update_constraints(qos_max_class[cluster], &core_max_qos_const[cluster]);
-
-		pm_qos_add_notifier(qos_min_class[cluster],
-							(cluster ? &exynos_cluster1_min_qos_notifier :
-							&exynos_cluster0_min_qos_notifier));
-		pm_qos_add_notifier(qos_max_class[cluster],
-							(cluster ? &exynos_cluster1_max_qos_notifier :
-							&exynos_cluster0_max_qos_notifier));
-
-	}
-
-	register_hotcpu_notifier(&exynos_cpufreq_cpu_up_nb);
-	register_hotcpu_notifier(&exynos_cpufreq_cpu_down_nb);
-	register_pm_notifier(&exynos_cpufreq_nb);
-	register_reboot_notifier(&exynos_cpufreq_reboot_notifier);
-#ifdef CONFIG_EXYNOS_THERMAL
-	exynos_tmu_add_notifier(&exynos_tmu_nb);
-#endif
-
-#if defined(CONFIG_EXYNOS_BIG_FREQ_BOOST)
-	cpufreq_register_notifier(&exynos_cpufreq_policy_nb, CPUFREQ_POLICY_NOTIFIER);
-	register_cpus_notifier(&exynos_cpufreq_cpus_nb);
-	exynos_cpufreq_print_max_freq();
-#endif
-
-	/* block frequency scale before acquire boot lock */
-#if !defined(CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE) && !defined(CONFIG_CPU_FREQ_DEFAULT_GOV_POWERSAVE)
-	mutex_lock(&cpufreq_lock);
-	exynos_info[CL_ZERO]->blocked = true;
-	exynos_info[CL_ONE]->blocked = true;
-	mutex_unlock(&cpufreq_lock);
-#endif
-	if (cpufreq_register_driver(&exynos_driver)) {
-		pr_err("%s: failed to register cpufreq driver\n", __func__);
-		goto err_cpufreq;
-	}
-
-	for (cluster = 0; cluster < CL_END; cluster++) {
-		pm_qos_add_request(&core_min_qos[cluster], qos_min_class[cluster],
-						qos_min_default_value[cluster]);
-		pm_qos_add_request(&core_max_qos[cluster], qos_max_class[cluster],
-						core_max_qos_const[cluster].default_value);
-		pm_qos_add_request(&core_min_qos_real[cluster], qos_min_class[cluster],
-						qos_min_default_value[cluster]);
-		pm_qos_add_request(&core_max_qos_real[cluster], qos_max_class[cluster],
-						core_max_qos_const[cluster].default_value);
-
-		if (exynos_info[cluster]->boot_cpu_min_qos) {
-			pm_qos_add_request(&boot_min_qos[cluster], qos_min_class[cluster],
-						qos_min_default_value[cluster]);
-			if (!exynos_info[cluster]->boot_cpu_min_qos_timeout)
-				exynos_info[cluster]->boot_cpu_min_qos_timeout = 40 * USEC_PER_SEC;
-
-			pm_qos_update_request_timeout(&boot_min_qos[cluster],
-						exynos_info[cluster]->boot_cpu_min_qos,
-						exynos_info[cluster]->boot_cpu_min_qos_timeout);
-		}
-
-		if (exynos_info[cluster]->boot_cpu_max_qos) {
-			pm_qos_add_request(&boot_max_qos[cluster], qos_max_class[cluster],
-						core_max_qos_const[cluster].default_value);
-			if (!exynos_info[cluster]->boot_cpu_max_qos_timeout)
-				exynos_info[cluster]->boot_cpu_max_qos_timeout = 40 * USEC_PER_SEC;
-
-			pm_qos_update_request_timeout(&boot_max_qos[cluster],
-						exynos_info[cluster]->boot_cpu_max_qos,
-						exynos_info[cluster]->boot_cpu_max_qos_timeout);
-		}
-
-		if (exynos_info[cluster]->bus_table)
-			pm_qos_add_request(&exynos_mif_qos[cluster], PM_QOS_BUS_THROUGHPUT, 0);
-	}
-
-	/* unblock frequency scale */
-#if !defined(CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE) && !defined(CONFIG_CPU_FREQ_DEFAULT_GOV_POWERSAVE)
-	mutex_lock(&cpufreq_lock);
-	exynos_info[CL_ZERO]->blocked = false;
-	exynos_info[CL_ONE]->blocked = false;
-	mutex_unlock(&cpufreq_lock);
-#endif
-
-	/*
-	 * forced call cpufreq target function.
-	 * If target function is called by interactive governor when blocked cpufreq scale,
-	 * interactive governor's target_freq is updated to new_freq. But, frequency is
-	 * not changed because blocking cpufreq scale. And if governor request same frequency
-	 * after unblocked scale, speedchange_task is not wakeup because new_freq and target_freq
-	 * is same.
-	 */
-
-	policy = cpufreq_cpu_get(NR_CLUST0_CPUS);
 	if (!policy)
-		goto err_policy;
+		goto bad;
 
-	if (!policy->user_policy.governor) {
+	if (!policy->user_policy.governor || !policy->governor_enabled) {
 		cpufreq_cpu_put(policy);
-		goto err_policy;
+		goto bad;
 	}
 
-	smp_call_function_single(NR_CLUST0_CPUS, exynos_qos_nop, NULL, 0);
+#if defined(CONFIG_CPU_FREQ_GOV_USERSPACE) || defined(CONFIG_CPU_FREQ_GOV_PERFORMANCE)
+	if ((strcmp(policy->governor->name, "userspace") == 0)
+			|| strcmp(policy->governor->name, "performance") == 0) {
+		cpufreq_cpu_put(policy);
+		goto good;
+	}
+#endif
+
+	ret = __cpufreq_driver_target(policy, val, CPUFREQ_RELATION_H);
 	cpufreq_cpu_put(policy);
 
-	ret = cpufreq_sysfs_create_group(&mp_attr_group);
-	if (ret) {
-		pr_err("%s: failed to create mp-cpufreq sysfs interface\n", __func__);
-		goto err_mp_attr;
-	}
+	if (ret < 0)
+		goto bad;
 
-#ifdef CONFIG_PM
-	ret = sysfs_create_file(power_kobj, &cpufreq_table.attr);
-	if (ret) {
-		pr_err("%s: failed to create cpufreq_table sysfs interface\n", __func__);
-		goto err_cpu_table;
-	}
-
-	ret = sysfs_create_file(power_kobj, &cpufreq_min_limit.attr);
-	if (ret) {
-		pr_err("%s: failed to create cpufreq_min_limit sysfs interface\n", __func__);
-		goto err_cpufreq_min_limit;
-	}
-
-	ret = sysfs_create_file(power_kobj, &cpufreq_max_limit.attr);
-	if (ret) {
-		pr_err("%s: failed to create cpufreq_max_limit sysfs interface\n", __func__);
-		goto err_cpufreq_max_limit;
-	}
-#endif
-
-#ifdef CONFIG_SW_SELF_DISCHARGING
-	ret = sysfs_create_file(power_kobj, &cpufreq_self_discharging.attr);
-	if (ret) {
-		pr_err("%s: failed to create cpufreq_self_discharging sysfs interface\n", __func__);
-		goto err_cpufreq_self_discharging;
-	}
-#endif
-
-	exynos_cpufreq_init_done = true;
-	exynos_cpufreq_init_notify_call_chain(CPUFREQ_INIT_COMPLETE);
-
-	pr_info("%s: MP-CPUFreq Initialization Complete\n", __func__);
-	return 0;
-
-#ifdef CONFIG_SW_SELF_DISCHARGING
-err_cpufreq_self_discharging:
-#ifdef CONFIG_PM
-	sysfs_remove_file(power_kobj, &cpufreq_max_limit.attr);
-#endif
-#endif
-#ifdef CONFIG_PM
-err_cpufreq_max_limit:
-	sysfs_remove_file(power_kobj, &cpufreq_min_limit.attr);
-err_cpufreq_min_limit:
-	sysfs_remove_file(power_kobj, &cpufreq_table.attr);
-err_cpu_table:
-	cpufreq_sysfs_remove_group(&mp_attr_group);
-#endif
-err_policy:
-err_mp_attr:
-	for (cluster = 0; cluster < CL_END; cluster++) {
-		if (exynos_info[cluster]) {
-			if (exynos_info[cluster]->bus_table &&
-				pm_qos_request_active(&exynos_mif_qos[cluster]))
-				pm_qos_remove_request(&exynos_mif_qos[cluster]);
-
-			if (pm_qos_request_active(&boot_max_qos[cluster]))
-				pm_qos_remove_request(&boot_max_qos[cluster]);
-			if (pm_qos_request_active(&boot_min_qos[cluster]))
-				pm_qos_remove_request(&boot_min_qos[cluster]);
-
-			if (pm_qos_request_active(&core_min_qos[cluster]))
-				pm_qos_remove_request(&core_min_qos[cluster]);
-			if (pm_qos_request_active(&core_max_qos[cluster]))
-				pm_qos_remove_request(&core_max_qos[cluster]);
-			if (pm_qos_request_active(&core_min_qos_real[cluster]))
-				pm_qos_remove_request(&core_min_qos_real[cluster]);
-			if (pm_qos_request_active(&core_max_qos_real[cluster]))
-				pm_qos_remove_request(&core_max_qos_real[cluster]);
-		}
-	}
-	cpufreq_unregister_driver(&exynos_driver);
-err_cpufreq:
-	unregister_reboot_notifier(&exynos_cpufreq_reboot_notifier);
-	unregister_pm_notifier(&exynos_cpufreq_nb);
-	unregister_hotcpu_notifier(&exynos_cpufreq_cpu_up_nb);
-	unregister_hotcpu_notifier(&exynos_cpufreq_cpu_down_nb);
-#if defined(CONFIG_EXYNOS_BIG_FREQ_BOOST)
-	unregister_cpus_notifier(&exynos_cpufreq_cpus_nb);
-#endif
-err_init:
-	for (cluster = 0; cluster < CL_END; cluster++) {
-		/* remove all pm_qos requests */
-		if (exynos_info[cluster]) {
-			/* Remove pm_qos notifiers */
-			pm_qos_remove_notifier(qos_min_class[cluster],
-								(cluster ? &exynos_cluster1_min_qos_notifier :
-								&exynos_cluster0_min_qos_notifier));
-			pm_qos_remove_notifier(qos_max_class[cluster],
-								(cluster ? &exynos_cluster1_max_qos_notifier :
-								&exynos_cluster0_max_qos_notifier));
-
-			/* Release regulater handles */
-			if (exynos_info[cluster]->regulator)
-				regulator_put(exynos_info[cluster]->regulator);
-		}
-	}
-	pr_err("%s: failed initialization\n", __func__);
-
-	return ret;
+good:
+	return NOTIFY_OK;
+bad:
+	return NOTIFY_BAD;
 }
 
-static const struct of_device_id exynos_mp_cpufreq_match[] = {
-	{
-		.compatible = "samsung,exynos-mp-cpufreq",
-	},
-	{},
+static struct notifier_block exynos_cluster1_max_qos_notifier = {
+	.notifier_call = exynos_cluster1_max_qos_handler,
+	.priority = INT_MAX,
 };
-MODULE_DEVICE_TABLE(of, exynos_mp_cpufreq);
 
-static struct platform_device_id exynos_mp_cpufreq_driver_ids[] = {
-	{
-		.name		= "exynos-mp-cpufreq",
-	},
-	{ },
-};
-MODULE_DEVICE_TABLE(platform, exynos_mp_cpufreq_driver_ids);
+#define min_qos_notifier(cluster) (cluster ? &exynos_cluster1_min_qos_notifier : \
+					     &exynos_cluster0_min_qos_notifier)
+#define max_qos_notifier(cluster) (cluster ? &exynos_cluster1_max_qos_notifier : \
+					     &exynos_cluster0_max_qos_notifier)
+
+/********************************************************************************
+ *                               Data parsing                                   *
+ ********************************************************************************/
+static void __free_info(void *objp)
+{
+	if (objp)
+		kfree(objp);
+}
+
+static void free_info(int cluster)
+{
+	__free_info(exynos_info[cluster]->bus_table);
+	__free_info(exynos_info[cluster]->volt_table);
+	__free_info(exynos_info[cluster]->freq_table);
+
+	__free_info(exynos_info[cluster]);
+	__free_info(freqs[cluster]);
+}
+
+static int alloc_table(struct exynos_dvfs_info *ptr)
+{
+	int table_size = ptr->max_idx_num;
+
+	ptr->freq_table = kzalloc(sizeof(struct cpufreq_frequency_table)
+					* (table_size + 1), GFP_KERNEL);
+	if (ptr->freq_table == NULL) {
+		pr_err("%s: failed to allocate memory for freq_table\n", __func__);
+		return -ENOMEM;
+	}
+
+	ptr->volt_table = kzalloc(sizeof(unsigned int) * table_size, GFP_KERNEL);
+	if (ptr->volt_table == NULL) {
+		pr_err("%s: failed to allocate for volt_table\n", __func__);
+		kfree(ptr->freq_table);
+		return -ENOMEM;
+	}
+
+	ptr->bus_table = kzalloc(sizeof(unsigned int) * table_size, GFP_KERNEL);
+	if (ptr->bus_table == NULL) {
+		pr_err("%s: failed to allocate for bus_table\n", __func__);
+		kfree(ptr->freq_table);
+		kfree(ptr->volt_table);
+		return -ENOMEM;
+	}
+
+	return 0;
+}
 
 #if defined(CONFIG_ECT)
-static void exynos_mp_cpufreq_parse_minlock(char *cluster_name, unsigned int frequency, unsigned int *mif_freq)
+static void exynos_mp_cpufreq_parse_miflock(char *cluster_name,
+				unsigned int frequency, unsigned int *mif_freq)
 {
 	int i;
 	void *cpumif_block;
@@ -2366,9 +2009,10 @@ static void exynos_mp_cpufreq_parse_minlock(char *cluster_name, unsigned int fre
 	return;
 }
 
-static int exynos_mp_cpufreq_parse_frequency(char *cluster_name, struct exynos_dvfs_info *ptr)
+static int exynos_mp_cpufreq_parse_frequency(char *cluster_name,
+						struct exynos_dvfs_info *ptr)
 {
-	int i;
+	int ret, i;
 	void *dvfs_block;
 	struct ect_dvfs_domain *domain;
 
@@ -2380,33 +2024,18 @@ static int exynos_mp_cpufreq_parse_frequency(char *cluster_name, struct exynos_d
 	if (domain == NULL)
 		return -ENODEV;
 
-	ptr->freq_table = kzalloc(sizeof(struct cpufreq_frequency_table)
-				* (domain->num_of_level + 1), GFP_KERNEL);
-	if (ptr->freq_table == NULL) {
-		pr_err("%s: failed to allocate memory for freq_table\n", __func__);
-		return -ENOMEM;
-	}
-
-	ptr->volt_table = kzalloc(sizeof(unsigned int)
-				* domain->num_of_level, GFP_KERNEL);
-	if (ptr->volt_table == NULL) {
-		pr_err("%s: failed to allocate for volt_table\n", __func__);
-		return -ENOMEM;
-	}
-
-	ptr->bus_table = kzalloc(sizeof(unsigned int)
-				* domain->num_of_level, GFP_KERNEL);
-	if (ptr->bus_table == NULL) {
-		pr_err("%s: failed to allocate for bus_table\n", __func__);
-		return -ENOMEM;
-	}
-
 	ptr->max_idx_num = domain->num_of_level;
+
+	ret = alloc_table(ptr);
+	if (ret)
+		return ret;
+
 	for (i = 0; i < domain->num_of_level; ++i) {
 		ptr->freq_table[i].driver_data = i;
 		ptr->freq_table[i].frequency = domain->list_level[i].level;
 		ptr->volt_table[i] = 0;
-		exynos_mp_cpufreq_parse_minlock(cluster_name, ptr->freq_table[i].frequency, &ptr->bus_table[i]);
+		exynos_mp_cpufreq_parse_miflock(cluster_name,
+				ptr->freq_table[i].frequency, &ptr->bus_table[i]);
 	}
 
 	return 0;
@@ -2441,49 +2070,28 @@ static int exynos_mp_cpufreq_parse_dt(struct device_node *np, cluster_type cl)
 		return -ENODEV;
 
 	if (of_property_read_u32(np, (cl ? "cl1_boot_max_qos" : "cl0_boot_max_qos"),
-				&ptr->boot_cpu_max_qos))
+				&ptr->boot_max_qos))
 		return -ENODEV;
 
 	if (of_property_read_u32(np, (cl ? "cl1_boot_min_qos" : "cl0_boot_min_qos"),
-				&ptr->boot_cpu_min_qos))
+				&ptr->boot_min_qos))
+		return -ENODEV;
+
+	if (of_property_read_u32(np, (cl ? "cl1_boot_lock_time" : "cl0_boot_lock_time"),
+				&ptr->boot_lock_time))
 		return -ENODEV;
 
 	if (of_property_read_u32(np, (cl ? "cl1_en_ema" : "cl0_en_ema"),
 				&ptr->en_ema))
 		return -ENODEV;
 
-	if (cl == CL_ZERO) {
-		if (of_property_read_u32(np, "cl0_boost_freq", &ptr->boost_freq))
-			return -ENODEV;
-	}
-
-	if (of_property_read_u32(np, (cl ? "cl1_min_qos_freq" : "cl0_min_qos_freq"),
-				&ptr->min_qos_freq))
+	if (of_property_read_string(np, (cl ? "cl1_regulator" : "cl0_regulator"),
+				&regulator_name[cl]))
 		return -ENODEV;
 
 	if (cl == CL_ONE) {
-		if (of_property_read_u32(np, "cl1_boost_freq", &ptr->boost_freq))
-			return -ENODEV;
 		if (of_property_read_u32(np, "cl1_en_smpl", &ptr->en_smpl))
 			return -ENODEV;
-		if (of_property_read_u32(np, "cl1_reboot_limit_freq", &ptr->reboot_limit_freq))
-			return -ENODEV;
-#if defined(CONFIG_SEC_PM) && defined(CONFIG_MUIC_NOTIFIER)
-		if (of_property_read_u32(np, "cl1_jig_boot_max_qos", &ptr->jig_boot_cpu_max_qos))
-			return -ENODEV;
-#endif
-
-#if defined(CONFIG_EXYNOS_BIG_FREQ_BOOST)
-		ptr->max_support_idx_table = kzalloc(sizeof(unsigned int)
-				* (NR_CLUST1_CPUS + 1), GFP_KERNEL);
-		ret = of_property_read_u32_array(np, "cl1_max_support_idx_table",
-				(unsigned int *)ptr->max_support_idx_table, NR_CLUST1_CPUS + 1);
-		if (ret < 0)
-			return -ENODEV;
-
-		/* change max_support_idx */
-		ptr->max_support_idx = ptr->max_support_idx_table[1];
-#endif
 	}
 
 	cluster_name = (cl ? "cl1_dvfs_table" :  "cl0_dvfs_table");
@@ -2497,33 +2105,15 @@ static int exynos_mp_cpufreq_parse_dt(struct device_node *np, cluster_type cl)
 #endif
 	if (not_using_ect) {
 		/* memory alloc for table */
-		ptr->freq_table = kzalloc(sizeof(struct cpufreq_frequency_table)
-				* (ptr->max_idx_num + 1), GFP_KERNEL);
-		if (ptr->freq_table == NULL) {
-			pr_err("%s: failed to allocate memory for freq_table\n", __func__);
-			return -ENOMEM;
-		}
-
-		ptr->volt_table = kzalloc(sizeof(unsigned int)
-					* ptr->max_idx_num, GFP_KERNEL);
-		if (ptr->volt_table == NULL) {
-			pr_err("%s: failed to allocate for volt_table\n", __func__);
-			return -ENOMEM;
-		}
-
-		ptr->bus_table = kzalloc(sizeof(unsigned int)
-					* ptr->max_idx_num, GFP_KERNEL);
-		if (ptr->bus_table == NULL) {
-			pr_err("%s: failed to allocate for bus_table\n", __func__);
-			return -ENOMEM;
-		}
+		ret = alloc_table(ptr);
+		if (ret)
+			return ret;
 
 		/* temparary table for dt parse*/
 		table_ptr = kzalloc(sizeof(struct cpufreq_dvfs_table)
 				* ptr->max_idx_num, GFP_KERNEL);
 		if (table_ptr == NULL) {
 			pr_err("%s: failed to allocate for cpufreq_dvfs_table\n", __func__);
-			kfree(table_ptr);
 			return -ENOMEM;
 		}
 		table_size = sizeof(struct cpufreq_dvfs_table) / sizeof(unsigned int);
@@ -2535,7 +2125,7 @@ static int exynos_mp_cpufreq_parse_dt(struct device_node *np, cluster_type cl)
 			return -ENODEV;
 		}
 
-		/* freq/volt/bus table is initailized by DT */
+		/* Fill freq/volt/bus table with information from DT */
 		for (i = 0; i < ptr->max_idx_num; i++) {
 			ptr->freq_table[i].driver_data = table_ptr[i].index;
 			ptr->freq_table[i].frequency = table_ptr[i].frequency;
@@ -2552,21 +2142,311 @@ static int exynos_mp_cpufreq_parse_dt(struct device_node *np, cluster_type cl)
 	return 0;
 }
 
+/********************************************************************************
+ *                            Driver initialization                             *
+ ********************************************************************************/
+bool exynos_cpufreq_init_done;
+
+static void init_cluster_cpumask(void)
+{
+	unsigned int cpu, cluster;
+
+	for_each_cpu(cpu, cpu_possible_mask) {
+		if (cpu < NR_CLUST0_CPUS)
+			cluster = CL_ZERO;
+		else
+			cluster = CL_ONE;
+
+		cpumask_set_cpu(cpu, &cluster_cpus[cluster]);
+		per_cpu(cpu_cur_cluster, cpu) = cluster;
+	}
+}
+
+static void set_boot_freq(cluster_type cluster)
+{
+
+	if (exynos_info[cluster]) {
+		exynos_info[cluster]->boot_freq
+				= clk_get_freq(cluster);
+		pr_info("Cluster[%d] BootFreq: %dKHz\n", cluster,
+						exynos_info[cluster]->boot_freq);
+	}
+
+	return;
+}
+
+static void remove_pm_qos_notifier(int cluster)
+{
+	pm_qos_remove_notifier(qos_min_class[cluster], min_qos_notifier(cluster));
+	pm_qos_remove_notifier(qos_max_class[cluster], max_qos_notifier(cluster));
+}
+
+static void add_pm_qos_notifier(int cluster)
+{
+	pm_qos_add_notifier(qos_min_class[cluster], min_qos_notifier(cluster));
+	pm_qos_add_notifier(qos_max_class[cluster], max_qos_notifier(cluster));
+}
+
+static void __remove_pm_qos(struct pm_qos_request *req)
+{
+	if (pm_qos_request_active(req))
+		pm_qos_remove_request(req);
+}
+
+static void remove_pm_qos(int cluster)
+{
+	if (exynos_info[cluster]->bus_table)
+		__remove_pm_qos(&exynos_mif_qos[cluster]);
+
+	__remove_pm_qos(&boot_max_qos[cluster]);
+	__remove_pm_qos(&boot_min_qos[cluster]);
+	__remove_pm_qos(&core_max_qos[cluster]);
+	__remove_pm_qos(&core_min_qos[cluster]);
+	__remove_pm_qos(&core_min_qos_real[cluster]);
+	__remove_pm_qos(&core_max_qos_real[cluster]);
+
+}
+
+static int exynos_mp_cpufreq_driver_init(void)
+{
+	int i, ret = -EINVAL;
+	cluster_type cluster;
+	struct cpufreq_frequency_table *freq_table;
+	struct cpufreq_policy *policy;
+
+	g_clamp_cpufreqs[CL_ONE] = UINT_MAX;
+	g_clamp_cpufreqs[CL_ZERO] = UINT_MAX;
+
+	init_cluster_cpumask();
+
+	for_each_cluster(cluster) {
+		unsigned int boot_volt;
+		exynos_info[cluster]->regulator = regulator_get(NULL, regulator_name[cluster]);
+		if (IS_ERR(exynos_info[cluster]->regulator)) {
+			pr_err("%s:failed to get regulator %s\n", __func__,
+							regulator_name[cluster]);
+				goto err_init;
+		}
+
+		exynos_info[cluster]->regulator_max_support_volt =
+			regulator_get_max_support_voltage(exynos_info[cluster]->regulator);
+
+		freq_max[cluster] = exynos_info[cluster]->
+			freq_table[exynos_info[cluster]->max_support_idx].frequency;
+		freq_min[cluster] = exynos_info[cluster]->
+			freq_table[exynos_info[cluster]->min_support_idx].frequency;
+
+		set_boot_freq(cluster);
+		set_resume_freq(cluster);
+
+		boot_volt = get_boot_volt(cluster);
+		regulator_set_voltage(exynos_info[cluster]->regulator, boot_volt,
+					exynos_info[cluster]->regulator_max_support_volt);
+
+		exynos_info[cluster]->cur_volt = regulator_get_voltage(exynos_info[cluster]->regulator);
+
+		/* set initial old frequency */
+		freqs[cluster]->old = exynos_getspeed_cluster(cluster);
+
+		/*
+		 * boot freq index is needed if minimum supported frequency
+		 * greater than boot freq
+		 */
+		freq_table = exynos_info[cluster]->freq_table;
+		exynos_info[cluster]->boot_freq_idx = -1;
+
+		for (i = L0; (freq_table[i].frequency != CPUFREQ_TABLE_END); i++) {
+			if (exynos_info[cluster]->boot_freq == freq_table[i].frequency)
+				exynos_info[cluster]->boot_freq_idx = i;
+
+			if (freq_table[i].frequency > freq_max[cluster] ||
+				freq_table[i].frequency < freq_min[cluster])
+				freq_table[i].frequency = CPUFREQ_ENTRY_INVALID;
+		}
+
+		/* setup default qos constraints */
+		core_max_qos_const[cluster].target_value = freq_max[cluster];
+		core_max_qos_const[cluster].default_value = freq_max[cluster];
+		pm_qos_update_constraints(qos_max_class[cluster], &core_max_qos_const[cluster]);
+
+		add_pm_qos_notifier(cluster);
+
+		if (cluster == CL_ZERO)
+			exynos_cpufreq_regulator_register_notifier(cluster);
+		else if (cluster != CL_ZERO &&
+			 strcmp(regulator_name[cluster], regulator_name[CL_ZERO]))
+			exynos_cpufreq_regulator_register_notifier(cluster);
+	}
+
+	register_hotcpu_notifier(&exynos_cpufreq_cpu_up_nb);
+	register_hotcpu_notifier(&exynos_cpufreq_cpu_down_nb);
+	register_pm_notifier(&exynos_cpufreq_nb);
+	register_reboot_notifier(&exynos_cpufreq_reboot_notifier);
+#ifdef CONFIG_EXYNOS_THERMAL
+	exynos_tmu_add_notifier(&exynos_tmu_nb);
+#endif
+
+	/* block frequency scale before acquire boot lock */
+#if !defined(CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE) && !defined(CONFIG_CPU_FREQ_DEFAULT_GOV_POWERSAVE)
+	mutex_lock(&cpufreq_lock);
+	exynos_info[CL_ZERO]->blocked = true;
+	exynos_info[CL_ONE]->blocked = true;
+	mutex_unlock(&cpufreq_lock);
+#endif
+	if (cpufreq_register_driver(&exynos_driver)) {
+		pr_err("%s: failed to register cpufreq driver\n", __func__);
+		goto err_cpufreq;
+	}
+
+	for_each_cluster(cluster) {
+		pm_qos_add_request(&core_min_qos[cluster], qos_min_class[cluster],
+						qos_min_default_value[cluster]);
+		pm_qos_add_request(&core_max_qos[cluster], qos_max_class[cluster],
+						core_max_qos_const[cluster].default_value);
+		pm_qos_add_request(&core_min_qos_real[cluster], qos_min_class[cluster],
+						qos_min_default_value[cluster]);
+		pm_qos_add_request(&core_max_qos_real[cluster], qos_max_class[cluster],
+						core_max_qos_const[cluster].default_value);
+
+		pm_qos_add_request(&boot_min_qos[cluster], qos_min_class[cluster],
+						qos_min_default_value[cluster]);
+		pm_qos_update_request_timeout(&boot_min_qos[cluster],
+						exynos_info[cluster]->boot_min_qos,
+						exynos_info[cluster]->boot_lock_time);
+		pm_qos_add_request(&boot_max_qos[cluster], qos_max_class[cluster],
+						core_max_qos_const[cluster].default_value);
+		pm_qos_update_request_timeout(&boot_max_qos[cluster],
+						exynos_info[cluster]->boot_max_qos,
+						exynos_info[cluster]->boot_lock_time);
+
+		if (exynos_info[cluster]->bus_table)
+			pm_qos_add_request(&exynos_mif_qos[cluster], PM_QOS_BUS_THROUGHPUT, 0);
+	}
+
+	/* unblock frequency scale */
+#if !defined(CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE) && !defined(CONFIG_CPU_FREQ_DEFAULT_GOV_POWERSAVE)
+	mutex_lock(&cpufreq_lock);
+	exynos_info[CL_ZERO]->blocked = false;
+	exynos_info[CL_ONE]->blocked = false;
+	mutex_unlock(&cpufreq_lock);
+#endif
+
+	/*
+	 * forced call cpufreq target function.
+	 * If target function is called by interactive governor when blocked cpufreq scale,
+	 * interactive governor's target_freq is updated to new_freq. But, frequency is
+	 * not changed because blocking cpufreq scale. And if governor request same frequency
+	 * after unblocked scale, speedchange_task is not wakeup because new_freq and target_freq
+	 * is same.
+	 */
+
+	policy = cpufreq_cpu_get(NR_CLUST0_CPUS);
+	if (!policy)
+		goto err_policy;
+
+	if (!policy->user_policy.governor) {
+		cpufreq_cpu_put(policy);
+		goto err_policy;
+	}
+
+#if !defined(CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE) && !defined(CONFIG_CPU_FREQ_DEFAULT_GOV_USERSPACE)
+	__cpufreq_driver_target(policy, policy->min, CPUFREQ_RELATION_H);
+#endif
+	cpufreq_cpu_put(policy);
+
+	ret = cpufreq_sysfs_create_group(&mp_attr_group);
+	if (ret) {
+		pr_err("%s: failed to create mp-cpufreq sysfs interface\n", __func__);
+		goto err_mp_attr;
+	}
+
+#ifdef CONFIG_PM
+	ret = sysfs_create_file(power_kobj, &cpufreq_table.attr);
+	if (ret) {
+		pr_err("%s: failed to create cpufreq_table sysfs interface\n", __func__);
+		goto err_cpu_table;
+	}
+
+	ret = sysfs_create_file(power_kobj, &cpufreq_min_limit.attr);
+	if (ret) {
+		pr_err("%s: failed to create cpufreq_min_limit sysfs interface\n", __func__);
+		goto err_cpufreq_min_limit;
+	}
+
+	ret = sysfs_create_file(power_kobj, &cpufreq_max_limit.attr);
+	if (ret) {
+		pr_err("%s: failed to create cpufreq_max_limit sysfs interface\n", __func__);
+		goto err_cpufreq_max_limit;
+	}
+#endif
+#ifdef CONFIG_SW_SELF_DISCHARGING
+	ret = sysfs_create_file(power_kobj, &cpufreq_self_discharging.attr);
+	if (ret) {
+		pr_err("%s: failed to create cpufreq_self_discharging sysfs interface\n", __func__);
+		goto err_cpufreq_self_discharging;
+	}
+#endif
+
+	exynos_cpufreq_init_done = true;
+	exynos_cpufreq_init_notify_call_chain(CPUFREQ_INIT_COMPLETE);
+
+	pr_info("%s: MP-CPUFreq Initialization Complete\n", __func__);
+	return 0;
+
+#ifdef CONFIG_SW_SELF_DISCHARGING
+err_cpufreq_self_discharging:
+	sysfs_remove_file(power_kobj, &cpufreq_max_limit.attr);
+#endif
+#ifdef CONFIG_PM
+err_cpufreq_max_limit:
+	sysfs_remove_file(power_kobj, &cpufreq_min_limit.attr);
+err_cpufreq_min_limit:
+	sysfs_remove_file(power_kobj, &cpufreq_table.attr);
+err_cpu_table:
+	cpufreq_sysfs_remove_group(&mp_attr_group);
+#endif
+err_policy:
+err_mp_attr:
+	for_each_cluster(cluster)
+		if (exynos_info[cluster])
+			remove_pm_qos(cluster);
+
+	cpufreq_unregister_driver(&exynos_driver);
+err_cpufreq:
+	unregister_reboot_notifier(&exynos_cpufreq_reboot_notifier);
+	unregister_pm_notifier(&exynos_cpufreq_nb);
+	unregister_hotcpu_notifier(&exynos_cpufreq_cpu_up_nb);
+	unregister_hotcpu_notifier(&exynos_cpufreq_cpu_down_nb);
+err_init:
+	for_each_cluster(cluster) {
+		/* remove all pm_qos requests */
+		if (exynos_info[cluster]) {
+			/* Remove pm_qos notifiers */
+			remove_pm_qos_notifier(cluster);
+
+			/* Release regulater handles */
+			if (exynos_info[cluster]->regulator)
+				regulator_put(exynos_info[cluster]->regulator);
+		}
+	}
+
+	pr_err("%s: failed initialization\n", __func__);
+
+	return ret;
+}
 
 static int exynos_mp_cpufreq_probe(struct platform_device *pdev)
 {
 	int ret;
 	cluster_type cluster;
 
-	pm_qos_add_request(&cpufreq_cpu_hotplug_max_request, PM_QOS_CPU_ONLINE_MAX,
-						PM_QOS_CPU_ONLINE_MAX_DEFAULT_VALUE);
+	pm_qos_add_request(&cpufreq_cpu_hotplug_request, PM_QOS_CPU_ONLINE_MIN,
+						PM_QOS_CPU_ONLINE_MIN_DEFAULT_VALUE);
 
-	for (cluster = 0; cluster < CL_END; cluster++) {
+	for_each_cluster(cluster) {
 		exynos_info[cluster] = kzalloc(sizeof(struct exynos_dvfs_info), GFP_KERNEL);
-		if (!exynos_info[cluster]) {
+		if (!exynos_info[cluster])
 			return -ENOMEM;
-			goto err_init;
-		}
 
 		freqs[cluster] = kzalloc(sizeof(struct cpufreq_freqs), GFP_KERNEL);
 		if (!freqs[cluster]) {
@@ -2591,43 +2471,25 @@ static int exynos_mp_cpufreq_probe(struct platform_device *pdev)
 	if (ret < 0)
 		goto err_init;
 
-	ret = exynos_cpufreq_init();
+	ret = exynos_mp_cpufreq_driver_init();
 	if (ret < 0)
 		goto err_init;
 
-	if (exynos_info[CL_ONE]->en_smpl && exynos_info[CL_ONE]->init_smpl) {
-		exynos_cpufreq_smpl_warn_register_notifier(&exynos_cpufreq_smpl_warn_notifier);
-		if (exynos_info[CL_ONE]->init_smpl() < 0) {
-			pr_err("CL_ONE failed SMPL_WARN init\n");
-			exynos_info[CL_ONE]->en_smpl = 0;
+	if (exynos_info[CL_ONE]->init_smpl) {
+		if (exynos_info[CL_ONE]->init_smpl()) {
 			exynos_info[CL_ONE]->check_smpl = NULL;
-			exynos_cpufreq_smpl_warn_unregister_notifier(&exynos_cpufreq_smpl_warn_notifier);
-		} else {
-			ret = sysfs_create_file(power_kobj, &smpl_warn_ctrl.attr);
-			if (ret < 0)
-				pr_err("%s: failed to create smpl_warn_ctrl sysfs interface\n", __func__);
+			goto smpl_init_fail;
 		}
+
+		exynos_cpufreq_smpl_warn_register_notifier(&exynos_cpufreq_smpl_warn_notifier);
 	}
 
+smpl_init_fail:
 	return ret;
 
 err_init:
-	for (cluster = 0; cluster < CL_END; cluster++) {
-		if (exynos_info[cluster]->bus_table)
-			kfree(exynos_info[cluster]->bus_table);
-
-		if (exynos_info[cluster]->volt_table)
-			kfree(exynos_info[cluster]->volt_table);
-
-		if (exynos_info[cluster]->freq_table)
-			kfree(exynos_info[cluster]->freq_table);
-
-		if (exynos_info[cluster])
-			kfree(exynos_info[cluster]);
-
-		if (freqs[cluster])
-			kfree(freqs[cluster]);
-	}
+	for_each_cluster(cluster)
+		free_info(cluster);
 
 	pr_err("%s: failed initialization\n", __func__);
 
@@ -2638,70 +2500,51 @@ static int exynos_mp_cpufreq_remove(struct platform_device *pdev)
 {
 	cluster_type cluster;
 
-	for (cluster = 0; cluster < CL_END; cluster++) {
-		if (exynos_info[cluster]->bus_table &&
-				pm_qos_request_active(&exynos_mif_qos[cluster]))
-			pm_qos_remove_request(&exynos_mif_qos[cluster]);
-
-		if (pm_qos_request_active(&boot_max_qos[cluster]))
-			pm_qos_remove_request(&boot_max_qos[cluster]);
-		if (pm_qos_request_active(&boot_min_qos[cluster]))
-			pm_qos_remove_request(&boot_min_qos[cluster]);
-		if (pm_qos_request_active(&core_min_qos[cluster]))
-			pm_qos_remove_request(&core_min_qos[cluster]);
-		if (pm_qos_request_active(&core_max_qos[cluster]))
-			pm_qos_remove_request(&core_max_qos[cluster]);
-		if (pm_qos_request_active(&core_min_qos_real[cluster]))
-			pm_qos_remove_request(&core_min_qos_real[cluster]);
-		if (pm_qos_request_active(&core_max_qos_real[cluster]))
-			pm_qos_remove_request(&core_max_qos_real[cluster]);
-
-		/* Remove pm_qos notifiers */
-		pm_qos_remove_notifier(qos_min_class[cluster],
-				(cluster ? &exynos_cluster1_min_qos_notifier :
-				 &exynos_cluster0_min_qos_notifier));
-		pm_qos_remove_notifier(qos_max_class[cluster],
-				(cluster ? &exynos_cluster1_max_qos_notifier :
-				 &exynos_cluster0_max_qos_notifier));
+	for_each_cluster(cluster) {
+		/* Remove pm_qos and notifiers */
+		remove_pm_qos(cluster);
+		remove_pm_qos_notifier(cluster);
 
 		/* Release regulater handles */
 		if (exynos_info[cluster]->regulator)
 			regulator_put(exynos_info[cluster]->regulator);
 
-		/* free table momory */
-		if (exynos_info[cluster]->bus_table)
-			kfree(exynos_info[cluster]->bus_table);
-
-		if (exynos_info[cluster]->volt_table)
-			kfree(exynos_info[cluster]->volt_table);
-
-		if (exynos_info[cluster]->freq_table)
-			kfree(exynos_info[cluster]->freq_table);
-
-		if (exynos_info[cluster])
-			kfree(exynos_info[cluster]);
-
-		if (freqs[cluster])
-			kfree(freqs[cluster]);
+		/* free driver information */
+		free_info(cluster);
 	}
+
+#ifdef CONFIG_PM
+	sysfs_remove_file(power_kobj, &cpufreq_min_limit.attr);
+	sysfs_remove_file(power_kobj, &cpufreq_table.attr);
+#endif
+	cpufreq_sysfs_remove_group(&mp_attr_group);
+
 	unregister_reboot_notifier(&exynos_cpufreq_reboot_notifier);
 	unregister_pm_notifier(&exynos_cpufreq_nb);
 	unregister_hotcpu_notifier(&exynos_cpufreq_cpu_up_nb);
 	unregister_hotcpu_notifier(&exynos_cpufreq_cpu_down_nb);
 
-#if defined(CONFIG_EXYNOS_BIG_FREQ_BOOST)
-	unregister_cpus_notifier(&exynos_cpufreq_cpus_nb);
-#endif
-
-#ifdef CONFIG_PM
-	sysfs_remove_file(power_kobj, &cpufreq_min_limit.attr);
-	sysfs_remove_file(power_kobj, &cpufreq_table.attr);
-	cpufreq_sysfs_remove_group(&mp_attr_group);
-#endif
-
+	exynos_cpufreq_smpl_warn_unregister_notifier(&exynos_cpufreq_smpl_warn_notifier);
 	cpufreq_unregister_driver(&exynos_driver);
+
 	return 0;
 }
+
+static const struct of_device_id exynos_mp_cpufreq_match[] = {
+	{
+		.compatible = "samsung,exynos-mp-cpufreq",
+	},
+	{},
+};
+MODULE_DEVICE_TABLE(of, exynos_mp_cpufreq);
+
+static struct platform_device_id exynos_mp_cpufreq_driver_ids[] = {
+	{
+		.name		= "exynos-mp-cpufreq",
+	},
+	{ },
+};
+MODULE_DEVICE_TABLE(platform, exynos_mp_cpufreq_driver_ids);
 
 static struct platform_driver exynos_mp_cpufreq_driver = {
 	.probe	= exynos_mp_cpufreq_probe,
@@ -2729,92 +2572,7 @@ static int __init exynos_mp_cpufreq_init(void)
 
 	return platform_driver_register(&exynos_mp_cpufreq_driver);
 }
-#ifdef CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE
 device_initcall(exynos_mp_cpufreq_init);
-#else
-late_initcall(exynos_mp_cpufreq_init);
-#endif
-
-#if defined(CONFIG_SEC_PM) && defined(CONFIG_MUIC_NOTIFIER)
-
-/* In case of CCIC, check jig detection by boot param */
-#if defined(CONFIG_MUIC_SUPPORT_CCIC) && defined(CONFIG_SEC_FACTORY)
-static bool jig_is_attached = false;
-static __init int get_jig_status(char *arg)
-{
-	jig_is_attached = true;	
-	return 0;
-}
-
-early_param("jig", get_jig_status);
-#else
-static struct notifier_block cpufreq_muic_nb;
-static bool jig_is_attached;
-
-static int exynos_cpufreq_muic_notifier(struct notifier_block *nb,
-				unsigned long action, void *data)
-{
-	muic_attached_dev_t attached_dev = *(muic_attached_dev_t *)data;
-
-	switch (attached_dev) {
-	case ATTACHED_DEV_JIG_UART_OFF_MUIC:
-	case ATTACHED_DEV_JIG_UART_OFF_VB_MUIC:
-	case ATTACHED_DEV_JIG_UART_OFF_VB_OTG_MUIC:
-	case ATTACHED_DEV_JIG_UART_OFF_VB_FG_MUIC:
-		if (action == MUIC_NOTIFY_CMD_DETACH)
-			jig_is_attached = false;
-		else if (action == MUIC_NOTIFY_CMD_ATTACH)
-			jig_is_attached = true;
-		else
-			pr_err("%s - ACTION Error!\n", __func__);
-		break;
-	default:
-		break;
-	}
-
-	return NOTIFY_DONE;
-}
-#endif
-static int __init exynos_cpufreq_late_init(void)
-{
-	cluster_type cluster;
-	unsigned long timeout = 500 * USEC_PER_SEC;
-
-#ifdef CONFIG_SEC_FACTORY
-	timeout = 100 * USEC_PER_SEC;
-#endif
-
-#if defined(CONFIG_MUIC_SUPPORT_CCIC) && defined(CONFIG_SEC_FACTORY)
-	if (!jig_is_attached)
-		return 0;
-#else
-	muic_notifier_register(&cpufreq_muic_nb,
-			exynos_cpufreq_muic_notifier, MUIC_NOTIFY_DEV_CPUFREQ);
-
-	if (!jig_is_attached)
-		return 0;
-#endif
-	pr_info("%s: JIG is attached: boot cpu qos %lu sec\n", __func__,
-			timeout / USEC_PER_SEC);
-
-	for (cluster = 0; cluster < CL_END; cluster++) {
-		if (!exynos_info[cluster]->jig_boot_cpu_max_qos)
-			exynos_info[cluster]->jig_boot_cpu_max_qos =
-				exynos_info[cluster]->boot_cpu_max_qos;
-
-		if (exynos_info[cluster]->jig_boot_cpu_max_qos)
-			pm_qos_add_request(&jig_boot_max_qos[cluster],
-					qos_max_class[cluster],
-					core_max_qos_const[cluster].default_value);
-			pm_qos_update_request_timeout(&jig_boot_max_qos[cluster],
-					exynos_info[cluster]->jig_boot_cpu_max_qos,
-					timeout);
-	}
-	return 0;
-}
-
-late_initcall(exynos_cpufreq_late_init);
-#endif /* CONFIG_SEC_PM && CONFIG_MUIC_NOTIFIER && CONFIG_MUIC_SUPPORT_CCIC is not defined */
 
 static void __exit exynos_mp_cpufreq_exit(void)
 {

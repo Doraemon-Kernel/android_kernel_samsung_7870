@@ -27,21 +27,24 @@
 
 #include <asm/byteorder.h>
 #include <crypto/aes.h>
-#include <crypto/hash.h>
 #include <crypto/authenc.h>
 
 #include "fmpdev_int.h"
 #include "fmp_integrity.h"
 #include "fmplib.h"
 
+#include "sha256.h"
+#include "hmac-sha256.h"
+
 static int fips_fmp_result;
 static const char pass[] = "passed";
 static const char fail[] = "failed";
 
-static const char *ALG_SHA256_FMP = "sha256-fmp";
-static const char *ALG_HMAC_SHA256_FMP = "hmac-fmp(sha256-fmp)";
+static const char *ALG_SHA256 = "sha256";
+static const char *ALG_HMAC_SHA256 = "hmac(sha256)";
 
 extern int fips_fmp_init(struct device *dev);
+extern void fips_fmp_exit(struct device *dev);
 extern struct fips_fmp_ops fips_fmp_fops;
 static const struct of_device_id exynos_fips_fmp_match[];
 
@@ -69,20 +72,6 @@ static void set_fmp_fips_state(uint32_t val)
 
 #define AES_XTS_ENC_TEST_VECTORS 5
 #define AES_CBC_ENC_TEST_VECTORS 4
-
-/*
- * Indexes into the xbuf to simulate cross-page access.
- */
-#define IDX1            32
-#define IDX2            32400
-#define IDX3            1
-#define IDX4            8193
-#define IDX5            22222
-#define IDX6            17101
-#define IDX7            27333
-#define IDX8            3000
-
-static unsigned int IDX[8] = { IDX1, IDX2, IDX3, IDX4, IDX5, IDX6, IDX7, IDX8 };
 
 /* ====== Compile-time config ====== */
 
@@ -1182,240 +1171,53 @@ err_alloc_inbuf:
 	return -1;
 }
 
-struct fmp_test_result {
-	struct completion completion;
-	int err;
-};
-
-static int do_one_async_hash_op(struct ahash_request *req,
-				struct fmp_test_result *tr,
-				int ret)
+static int alg_test_sha256(void)
 {
-	if (ret == -EINPROGRESS || ret == -EBUSY) {
-		ret = wait_for_completion_interruptible(&tr->completion);
-		if (!ret)
-			ret = tr->err;
-		reinit_completion(&tr->completion);
-	}
-	return ret;
+        int i;
+        unsigned char buf[SHA256_DIGEST_LENGTH];
+
+	for (i = 0; i < SHA256_TEST_VECTORS; i++) {
+		if (0 != sha256(sha256_tv_template[i].plaintext, sha256_tv_template[i].psize, buf))
+			return -EINVAL;
+
+                if (memcmp(buf, sha256_tv_template[i].digest, SHA256_DIGEST_LENGTH)) {
+                        print_hex_dump_bytes("FIPS SHA256 REQ: ", DUMP_PREFIX_NONE,
+                                                        sha256_tv_template[i].digest,
+                                                        SHA256_DIGEST_LENGTH);
+                        print_hex_dump_bytes("FIPS SHA256 RES: ", DUMP_PREFIX_NONE,
+                                                        buf,
+                                                        SHA256_DIGEST_LENGTH);
+                        return -EINVAL;
+                }
+        }
+
+        return 0;
 }
 
-static void test_complete(struct crypto_async_request *req, int err)
+static int alg_test_hmac_sha256(void)
 {
-	struct fmp_test_result *res = req->data;
+        int i;
+        unsigned char buf[SHA256_DIGEST_LENGTH];
 
-	if (err == -EINPROGRESS)
-		return;
+	for (i = 0; i < HMAC_SHA256_TEST_VECTORS; i++) {
+		if (0 != hmac_sha256(hmac_sha256_tv_template[i].key,
+			hmac_sha256_tv_template[i].ksize,
+			hmac_sha256_tv_template[i].plaintext,
+			hmac_sha256_tv_template[i].psize, buf))
+			return -EINVAL;
 
-	res->err = err;
-	complete(&res->completion);
-}
+                if (memcmp(buf, hmac_sha256_tv_template[i].digest, SHA256_DIGEST_LENGTH)) {
+                        print_hex_dump_bytes("FIPS HMAC-SHA256 REQ: ", DUMP_PREFIX_NONE,
+                                                        hmac_sha256_tv_template[i].digest,
+                                                        SHA256_DIGEST_LENGTH);
+                        print_hex_dump_bytes("FIPS HMAC-SHA256 RES: ", DUMP_PREFIX_NONE,
+                                                        buf,
+                                                        SHA256_DIGEST_LENGTH);
+                        return -EINVAL;
+                }
+        }
 
-static int test_hash(struct crypto_ahash *tfm, struct hash_testvec *template,
-		     unsigned int tcount, bool use_digest)
-{
-	const char *algo = crypto_tfm_alg_driver_name(crypto_ahash_tfm(tfm));
-	unsigned int i, j, k, temp;
-	struct scatterlist sg[8];
-	char result[64];
-	struct ahash_request *req;
-	struct fmp_test_result tresult;
-	void *hash_buff;
-	char *xbuf[XBUFSIZE];
-	int ret = -ENOMEM;
-
-	if (alloc_buf(xbuf))
-		goto out_nobuf;
-
-	init_completion(&tresult.completion);
-
-	req = ahash_request_alloc(tfm, GFP_KERNEL);
-	if (!req) {
-		printk(KERN_ERR "alg: hash: Failed to allocate request for "
-		       "%s\n", algo);
-		goto out_noreq;
-	}
-	ahash_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG,
-				   test_complete, &tresult);
-
-	j = 0;
-	for (i = 0; i < tcount; i++) {
-		if (template[i].np)
-			continue;
-
-		j++;
-		memset(result, 0, 64);
-
-		hash_buff = xbuf[0];
-
-		memcpy(hash_buff, template[i].plaintext, template[i].psize);
-		sg_init_one(&sg[0], hash_buff, template[i].psize);
-
-		if (template[i].ksize) {
-			crypto_ahash_clear_flags(tfm, ~0);
-			ret = crypto_ahash_setkey(tfm, template[i].key,
-						  template[i].ksize);
-			if (ret) {
-				printk(KERN_ERR "alg: hash: setkey failed on "
-				       "test %d for %s: ret=%d\n", j, algo,
-				       -ret);
-				goto out;
-			}
-		}
-
-		ahash_request_set_crypt(req, sg, result, template[i].psize);
-		if (use_digest) {
-			ret = do_one_async_hash_op(req, &tresult,
-						   crypto_ahash_digest(req));
-			if (ret) {
-				pr_err("alg: hash: digest failed on test %d "
-				       "for %s: ret=%d\n", j, algo, -ret);
-				goto out;
-			}
-		} else {
-			ret = do_one_async_hash_op(req, &tresult,
-						   crypto_ahash_init(req));
-			if (ret) {
-				pr_err("alt: hash: init failed on test %d "
-				       "for %s: ret=%d\n", j, algo, -ret);
-				goto out;
-			}
-			ret = do_one_async_hash_op(req, &tresult,
-						   crypto_ahash_update(req));
-			if (ret) {
-				pr_err("alt: hash: update failed on test %d "
-				       "for %s: ret=%d\n", j, algo, -ret);
-				goto out;
-			}
-			ret = do_one_async_hash_op(req, &tresult,
-						   crypto_ahash_final(req));
-			if (ret) {
-				pr_err("alt: hash: final failed on test %d "
-				       "for %s: ret=%d\n", j, algo, -ret);
-				goto out;
-			}
-		}
-
-		if (memcmp(result, template[i].digest,
-			   crypto_ahash_digestsize(tfm))) {
-			printk(KERN_ERR "alg: hash: Test %d failed for %s\n",
-			       j, algo);
-			hexdump(result, crypto_ahash_digestsize(tfm));
-			ret = -EINVAL;
-			goto out;
-		}
-	}
-
-	j = 0;
-	for (i = 0; i < tcount; i++) {
-		if (template[i].np) {
-			j++;
-			memset(result, 0, 64);
-
-			temp = 0;
-			sg_init_table(sg, template[i].np);
-			ret = -EINVAL;
-			for (k = 0; k < template[i].np; k++) {
-				if (WARN_ON(offset_in_page(IDX[k]) +
-					    template[i].tap[k] > PAGE_SIZE))
-					goto out;
-				sg_set_buf(&sg[k],
-					   memcpy(xbuf[IDX[k] >> PAGE_SHIFT] +
-						  offset_in_page(IDX[k]),
-						  template[i].plaintext + temp,
-						  template[i].tap[k]),
-					   template[i].tap[k]);
-				temp += template[i].tap[k];
-			}
-
-			if (template[i].ksize) {
-				crypto_ahash_clear_flags(tfm, ~0);
-				ret = crypto_ahash_setkey(tfm, template[i].key,
-							  template[i].ksize);
-
-				if (ret) {
-					printk(KERN_ERR "alg: hash: setkey "
-					       "failed on chunking test %d "
-					       "for %s: ret=%d\n", j, algo,
-					       -ret);
-					goto out;
-				}
-			}
-
-			ahash_request_set_crypt(req, sg, result,
-						template[i].psize);
-			ret = crypto_ahash_digest(req);
-			switch (ret) {
-			case 0:
-				break;
-			case -EINPROGRESS:
-			case -EBUSY:
-				ret = wait_for_completion_interruptible(
-					&tresult.completion);
-				if (!ret && !(ret = tresult.err)) {
-					reinit_completion(&tresult.completion);
-					break;
-				}
-				/* fall through */
-			default:
-				printk(KERN_ERR "alg: hash: digest failed "
-				       "on chunking test %d for %s: "
-				       "ret=%d\n", j, algo, -ret);
-				goto out;
-			}
-
-			if (memcmp(result, template[i].digest,
-				   crypto_ahash_digestsize(tfm))) {
-				printk(KERN_ERR "alg: hash: Chunking test %d "
-				       "failed for %s\n", j, algo);
-				hexdump(result, crypto_ahash_digestsize(tfm));
-				ret = -EINVAL;
-				goto out;
-			}
-		}
-	}
-
-	ret = 0;
-
-out:
-	ahash_request_free(req);
-out_noreq:
-	free_buf(xbuf);
-out_nobuf:
-	return ret;
-}
-
-static int alg_test_hash(const struct hash_test_suite *suite, const char *driver, u32 type, u32 mask)
-{
-	struct crypto_ahash *tfm;
-	int err;
-
-	tfm = crypto_alloc_ahash(driver, type, mask);
-	if (IS_ERR(tfm)) {
-		printk(KERN_ERR "alg: hash: Failed to load transform for %s: "
-			"%ld\n", driver, PTR_ERR(tfm));
-		return PTR_ERR(tfm);
-	}
-
-	err = test_hash(tfm, suite->vecs, suite->count, true);
-	if (!err)
-		err = test_hash(tfm, suite->vecs, suite->count, false);
-
-	crypto_free_ahash(tfm);
-	return err;
-}
-
-static int do_fmp_fw_selftest(void)
-{
-	int err = 0;
-
-	err = exynos_smc(SMC_CMD_FMP, FMP_FW_SELFTEST, 0, 0);
-	if (err) {
-		printk(KERN_ERR "Fail to check selftest for FMP F/W. err = 0x%x\n", err);
-		return -1;
-	}
-
-	return 0;
+        return 0;
 }
 
 static int do_fips_fmp_selftest(struct device *dev)
@@ -1423,8 +1225,6 @@ static int do_fips_fmp_selftest(struct device *dev)
 	int ret;
 	struct cipher_test_suite xts_cipher;
 	struct cipher_test_suite cbc_cipher;
-	struct hash_test_suite test_hmac_sha256;
-	struct hash_test_suite test_sha256;
 
 	/* Self test for AES XTS mode */
 	xts_cipher.enc.vecs = aes_xts_enc_tv_template;
@@ -1446,36 +1246,24 @@ static int do_fips_fmp_selftest(struct device *dev)
 	}
 	printk(KERN_INFO "FIPS: self-tests for UFSFMP aes-cbc passed\n");
 
-	test_sha256.vecs = sha256_tv_template;
-	test_sha256.count = SHA256_TEST_VECTORS;
-	ret = alg_test_hash(&test_sha256, ALG_SHA256_FMP, 0, 0);
+	ret = alg_test_sha256();
 	if (ret) {
-		printk(KERN_ERR "FIPS: self-tests for UFSFMP %s failed\n", ALG_SHA256_FMP);
+		printk(KERN_ERR "FIPS: self-tests for UFSFMP %s failed\n", ALG_SHA256);
 		goto err_xts_cipher;
 	}
-	printk(KERN_INFO "FIPS: self-tests for UFSFMP %s passed\n", ALG_SHA256_FMP);
+	printk(KERN_INFO "FIPS: self-tests for UFSFMP %s passed\n", ALG_SHA256);
 
-	test_hmac_sha256.vecs = hmac_sha256_tv_template;
-	test_hmac_sha256.count = HMAC_SHA256_TEST_VECTORS;
-	ret = alg_test_hash(&test_hmac_sha256, ALG_HMAC_SHA256_FMP, 0, 0);
+	ret = alg_test_hmac_sha256();
 	if (ret) {
-		printk(KERN_ERR "FIPS: self-tests for UFSFMP %s failed\n", ALG_HMAC_SHA256_FMP);
+		printk(KERN_ERR "FIPS: self-tests for UFSFMP %s failed\n", ALG_HMAC_SHA256);
 		goto err_xts_cipher;
 	}
-	printk(KERN_INFO "FIPS: self-tests for UFSFMP %s passed\n", ALG_HMAC_SHA256_FMP);
-
-	ret = do_fmp_fw_selftest();
-	if (ret) {
-		printk(KERN_ERR "FIPS: self-tests for FMP FW failed\n");
-		goto err_fw_selftest;
-	}
-	printk(KERN_INFO "FIPS: self-tests for FMP FW passed\n");
+	printk(KERN_INFO "FIPS: self-tests for UFSFMP %s passed\n", ALG_HMAC_SHA256);
 
 	return 0;
 
 err_cbc_cipher:
 err_xts_cipher:
-err_fw_selftest:
 	return -1;
 }
 
@@ -1506,7 +1294,6 @@ static int fmp_create_session(struct fmp_info *info,
 	const char *alg_name = NULL;
 	const char *hash_name = NULL;
 	int hmac_mode = 1;
-	int fw_mode = 0;
 
 	/*
 	 * With composite aead ciphers, only ckey is used and it can cover all the
@@ -1546,15 +1333,6 @@ static int fmp_create_session(struct fmp_info *info,
 		break;
 	case FMP_SHA2_256:
 		hash_name = "sha256-fmp";
-		hmac_mode = 0;
-		break;
-	case FMPFW_SHA2_256_HMAC:
-		hash_name = "hmac-fmpfw(sha256-fmp)";
-		fw_mode = 1;
-		break;
-	case FMPFW_SHA2_256:
-		hash_name = "sha256-fmpfw";
-		fw_mode = 1;
 		hmac_mode = 0;
 		break;
 	default:
@@ -1612,14 +1390,9 @@ static int fmp_create_session(struct fmp_info *info,
 			goto error_hash;
 		}
 
-		if (fw_mode)
-			ret = fmpfw_hash_init(info, &ses_new->hdata, hash_name,
-								hmac_mode, keys.mkey,
-								sop->mackeylen);
-		else
-			ret = fmpdev_hash_init(info, &ses_new->hdata, hash_name,
-								hmac_mode, keys.mkey,
-								sop->mackeylen);
+		ret = fmpdev_hash_init(info, &ses_new->hdata, hash_name,
+							hmac_mode, keys.mkey,
+							sop->mackeylen);
 		if (ret != 0) {
 			dev_err(dev, "Failed to load hash for %s", hash_name);
 			ret = -EINVAL;
@@ -1682,10 +1455,7 @@ static inline void fmp_destroy_session(struct fmp_info *info, struct csession *s
 		mutex_lock(&ses_ptr->sem);
 	}
 	fmpdev_cipher_deinit(&ses_ptr->cdata);
-	if (!ses_ptr->hdata.fmpfw_info)
-		fmpdev_hash_deinit(&ses_ptr->hdata);
-	else
-		fmpfw_hash_deinit(&ses_ptr->hdata);
+	fmpdev_hash_deinit(&ses_ptr->hdata);
 	kfree(ses_ptr->pages);
 	kfree(ses_ptr->sg);
 	mutex_unlock(&ses_ptr->sem);
@@ -1833,10 +1603,16 @@ static int fmpdev_open(struct inode *inode, struct file *file)
 	dev = &pdev->dev;
 	printk("fmp fips driver name : %s\n", dev_name(dev));
 
+	ret = fips_fmp_init(dev);
+	if (ret) {
+		dev_err(dev, "Fail to initialize fmp driver for selftest. ret = %d\n", ret);
+		return -ENODEV;
+	}
+
 	info = kmalloc(sizeof(*info), GFP_KERNEL);
 	if (!info) {
 		dev_err(dev, "fail to alloc fmp private data\n");
-		return -ENOMEM;
+		goto err;
 	}
 	memset(info, 0, sizeof(*info));
 
@@ -1866,6 +1642,9 @@ static int fmpdev_open(struct inode *inode, struct file *file)
 	dev_info(dev, "%s opened.\n", dev_name(dev));
 
 	return 0;
+err:
+	fips_fmp_exit(dev);
+	return -ENOMEM;
 }
 
 /* this function has to be called from process context */
@@ -1968,7 +1747,6 @@ static int get_session_info(struct fmp_info *info,
 {
 	struct csession *ses_ptr;
 	struct device *dev = info->dev;
-	struct crypto_tfm *tfm;
 
 	/* this also enters ses_ptr->sem */
 	ses_ptr = fmp_get_session_by_sid(fcr, siop->ses);
@@ -1978,19 +1756,6 @@ static int get_session_info(struct fmp_info *info,
 	}
 
 	siop->flags = 0;
-
-	if (ses_ptr->hdata.init && !ses_ptr->hdata.fmpfw_info) {
-		tfm = crypto_ahash_tfm(ses_ptr->hdata.async.s);
-		tfm_info_to_alg_info(&siop->hash_info, tfm);
-#ifdef CRYPTO_ALG_KERN_DRIVER_ONLY
-		if (tfm->__crt_alg->cra_flags & CRYPTO_ALG_KERN_DRIVER_ONLY)
-			siop->flags |= SIOP_FLAG_KERNEL_DRIVER_ONLY;
-#else
-		if (is_known_accelerated(tfm))
-			siop->flags |= SIOP_FLAG_KERNEL_DRIVER_ONLY;
-#endif
-	}
-
 	siop->alignmask = ses_ptr->alignmask;
 	fmp_put_session(ses_ptr);
 
@@ -2126,6 +1891,10 @@ static inline void compat_to_crypt_op(struct compat_crypt_op *compat,
 	cop->dst = compat_ptr(compat->dst);
 	cop->mac = compat_ptr(compat->mac);
 	cop->iv  = compat_ptr(compat->iv);
+
+	cop->data_unit_len = compat->data_unit_len;
+	cop->data_unit_seqnumber = compat->data_unit_seqnumber;
+
 	cop->secondLastEncodedData = compat_ptr(compat->secondLastEncodedData);
 	cop->thirdLastEncodedData = compat_ptr(compat->thirdLastEncodedData);
 }
@@ -2142,6 +1911,10 @@ static inline void crypt_op_to_compat(struct crypt_op *cop,
 	compat->dst = ptr_to_compat(cop->dst);
 	compat->mac = ptr_to_compat(cop->mac);
 	compat->iv  = ptr_to_compat(cop->iv);
+
+	compat->data_unit_len = cop->data_unit_len;
+	compat->data_unit_seqnumber = cop->data_unit_seqnumber;
+
 	compat->secondLastEncodedData  = ptr_to_compat(cop->secondLastEncodedData);
 	compat->thirdLastEncodedData  = ptr_to_compat(cop->thirdLastEncodedData);
 }
@@ -2189,13 +1962,14 @@ static long fmpdev_compat_ioctl(struct file *file, unsigned int cmd,
 	struct compat_session_op compat_sop;
 	struct kernel_crypt_op kcop;
 	struct fmp_info *info = file->private_data;
-	struct device *dev = info->dev;
+	struct device *dev;
 	void __user *arg = (void __user *)arg_;
 	struct fcrypt *fcr;
 
-	if (unlikely(info))
+	if (unlikely(!info))
 		BUG();
 
+	dev = info->dev;
 	fcr = &info->fcrypt;
 
 	switch (cmd) {
@@ -2297,6 +2071,7 @@ static int fmpdev_release(struct inode *inode, struct file *file)
 	kfree(info);
 	file->private_data = NULL;
 
+	fips_fmp_exit(dev);
 	dev_info(dev, "%s released.\n", dev_name(dev));
 
 	return 0;
@@ -2368,6 +2143,8 @@ static int exynos_fips_fmp_probe(struct platform_device *pdev)
 
 	set_fmp_fips_state(FMP_FIPS_SUCCESS_STATE);
 	fips_fmp_result = 1;
+
+	fips_fmp_exit(dev);
 
 	return 0;
 

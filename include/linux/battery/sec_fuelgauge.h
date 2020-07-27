@@ -35,9 +35,6 @@
 #include <linux/battery/fuelgauge/max77843_fuelgauge.h>
 #elif defined(CONFIG_FUELGAUGE_MAX17050)
 #include <linux/battery/fuelgauge/max17050_fuelgauge.h>
-#elif defined(CONFIG_FUELGAUGE_MAX77854)
-#include <linux/battery/fuelgauge/max77854_fuelgauge.h>
-
 #endif
 
 struct sec_fuelgauge_reg_data {

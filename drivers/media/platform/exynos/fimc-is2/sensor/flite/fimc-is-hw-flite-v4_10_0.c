@@ -689,7 +689,7 @@ void flite_hw_set_path(u32 __iomem *base_reg, int instance,
 
 void flite_hw_dump(u32 __iomem *base_reg)
 {
-	info("BNS 4.0 DUMP\n");
+	info("BNS 4.10.0 DUMP\n");
 	info("[0x%04X] : 0x%08X\n", FLITE_REG_CISRCSIZE, readl(base_reg + TO_WORD_OFFSET(FLITE_REG_CISRCSIZE)));
 	info("[0x%04X] : 0x%08X\n", FLITE_REG_CIGCTRL, readl(base_reg + TO_WORD_OFFSET(FLITE_REG_CIGCTRL)));
 	info("[0x%04X] : 0x%08X\n", FLITE_REG_CIIMGCPT, readl(base_reg + TO_WORD_OFFSET(FLITE_REG_CIIMGCPT)));

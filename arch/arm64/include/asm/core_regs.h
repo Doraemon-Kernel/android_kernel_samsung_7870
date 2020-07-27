@@ -183,6 +183,68 @@ extern void exynos_trace_stop(void);
 #define exynos_trace_stop()	do { } while(0)
 #endif
 
+struct register_type {
+	const char *name;
+	u64 (*read_reg)(void);
+};
+
+struct core_register {
+	struct register_type *reg;
+	u64 val;
+};
+
+#define MRS_ASM(func_name, reg_name) static inline u64 mrs_##func_name##_read(void) \
+	{	\
+		u64 val;	\
+		asm volatile("mrs %0, "#reg_name : "=r"(val));	\
+		return val;	\
+	}
+
+/* Cortex-A57/A53 registers */
+MRS_ASM(SCTLR, sctlr_el1)
+MRS_ASM(MAIR, mair_el1)
+MRS_ASM(CPUACTLR, s3_1_c15_c2_0)
+MRS_ASM(CPUECTLR, s3_1_c15_c2_1)
+MRS_ASM(L2CTLR, s3_1_c11_c0_2)
+MRS_ASM(L2ACTLR, s3_1_c15_c0_0)
+MRS_ASM(L2ECTLR, s3_1_c11_c0_3)
+MRS_ASM(MPIDR, mpidr_el1)
+MRS_ASM(MIDR, midr_el1)
+MRS_ASM(REVIDR, revidr_el1)
+
+/* Mongoose Implementation defined registers
+	FEACTLR	0x3F14 0000
+	MCACTLR	0x3F14 1000
+	FPACTLR	0x3F14 2000
+	LSACTLR	0x3F14 3000
+	FEACTLR3 0x3F14 4000
+	DEACTLR 0x3F14 5000
+	LSACTLR3 0x3F14 7000
+	FEACTLR2 0x3F15 0000
+	MCACTLR2 0x3F15 1000
+	FPACTLR2 0x3F15 2000
+	LSACTLR2 0x3F15 3000
+	FEACTLR4 0x3F15 4000
+	LSACTLR4 0x3F15 7000
+	LSACTLR5 0x3F16 3000
+	CKACTLR 0x3F10 4000
+*/
+MRS_ASM(FEACTLR, s3_1_c15_c4_0)
+MRS_ASM(MCACTLR, s3_1_c15_c4_1)
+MRS_ASM(FPACTLR, s3_1_c15_c4_2)
+MRS_ASM(LSACTLR, s3_1_c15_c4_3)
+MRS_ASM(FEACTLR3, s3_1_c15_c4_4)
+MRS_ASM(DEACTLR, s3_1_c15_c4_5)
+MRS_ASM(LSACTLR3, s3_1_c15_c4_7)
+MRS_ASM(FEACTLR2, s3_1_c15_c5_0)
+MRS_ASM(MCACTLR2, s3_1_c15_c5_1)
+MRS_ASM(FPACTLR2, s3_1_c15_c5_2)
+MRS_ASM(LSACTLR2, s3_1_c15_c5_3)
+MRS_ASM(FEACTLR4, s3_1_c15_c5_4)
+MRS_ASM(LSACTLR4, s3_1_c15_c5_7)
+MRS_ASM(LSACTLR5, s3_1_c15_c6_3)
+MRS_ASM(CKACTLR, s3_1_c15_c0_4)
+
 /* defines for MNGS reset */
 
 #define PEND_MNGS                       (1 << 1)

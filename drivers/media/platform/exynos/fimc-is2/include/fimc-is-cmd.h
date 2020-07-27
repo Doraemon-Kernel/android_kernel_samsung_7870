@@ -125,6 +125,7 @@ enum is_subscenario_id {
 	ISS_SUB_SCENARIO_STILL_CAPTURE_SHARPEN = 29,
 	ISS_SUB_SCENARIO_STILL_CAPTURE_LONG = 30,
 	ISS_SUB_SCENARIO_STILL_CAPTURE_MANUAL_ISO = 31,
+	ISS_SUB_SCENARIO_STILL_PREVIEW_BINNING = 40, /* 40: binning mode for low power */
 	ISS_SUB_END,
 
 	ISS_SUB_SCENARIO_FRONT_VT1 = 31,		/*  31: front camera VT1 */
@@ -136,10 +137,11 @@ enum is_subscenario_id {
 	ISS_SUB_SCENARIO_FRONT_C2_OFF_VIDEO = 37,    /* 37: C2 off front video */
 	ISS_SUB_SCENARIO_FRONT_VT4 = 38,		/* 38: front camera VT4 */
 	ISS_SUB_SCENARIO_FRONT_VT1_STILL_CAPTURE = 39,	/* 39: front camera VT1 still capture */
-};
+	ISS_SUB_SCENARIO_FRONT_STILL_PREVIEW_BINNING = 40, /* 40: front camera binning mode for low power */
 
-enum is_scenario_is {
-	FIMC_IS_SCENARIO_SWVDIS = 1,
+	ISS_SUB_SCENARIO_LIVE_OUTFOCUS_PREVIEW = 44,		/* 44 ~ 50: Bokeh (HDR off/auto/on) */
+	ISS_SUB_SCENARIO_LIVE_OUTFOCUS_CAPTURE = 45,
+	ISS_SUB_SCENARIO_LIVE_OUTFOCUS_VIDEO = 46,
 };
 
 enum is_system_control_id {

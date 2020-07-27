@@ -29,12 +29,18 @@
 #include <crypto/hash.h>
 #include <crypto/md5.h>
 #include <crypto/algapi.h>
+#include <crypto/fmp.h>
 
 #include <linux/device-mapper.h>
 
 #define DM_MSG_PREFIX "crypt"
 #define FMP_KEY_STORAGE_OFFSET 0x0FC0
+#ifdef CONFIG_SOC_EXYNOS8890_EVT1
 #define EXYNOS8890_PA_SRAM_NS		0x0206F000
+#else
+#define EXYNOS8890_PA_SRAM_NS		0x0207A000
+#endif
+#define EXYNOS7870_PA_SRAM_NS		0x0206B000
 #define FMP_SYSRAM_NS(soc)	EXYNOS##soc##_PA_SRAM_NS
 
 volatile unsigned int disk_key_flag;
@@ -1155,10 +1161,10 @@ static int kcryptd_io_rw(struct dm_crypt_io *io, gfp_t gfp)
 	crypt_inc_pending(io);
 
 	clone_init(io, clone);
-#if defined(CONFIG_MMC_DW_FMP_DM_CRYPT) || defined(CONFIG_UFS_FMP_DM_CRYPT)
-	clone->bi_sensitive_data = 1;
-	clone->disk_key = cc->key;
-#endif
+	clone->private_enc_mode = FMP_DISK_ENC_MODE;
+	clone->private_algo_mode = FMP_XTS_ALGO_MODE;
+	clone->key = cc->key;
+	clone->key_length = cc->key_size;
 	clone->bi_iter.bi_sector = cc->start + io->sector;
 
 	generic_make_request(clone);
@@ -1207,16 +1213,16 @@ static void kcryptd_fmp_io(struct work_struct *work)
 	if (kcryptd_io_rw(io, GFP_NOIO))
 		io->error = -ENOMEM;
 	crypt_dec_pending(io);
-}
+}	
 
 static void kcryptd_queue_read(struct dm_crypt_io *io)
 {
 	struct crypt_config *cc = io->cc;
-
 	if (cc->hw_fmp == 1)
 		INIT_WORK(&io->work, kcryptd_fmp_io);
 	else
 		INIT_WORK(&io->work, kcryptd_io_read_work);
+
 	queue_work(cc->io_queue, &io->work);
 }
 
@@ -1506,6 +1512,7 @@ static int crypt_setkey_allcpus(struct crypt_config *cc)
 {
 	unsigned subkey_size;
 	int err = 0, i, r;
+	unsigned long flags;
 
 	/* Ignore extra keys (which are used for IV etc) */
 	subkey_size = (cc->key_size - cc->key_extra_size) >> ilog2(cc->tfms_count);
@@ -1514,7 +1521,14 @@ static int crypt_setkey_allcpus(struct crypt_config *cc)
 		uint32_t base;
 		volatile u8 __iomem *key_storage;
 
+#if defined(CONFIG_SOC_EXYNOS8890)
 		base = FMP_SYSRAM_NS(8890);
+#elif defined(CONFIG_SOC_EXYNOS7870)
+		base = FMP_SYSRAM_NS(7870);
+#else
+		printk("Error for SoC NS base\n");
+		return -1;
+#endif
 		key_storage = ioremap(base + FMP_KEY_STORAGE_OFFSET, SZ_4K);
 		if (!key_storage) {
 			pr_err("dm-crypt: Failure of ioremap for FMP key\n");
@@ -1533,9 +1547,9 @@ static int crypt_setkey_allcpus(struct crypt_config *cc)
 			return -ENOSYS;
 		}
 
-		spin_lock(&disk_key_lock);
+		spin_lock_irqsave(&disk_key_lock, flags);
 		disk_key_flag = 1;
-		spin_unlock(&disk_key_lock);
+		spin_unlock_irqrestore(&disk_key_lock, flags);
 
 		iounmap((void *)key_storage);
 	} else {
@@ -1623,6 +1637,15 @@ static void crypt_dtr(struct dm_target *ti)
 		if (cc->iv_gen_ops && cc->iv_gen_ops->dtr)
 			cc->iv_gen_ops->dtr(cc);
 
+	if (cc->dev)
+		dm_put_device(ti, cc->dev);
+
+	kzfree(cc->cipher);
+	kzfree(cc->cipher_string);
+
+	/* Must zero key material before freeing */
+	kzfree(cc);
+
 #if defined(CONFIG_FIPS_FMP)
 	if (cc->hw_fmp) {
 		int r;
@@ -1632,15 +1655,6 @@ static void crypt_dtr(struct dm_target *ti)
 			pr_err("dm-crypt: Fail to clear FMP disk key. r = 0x%x\n", r);
 	}
 #endif
-
-	if (cc->dev)
-		dm_put_device(ti, cc->dev);
-
-	kzfree(cc->cipher);
-	kzfree(cc->cipher_string);
-
-	/* Must zero key material before freeing */
-	kzfree(cc);
 }
 
 static int crypt_ctr_cipher(struct dm_target *ti,
@@ -1717,14 +1731,9 @@ static int crypt_ctr_cipher(struct dm_target *ti,
 	}
 
 	if ((strcmp(chainmode, "xts") == 0) &&
-		(strcmp(cipher, "aes") == 0) &&
-		((strcmp(ivmode, "fmp") == 0) || (strcmp(ivmode, "disk") == 0))) {
+			(strcmp(cipher, "aes") == 0) &&
+			((strcmp(ivmode, "fmp") == 0) || (strcmp(ivmode, "disk") == 0))) {
 		pr_info("%s: H/W FMP disk encryption\n", __func__);
-#if !defined(CONFIG_MMC_DW_FMP_DM_CRYPT) && !defined(CONFIG_UFS_FMP_DM_CRYPT)
-		ti->error = "Error decoding xts-aes-fmp";
-		ret = -EINVAL;
-		goto bad;
-#endif
 		cc->hw_fmp = 1;
 
 		/* Initialize and set key */
@@ -1887,20 +1896,21 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 			iv_size_padding = crypto_ablkcipher_alignmask(any_tfm(cc));
 		}
 
-		ret = -ENOMEM;
-		cc->req_pool = mempool_create_kmalloc_pool(MIN_IOS, cc->dmreq_start +
-				sizeof(struct dm_crypt_request) + iv_size_padding + cc->iv_size);
-		if (!cc->req_pool) {
-			ti->error = "Cannot allocate crypt request mempool";
-			goto bad;
-		}
+	ret = -ENOMEM;
+	cc->req_pool = mempool_create_kmalloc_pool(MIN_IOS, cc->dmreq_start +
+			sizeof(struct dm_crypt_request) + iv_size_padding + cc->iv_size);
+	if (!cc->req_pool) {
+		ti->error = "Cannot allocate crypt request mempool";
+		goto bad;
+	}
 
-		cc->per_bio_data_size = ti->per_bio_data_size =
-			ALIGN(sizeof(struct dm_crypt_io) + cc->dmreq_start +
-			      sizeof(struct dm_crypt_request) + iv_size_padding + cc->iv_size,
-			      ARCH_KMALLOC_MINALIGN);
+	cc->per_bio_data_size = ti->per_bio_data_size =
+		ALIGN(sizeof(struct dm_crypt_io) + cc->dmreq_start +
+				sizeof(struct dm_crypt_request) + iv_size_padding + cc->iv_size,
+				ARCH_KMALLOC_MINALIGN);
 
 		cc->page_pool = mempool_create_page_pool(BIO_MAX_PAGES, 0);
+
 		if (!cc->page_pool) {
 			ti->error = "Cannot allocate page mempool";
 			goto bad;
@@ -1915,8 +1925,8 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	if (cc->hw_fmp == 0) {
 		mutex_init(&cc->bio_alloc_lock);
-
 		ret = -EINVAL;
+		memset(tmp, 0, sizeof(tmp));
 		snprintf(tmp, sizeof(tmp) - 1, "%s", argv[2]);
 		if (sscanf(tmp, "%llu%c", &tmpll, &dummy) != 1) {
 			ti->error = "Invalid iv_offset sector";
@@ -1971,18 +1981,20 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		}
 	} else {
 		cc->io_queue = alloc_workqueue("kcryptd_io",
-						   WQ_HIGHPRI |
-						   WQ_MEM_RECLAIM,
-						   1);
+				WQ_HIGHPRI |
+		                WQ_MEM_RECLAIM,
+		                1);
+
 		if (!cc->io_queue) {
 			ti->error = "Couldn't create kcryptd io queue";
 			goto bad;
 		}
 
 		cc->crypt_queue = alloc_workqueue("kcryptd",
-						  WQ_HIGHPRI |
-						  WQ_MEM_RECLAIM |
-						  WQ_UNBOUND, num_online_cpus());
+				WQ_HIGHPRI |
+		                WQ_MEM_RECLAIM |
+                                WQ_UNBOUND, num_online_cpus());
+
 		if (!cc->crypt_queue) {
 			ti->error = "Couldn't create kcryptd queue";
 			goto bad;

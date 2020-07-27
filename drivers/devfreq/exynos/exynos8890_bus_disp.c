@@ -1,4 +1,4 @@
-/* linux/drivers/devfreq/exynos/exynos8890_bus_disp.c
+/* linux/drivers/devfreq/exynos8890_bus_disp.c
  *
  * Copyright (c) 2015 Samsung Electronics Co., Ltd.
  *              http://www.samsung.com
@@ -19,7 +19,6 @@
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/list.h>
-#include <linux/clk.h>
 
 #include <soc/samsung/exynos-devfreq.h>
 
@@ -62,7 +61,7 @@ static u32 exynos8890_devfreq_disp_get_target_freq(char *name, u32 freq)
 static int exynos8890_devfreq_disp_get_freq(struct device *dev, u32 *cur_freq,
 				struct exynos_devfreq_data *data)
 {
-	*cur_freq = (u32)clk_get_rate(data->clk);
+	*cur_freq = (u32)cal_dfs_get_rate(dvfs_disp);
 	if (*cur_freq == 0) {
 		dev_err(dev, "failed to get frequency from CAL\n");
 		return -EINVAL;
@@ -75,7 +74,7 @@ static int exynos8890_devfreq_disp_set_freq(struct device *dev,
 					u32 old_freq, u32 new_freq,
 					struct exynos_devfreq_data *data)
 {
-	if (clk_set_rate(data->clk, (unsigned long)new_freq)) {
+	if (cal_dfs_set_rate(dvfs_disp, (unsigned long)new_freq)) {
 		dev_err(dev, "failed to set frequency via CAL (%uKhz)\n",
 				new_freq);
 		return -EINVAL;
@@ -88,7 +87,6 @@ static int exynos8890_devfreq_disp_init_freq_table(struct device *dev,
 					struct exynos_devfreq_data *data)
 {
 	u32 max_freq, min_freq;
-	unsigned long tmp_max, tmp_min;
 	struct dev_pm_opp *target_opp;
 	u32 flags = 0;
 	int i;
@@ -105,8 +103,8 @@ static int exynos8890_devfreq_disp_init_freq_table(struct device *dev,
 	if (max_freq < data->max_freq) {
 		rcu_read_lock();
 		flags |= DEVFREQ_FLAG_LEAST_UPPER_BOUND;
-		tmp_max = (unsigned long)max_freq;
-		target_opp = devfreq_recommended_opp(dev, &tmp_max, flags);
+		target_opp = devfreq_recommended_opp(dev,
+				(unsigned long *)&max_freq, flags);
 		if (IS_ERR(target_opp)) {
 			rcu_read_unlock();
 			dev_err(dev, "not found valid OPP for max_freq\n");
@@ -129,8 +127,8 @@ static int exynos8890_devfreq_disp_init_freq_table(struct device *dev,
 	if (min_freq > data->min_freq) {
 		rcu_read_lock();
 		flags &= ~DEVFREQ_FLAG_LEAST_UPPER_BOUND;
-		tmp_min = (unsigned long)min_freq;
-		target_opp = devfreq_recommended_opp(dev, &tmp_min, flags);
+		target_opp = devfreq_recommended_opp(dev,
+				(unsigned long *)&min_freq, flags);
 		if (IS_ERR(target_opp)) {
 			rcu_read_unlock();
 			dev_err(dev, "not found valid OPP for min_freq\n");
@@ -186,20 +184,12 @@ static int exynos8890_devfreq_disp_get_volt_table(struct device *dev,
 static int exynos8890_devfreq_disp_init(struct device *dev,
 				struct exynos_devfreq_data *data)
 {
-	data->clk = clk_get(dev, "dvfs_disp");
-	if (IS_ERR_OR_NULL(data->clk)) {
-		dev_err(dev, "failed get dvfs vclk\n");
-		return -ENODEV;
-	}
-
 	return 0;
 }
 
 static int exynos8890_devfreq_disp_exit(struct device *dev,
 				struct exynos_devfreq_data *data)
 {
-	clk_put(data->clk);
-
 	return 0;
 }
 

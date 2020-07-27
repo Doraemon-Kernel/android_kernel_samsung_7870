@@ -26,20 +26,6 @@
 #define RESOURCE_TYPE_PREPROC	7
 #define RESOURCE_TYPE_MAX	8
 
-#if defined(CONFIG_SECURE_CAMERA_USE)
-#define MC_SECURE_CAMERA_INIT           ((uint32_t)(0x83000041))
-#define MC_SECURE_CAMERA_CFW_ENABLE     ((uint32_t)(0x83000042))
-#define MC_SECURE_CAMERA_PREPARE        ((uint32_t)(0x83000043))
-#define MC_SECURE_CAMERA_UNPREPARE      ((uint32_t)(0x83000044))
-
-enum fimc_is_sensor_smc_state {
-        FIMC_IS_SENSOR_SMC_INIT = 0,
-        FIMC_IS_SENSOR_SMC_CFW_ENABLE,
-        FIMC_IS_SENSOR_SMC_PREPARE,
-        FIMC_IS_SENSOR_SMC_UNPREPARE,
-};
-#endif
-
 enum fimc_is_resourcemgr_state {
 	FIMC_IS_RM_COM_POWER_ON,
 	FIMC_IS_RM_SS0_POWER_ON,
@@ -63,8 +49,6 @@ struct fimc_is_dvfs_ctrl {
 	int cur_cam_qos;
 	int cur_i2c_qos;
 	int cur_disp_qos;
-	int cur_hpg_qos;
-	int cur_hmp_bst;
 	u32 dvfs_table_idx;
 	u32 dvfs_table_max;
 	ulong state;
@@ -87,12 +71,6 @@ struct fimc_is_clk_gate_ctrl {
 	 * And will decrease when clock off.
 	 */
 	unsigned long chk_on_off_cnt[GROUP_ID_MAX];
-};
-
-struct fimc_is_static_mem {
-	u32 paddr;
-	ulong vaddr;
-	ulong size;
 };
 
 struct fimc_is_resource {
@@ -123,10 +101,6 @@ struct fimc_is_resourcemgr {
 	u32					cluster0;
 	u32					cluster1;
 	u32					hal_version;
-	u32					vdis_mode;
-#ifdef ENABLE_FW_SHARE_DUMP
-	ulong					fw_share_dump_buf;
-#endif
 
 	/* tmu */
 	struct notifier_block			tmu_notifier;
@@ -134,7 +108,7 @@ struct fimc_is_resourcemgr {
 	u32					limited_fps;
 
 	/* bus monitor */
-	struct notifier_block			bmu_notifier;
+	struct notifier_block			bm_notifier;
 
 	void					*private_data;
 };

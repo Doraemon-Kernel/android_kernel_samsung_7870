@@ -236,7 +236,8 @@ static int gic_set_affinity(struct irq_data *d, const struct cpumask *mask_val,
 		for_each_cpu_mask(cpu, temp_mask) {
 			if (cpu >= NR_GIC_CPU_IF || cpu >= nr_cpu_ids)
 				goto err_out;
-			bit |= gic_cpu_map[cpu];
+			if (cpu < 4)
+				bit |= gic_cpu_map[cpu];
 		}
 		bit <<= shift;
 	} else {
@@ -287,8 +288,6 @@ static void __exception_irq_entry gic_handle_irq(struct pt_regs *regs)
 	do {
 		irqstat = readl_relaxed(cpu_base + GIC_CPU_INTACK);
 		irqnr = irqstat & GICC_IAR_INT_ID_MASK;
-
-		dmb(ish);
 
 		if (likely(irqnr > 15 && irqnr < 1021)) {
 			handle_domain_irq(gic->domain, irqnr, regs);

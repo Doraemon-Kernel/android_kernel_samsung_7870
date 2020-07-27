@@ -53,8 +53,6 @@ void s2mm005_manual_JIGON(struct s2mm005_data *usbpd_data, int mode);
 void s2mm005_manual_LPM(struct s2mm005_data *usbpd_data, int cmd);
 void s2mm005_control_option_command(struct s2mm005_data *usbpd_data, int cmd);
 int s2mm005_fw_ver_check(void * data);
-int ccic_misc_init(void);
-void ccic_misc_exit(void);
 ////////////////////////////////////////////////////////////////////////////////
 //status machine of s2mm005 ccic
 ////////////////////////////////////////////////////////////////////////////////
@@ -468,6 +466,7 @@ void s2mm005_control_option_command(struct s2mm005_data *usbpd_data, int cmd)
         s2mm005_write_byte(i2c, REG_ADD, &W_DATA[0], 2);
 }
 
+#if (defined(CONFIG_DUAL_ROLE_USB_INTF) || defined(CONFIG_TYPEC))
 static void s2mm005_new_toggling_control(struct s2mm005_data *usbpd_data, u8 mode)
 {
 	struct i2c_client *i2c = usbpd_data->i2c;
@@ -500,15 +499,15 @@ static void s2mm005_toggling_control(struct s2mm005_data *usbpd_data, u8 mode)
 	REG_ADD = 0x10;
 	s2mm005_write_byte(i2c, REG_ADD, &W_DATA[0], 5);
 }
+#endif
 
 int s2mm005_fw_ver_check(void * data)
 {
 	struct s2mm005_data *usbpd_data = data;
 	struct s2mm005_version chip_swver, hwver;
 
-	if ((usbpd_data->firm_ver[1] == 0xFF && usbpd_data->firm_ver[2] == 0xFF)
-		|| (usbpd_data->firm_ver[1] == 0x00 && usbpd_data->firm_ver[2] == 0x00)
-		|| !(usbpd_data->firm_ver[3] >= 3 && usbpd_data->firm_ver[3] <= 6)) {
+	if ((usbpd_data->firm_ver[1] == 0xFF && usbpd_data->firm_ver[2] == 0xFF) 
+		|| (usbpd_data->firm_ver[1] == 0x00 && usbpd_data->firm_ver[2] == 0x00)) {
 		s2mm005_get_chip_hwversion(usbpd_data, &hwver);
 		pr_err("%s CHIP HWversion %2x %2x %2x %2x\n", __func__,
 			hwver.main[2] , hwver.main[1], hwver.main[0], hwver.boot);
@@ -518,8 +517,7 @@ int s2mm005_fw_ver_check(void * data)
 		       chip_swver.main[2] , chip_swver.main[1], chip_swver.main[0], chip_swver.boot);
 
 	if ((chip_swver.main[0] == 0xFF && chip_swver.main[1] == 0xFF)
-		|| (chip_swver.main[0] == 0x00 && chip_swver.main[1] == 0x00)
-		|| !(chip_swver.boot >= 3 && chip_swver.boot <= 6)) {
+		|| (chip_swver.main[0] == 0x00 && chip_swver.main[1] == 0x00)) {
 			pr_err("%s Invalid FW version\n", __func__);
 			return CCIC_FW_VERSION_INVALID;
 		}
@@ -550,6 +548,7 @@ void s2mm005_set_upsm_mode(void)
 	pr_info("%s : current status is upsm! \n",__func__);
 }
 
+#if (defined(CONFIG_DUAL_ROLE_USB_INTF) || defined(CONFIG_TYPEC))
 void s2mm005_rprd_mode_change(struct s2mm005_data *usbpd_data, u8 mode)
 {
 	pr_info("%s, mode=0x%x\n",__func__, mode);
@@ -571,6 +570,7 @@ void s2mm005_rprd_mode_change(struct s2mm005_data *usbpd_data, u8 mode)
 		break;	
 	};
 }
+#endif
 
 static irqreturn_t s2mm005_usbpd_irq_thread(int irq, void *data)
 {
@@ -599,10 +599,7 @@ static irqreturn_t s2mm005_usbpd_irq_thread(int irq, void *data)
 	}
 
 	// Send attach event
-	process_cc_attach(usbpd_data, &plug_attach_done);
-
-	if (usbpd_data->s2mm005_i2c_err < 0)
-		goto i2cErr;
+	process_cc_attach(usbpd_data,&plug_attach_done);	
 
 	if(usbpd_data->water_det || !usbpd_data->run_dry || !usbpd_data->booting_run_dry){
 		process_cc_water_det(usbpd_data);
@@ -618,7 +615,6 @@ static irqreturn_t s2mm005_usbpd_irq_thread(int irq, void *data)
 	// RID processing
 	process_cc_rid(usbpd_data);
 
-i2cErr:
 ver_err:
 water:
 	/* ========================================== */
@@ -642,12 +638,16 @@ static int of_s2mm005_usbpd_dt(struct device *dev,
 	usbpd_data->s2mm005_om = of_get_named_gpio(np, "usbpd,s2mm005_om", 0);
 	usbpd_data->s2mm005_sda = of_get_named_gpio(np, "usbpd,s2mm005_sda", 0);
 	usbpd_data->s2mm005_scl = of_get_named_gpio(np, "usbpd,s2mm005_scl", 0);
-	if (of_property_read_u32(np, "usbpd,water_detect_support", &usbpd_data->water_detect_support)) {
-		usbpd_data->water_detect_support = 1;
-	}
-	if (of_property_read_u32(np, "usbpd,s2mm005_fw_product_id", &usbpd_data->s2mm005_fw_product_id)) {
+	if(of_property_read_u32(np, "usbpd,s2mm005_fw_product_id", &usbpd_data->s2mm005_fw_product_id)) {
 		usbpd_data->s2mm005_fw_product_id = 0x01;
 	}
+
+	if (of_property_read_bool(np, "usbpd,skip-ccic-fwupdate"))
+		dev_err(dev, "usbpd,skip-ccic-fwupdate is present\n");
+	else
+		dev_err(dev, "usbpd,skip-ccic-fwupdate is not present\n");
+
+	usbpd_data->skip_ccic_fwupdate = of_property_read_bool(np, "usbpd,skip-ccic-fwupdate");
 
 	np = of_find_all_nodes(NULL);
 	ret = of_property_read_u32(np, "model_info-hw_rev", &usbpd_data->hw_rev);
@@ -657,16 +657,15 @@ static int of_s2mm005_usbpd_dt(struct device *dev,
 	}
 
 	dev_err(dev, "hw_rev:%02d usbpd_irq = %d redriver_en = %d s2mm005_om = %d\n"
-		"s2mm005_sda = %d, s2mm005_scl = %d, fw_product_id=0x%02X\n",
+		"s2mm005_sda = %d, s2mm005_scl = %d, fw_product_id=0x%02X, skip_ccic_fw_update(%d)\n",
 		usbpd_data->hw_rev,
 		usbpd_data->irq_gpio, usbpd_data->redriver_en, usbpd_data->s2mm005_om,
 		usbpd_data->s2mm005_sda, usbpd_data->s2mm005_scl,
-		usbpd_data->s2mm005_fw_product_id);
+		usbpd_data->s2mm005_fw_product_id, usbpd_data->skip_ccic_fwupdate);
 
 	return 0;
 }
 #endif /* CONFIG_OF */
-
 
 void ccic_state_check_work(struct work_struct *wk)
 {
@@ -680,11 +679,9 @@ void ccic_state_check_work(struct work_struct *wk)
 	}
 }
 
-
 static int pdic_handle_usb_external_notifier_notification(struct notifier_block *nb,
 				unsigned long action, void *data)
 {
-	struct s2mm005_data *usbpd_data = dev_get_drvdata(ccic_device);
 	int ret = 0;
 	int enable = *(int *)data;
 
@@ -692,18 +689,18 @@ static int pdic_handle_usb_external_notifier_notification(struct notifier_block 
 	switch (action) {
 	case EXTERNAL_NOTIFY_HOSTBLOCK_PRE:
 		if(enable) {
+#if defined(CONFIG_CCIC_ALTERNATE_MODE)
 			set_enable_alternate_mode(ALTERNATE_MODE_STOP);
-			if(usbpd_data->dp_is_connect)
-				dp_detach(usbpd_data);
+#endif
 		} else {
-			if(usbpd_data->dp_is_connect)
-				dp_detach(usbpd_data);
 		}
 		break;
 	case EXTERNAL_NOTIFY_HOSTBLOCK_POST:
 		if(enable) {
 		} else {
+#if defined(CONFIG_CCIC_ALTERNATE_MODE)
 			set_enable_alternate_mode(ALTERNATE_MODE_START);
+#endif
 		}
 		break;
 	default:
@@ -712,6 +709,7 @@ static int pdic_handle_usb_external_notifier_notification(struct notifier_block 
 
 	return ret;
 }
+
 
 static void delayed_external_notifier_init(struct work_struct *work)
 {
@@ -761,7 +759,10 @@ static int s2mm005_usbpd_probe(struct i2c_client *i2c,
 	struct dual_role_phy_desc *desc;
 	struct dual_role_phy_instance *dual_role;
 #endif
+#if defined(CONFIG_USB_HOST_NOTIFY)
 	struct otg_notify *o_notify = get_otg_notify();
+#endif
+	u8 rid;
 
 	pr_info("%s\n", __func__);
 	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA)) {
@@ -777,10 +778,8 @@ static int s2mm005_usbpd_probe(struct i2c_client *i2c,
 #if defined(CONFIG_OF)
 	if (i2c->dev.of_node)
 		of_s2mm005_usbpd_dt(&i2c->dev, usbpd_data);
-	else {
+	else
 		dev_err(&i2c->dev, "not found ccic dt! ret:%d\n", ret);
-		return -ENODEV;
-	}
 #endif
 	ret = gpio_request(usbpd_data->irq_gpio, "s2mm005_irq");
 	if (ret)
@@ -804,6 +803,7 @@ static int s2mm005_usbpd_probe(struct i2c_client *i2c,
 	usbpd_data->dev = &i2c->dev;
 	usbpd_data->i2c = i2c;
 	i2c_set_clientdata(i2c, usbpd_data);
+	ccic_notifier_init();
 	dev_set_drvdata(ccic_device, usbpd_data);
 	device_init_wakeup(usbpd_data->dev, 1);
 	pd_noti.pusbpd = usbpd_data;
@@ -824,7 +824,6 @@ static int s2mm005_usbpd_probe(struct i2c_client *i2c,
 	usbpd_data->water_det = 0;
 	usbpd_data->run_dry = 1;
 	usbpd_data->booting_run_dry = 1;
-	usbpd_data->vconn_en = 1;
 #if defined(CONFIG_DUAL_ROLE_USB_INTF)
 	usbpd_data->try_state_change = 0;
 #endif
@@ -860,16 +859,17 @@ static int s2mm005_usbpd_probe(struct i2c_client *i2c,
 		ret = s2mm005_read_byte(i2c, REG_ADD, MSG_BUF, 32);
 		if (ret < 0) {
 			/* to check wrong ccic chipsets, It will be removed after PRA */
-//			panic("Intentional Panic - ccic i2c error\n");
+			panic("Intentional Panic - ccic i2c error\n");
 //			dev_err(&i2c->dev, "%s has i2c read error.\n", __func__);
 //			goto err_init_irq;
 		}
 	}
 
 	s2mm005_get_chip_hwversion(usbpd_data, &hwver);
-	pr_err("%s CHIP HWversion  %2x %2x %2x %2x\n", __func__,
+	pr_err("%s CHIP HWversion %2x %2x %2x %2x\n", __func__,
 	       hwver.main[2] , hwver.main[1], hwver.main[0], hwver.boot);
-
+	pr_err("%s CHIP HWversion2 %2x %2x %2x %2x\n", __func__,
+	       hwver.ver2[3], hwver.ver2[2], hwver.ver2[1], hwver.ver2[0]);
 	if (hwver.boot <= 2) {
 		W_DATA[0] =0x02; W_DATA[1] =0x40; W_DATA[2] =0x04; W_DATA[3] =0x11;
 		s2mm005_write_byte(i2c, 0x10, &W_DATA[0], 4);
@@ -893,45 +893,68 @@ static int s2mm005_usbpd_probe(struct i2c_client *i2c,
 	}
 
 	s2mm005_get_chip_swversion(usbpd_data, &chip_swver);
-	pr_err("%s CHIP SWversion  %2x %2x %2x %2x\n", __func__,
-	       chip_swver.main[2], chip_swver.main[1], chip_swver.main[0], chip_swver.boot);
+	pr_err("%s CHIP SWversion %2x %2x %2x %2x\n", __func__,
+	       chip_swver.main[2] , chip_swver.main[1], chip_swver.main[0], chip_swver.boot);
 
 	s2mm005_get_fw_version(usbpd_data->s2mm005_fw_product_id,
 		&fw_swver, chip_swver.boot, usbpd_data->hw_rev);
-	pr_err("%s SRC SWversion:  %2x,%2x,%2x,%2x\n", __func__,
+	pr_err("%s SRC SWversion:%2x,%2x,%2x,%2x\n",__func__,
 		fw_swver.main[2], fw_swver.main[1], fw_swver.main[0], fw_swver.boot);
+	pr_err("%s: FW UPDATE boot:%01d hw_rev:%02d\n", __func__,
+		chip_swver.boot, usbpd_data->hw_rev);
+	usbpd_data->fw_product_id = fw_swver.main[2];
 
-	pr_err("%s: FW UPDATE boot:%01d hw_rev:%02d\n", __func__, chip_swver.boot, usbpd_data->hw_rev);
 #if defined(CONFIG_SEC_FACTORY)
 	s2mm005_read_byte(i2c, 0x60, Lp_DATA.BYTE, 4);
 	pr_err("%s: WATER reg:0x%02X BOOTING_RUN_DRY=%d\n", __func__,
 		Lp_DATA.BYTE[0], Lp_DATA.BITS.BOOTING_RUN_DRY);
-
+	
 	usbpd_data->fac_booting_dry_check = Lp_DATA.BITS.BOOTING_RUN_DRY;
 #endif
-#ifdef CONFIG_SEC_FACTORY
-		if ((chip_swver.main[0] != fw_swver.main[0])
-			|| (chip_swver.main[1] != fw_swver.main[1]))
-#else
-	      if ((chip_swver.main[0] < fw_swver.main[0])
-			|| ((chip_swver.main[0] == fw_swver.main[0]) && (chip_swver.main[1] < fw_swver.main[1])))
-#endif
-	 {
-		if (chip_swver.boot == 4) {
-			if (usbpd_data->hw_rev >= 9)
-				s2mm005_flash_fw(usbpd_data, FLASH_WRITE);
-			else
-				s2mm005_flash_fw(usbpd_data, FLASH_WRITE4);
-		} else if (chip_swver.boot == 5) {
-				s2mm005_flash_fw(usbpd_data, FLASH_WRITE5);
-		} else if (chip_swver.boot == 6) {
-				s2mm005_flash_fw(usbpd_data, FLASH_WRITE6);
-		}
+
+//
+// Read the rid one time. skip update if dts sets the skip update and rid is 523k
+//
+	rid = RID_OPEN;
+	s2mm005_read_byte_16(i2c, 0x50, &rid);	// function read , 0x20 , 0x0:detach , not 0x0 attach :  source 3,6,7 / sink 16:17:21:29(decimanl)
+	if (usbpd_data->skip_ccic_fwupdate && (rid == RID_523K)) {
+		pr_err("%s: skip ccic firmware update rid 523k detected \n", __func__);
+		goto skip_update;
 	}
 
-	s2mm005_get_chip_swversion(usbpd_data, &chip_swver);
-	pr_err("%s CHIP SWversion %2x %2x %2x %2x\n", __func__,
-	       chip_swver.main[2] , chip_swver.main[1], chip_swver.main[0], chip_swver.boot);
+	if (chip_swver.boot == 0x7) {
+#ifdef CONFIG_SEC_FACTORY
+		if ((chip_swver.main[0] != fw_swver.main[0]) /* main version */
+			|| (chip_swver.main[1] != fw_swver.main[1]) /* sub version */
+			|| (chip_swver.main[2] != fw_swver.main[2]))  /* product id */
+		{
+			if(s2mm005_flash_fw(usbpd_data,chip_swver.boot) < 0)
+			{
+				pr_err("%s: s2mm005_flash_fw 1st fail, try again \n", __func__);
+				if(s2mm005_flash_fw(usbpd_data,chip_swver.boot) < 0)
+				{
+					pr_err("%s: s2mm005_flash_fw 2st fail, panic \n", __func__);
+					panic("infinite write fail!\n");
+				}
+			}
+		}
+#else
+		if ((chip_swver.main[0] < fw_swver.main[0])
+			|| ((chip_swver.main[0] == fw_swver.main[0]) && (chip_swver.main[1] < fw_swver.main[1]))
+			|| (chip_swver.main[2] != fw_swver.main[2]))
+			s2mm005_flash_fw(usbpd_data,chip_swver.boot);
+		else if ((((chip_swver.main[2] == 0xff) && (chip_swver.main[1] == 0xa5))   || chip_swver.main[2] == 0x00) &&
+			fw_swver.main[2] != 0x0)  //extra case, factory or old version (for dream)
+			s2mm005_flash_fw(usbpd_data,chip_swver.boot);
+#endif
+skip_update:
+		s2mm005_get_chip_swversion(usbpd_data, &chip_swver);
+		pr_err("%s CHIP SWversion %2x %2x %2x %2x\n", __func__,
+		       chip_swver.main[2] , chip_swver.main[1], chip_swver.main[0], chip_swver.boot);
+		pr_err("%s CHIP HWversion2 %2x %2x %2x %2x\n", __func__,
+	       hwver.ver2[3], hwver.ver2[2], hwver.ver2[1], hwver.ver2[0]);
+	}
+
 	store_ccic_version(&hwver.main[0], &chip_swver.main[0], &chip_swver.boot);
 
 	usbpd_data->firm_ver[0] = chip_swver.main[2];
@@ -955,8 +978,7 @@ static int s2mm005_usbpd_probe(struct i2c_client *i2c,
 		dev_info(&i2c->dev, "   0x%08X\n\r", MSG_DATA[cnt]);
 	}
 
-	/* default value is written by CCIC FW. If you need others, overwrite it.*/
-	//s2mm005_write_byte(i2c, REG_ADD, &MSG_BUF[0], 32);
+	s2mm005_write_byte(i2c, REG_ADD, &MSG_BUF[0], 32);
 
 	for (cnt = 0; cnt < 32; cnt++) {
 		MSG_BUF[cnt] = 0;
@@ -1016,13 +1038,12 @@ static int s2mm005_usbpd_probe(struct i2c_client *i2c,
 		pr_err("%s : success typec_register_port port=%pK\n", __func__, usbpd_data->port);
 
 	init_completion(&usbpd_data->role_reverse_completion);
+	INIT_DELAYED_WORK(&usbpd_data->typec_role_swap_work, typec_role_swap_check);
 #endif
 #if defined(CONFIG_USB_HOST_NOTIFY)
 	send_otg_notify(o_notify, NOTIFY_EVENT_POWER_SOURCE, 0);
 #endif
 #if defined(CONFIG_CCIC_ALTERNATE_MODE)
-	init_completion(&usbpd_data->uvdm_out_wait);
-	init_completion(&usbpd_data->uvdm_longpacket_in_wait);
 	usbpd_data->alternate_state = 0;
 	usbpd_data->acc_type = 0;
 	usbpd_data->dp_is_connect = 0;
@@ -1038,17 +1059,11 @@ static int s2mm005_usbpd_probe(struct i2c_client *i2c,
 	init_waitqueue_head(&usbpd_data->host_turn_on_wait_q);
 	set_host_turn_on_event(0);
 	usbpd_data->host_turn_on_wait_time = 2;
-	ret = ccic_misc_init();
-	if (ret) {
-		dev_err(&i2c->dev, "ccic misc register is failed, error %d\n", ret);
-		goto err_init_irq;
-	}
 #endif
-
-	s2mm005_int_clear(usbpd_data);
 	fp_select_pdo = s2mm005_select_pdo;
 
 	usbpd_data->ccic_check_at_booting = 1;
+	usbpd_data->vconn_en = 1;
 	INIT_DELAYED_WORK(&usbpd_data->ccic_init_work, ccic_state_check_work);
 	schedule_delayed_work(&usbpd_data->ccic_init_work, msecs_to_jiffies(200));
 
@@ -1059,7 +1074,7 @@ static int s2mm005_usbpd_probe(struct i2c_client *i2c,
 		goto err_init_irq;
 	}
 
-#if defined(CONFIG_BATTERY_SAMSUNG)
+	#if defined(CONFIG_BATTERY_SAMSUNG)
 	if(usbpd_data->s2mm005_fw_product_id == PRODUCT_NUM_DREAM)
 	{
 		u8 W_CHG_INFO[3]={0,};
@@ -1085,10 +1100,9 @@ static int s2mm005_usbpd_probe(struct i2c_client *i2c,
 		schedule_delayed_work(&usbpd_data->usb_external_notifier_register_work, msecs_to_jiffies(2000));
 	else
 		pr_info("%s : external notifier register done!\n",__func__);
-
+	
 	s2mm005_int_clear(usbpd_data);
 	return ret;
-
 err_init_irq:
 	if (usbpd_data->irq) {
 		free_irq(usbpd_data->irq, usbpd_data);
@@ -1131,7 +1145,7 @@ static int s2mm005_usbpd_remove(struct i2c_client *i2c)
 	}
 
 	wake_lock_destroy(&usbpd_data->wlock);
-	ccic_misc_exit();
+
 	return 0;
 }
 
@@ -1142,7 +1156,6 @@ static void s2mm005_usbpd_shutdown(struct i2c_client *i2c)
 	struct device_node *np;
 	int gpio_dp_sw_oe;
 #endif
-
 	disable_irq(usbpd_data->irq);
 
 	if ((usbpd_data->cur_rid != RID_523K) &&
@@ -1163,7 +1176,7 @@ static void s2mm005_usbpd_shutdown(struct i2c_client *i2c)
 					gpio_dp_sw_oe = of_get_named_gpio(np, "dp,aux_sw_oe", 0);
 					gpio_direction_output(gpio_dp_sw_oe, 1);
 				}
-#endif
+#endif				
 				s2mm005_manual_LPM(usbpd_data, 0xB);
 				mdelay(110);
 			}

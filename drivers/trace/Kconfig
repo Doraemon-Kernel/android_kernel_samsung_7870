@@ -87,11 +87,6 @@ config EXYNOS_SNAPSHOT_MBOX
 	depends on EXYNOS_SNAPSHOT && EXYNOS_MBOX && !EXYNOS_SNAPSHOT_MINIMIZED_MODE
 	default y
 
-config EXYNOS_SNAPSHOT_HOOK_LOGGER
-	bool "Enable hooking android platform log for ramdump"
-	depends on EXYNOS_SNAPSHOT
-	default y
-
 config EXYNOS_SNAPSHOT_PSTORE
 	bool "Enable supporting ramoops driver for pstore filesystem"
 	depends on EXYNOS_SNAPSHOT
@@ -102,6 +97,11 @@ config EXYNOS_SNAPSHOT_PSTORE
 	select PSTORE_RAM
 	select PSTORE_PMSG
 	default n
+
+config EXYNOS_SNAPSHOT_HOOK_LOGGER
+	bool "Enable hooking android platform log for ramdump"
+	depends on EXYNOS_SNAPSHOT
+	default y
 
 config EXYNOS_SNAPSHOT_PANIC_REBOOT
 	bool "Enable forced reboot after panic for ramdump"
@@ -116,16 +116,11 @@ config EXYNOS_SNAPSHOT_WATCHDOG_RESET
 config EXYNOS_SNAPSHOT_CRASH_KEY
 	bool "Support Crash Key to artificial panic for debugging"
 	depends on EXYNOS_SNAPSHOT && KEYBOARD_GPIO
-	default n
+	default y
 
 config EXYNOS_SNAPSHOT_SFRDUMP
 	bool "Support dump of sfr region for debugging"
 	depends on EXYNOS_SNAPSHOT && !EXYNOS_SNAPSHOT_MINIMIZED_MODE
-	default n
-
-config EXYNOS_SNAPSHOT_SFRDUMP_ADV
-	bool "SFRDUMP with checking power of IP"
-	depends on EXYNOS_SNAPSHOT_SFRDUMP
 	default y
 
 config EXYNOS_SNAPSHOT_MINIMIZED_MODE
@@ -133,10 +128,15 @@ config EXYNOS_SNAPSHOT_MINIMIZED_MODE
 	depends on EXYNOS_SNAPSHOT
 	default n
 
+config EXYNOS_SNAPSHOT_GO_MODE
+	bool "Support Android Go feature configuration"
+	depends on EXYNOS_SNAPSHOT
+	default n
+
 config EXYNOS_SNAPSHOT_LOGGING_SMC_CALL
 	bool "Support logging SMC call"
 	depends on EXYNOS_SNAPSHOT
-	default n
+	default y
 
 menuconfig EXYNOS_CORESIGHT
 	bool "Enable Coresight of exynos"
@@ -154,7 +154,7 @@ config PC_ITERATION
 	int "Number of Program Coutner information"
 	depends on EXYNOS_CORESIGHT_PC_INFO
 	range 1 10
-	default 10
+	default 5
 	help
 	  Print out Program Counter as iteration value.
 
@@ -217,5 +217,11 @@ config EXYNOS_CORESIGHT_STM
 	help
 	  STM driver is a driver for H/W event and S/W event debugging.
 
+config EXYNOS_SNAPSHOT_SAVE_SLUGGISHINFO
+	bool "Support saving scheduling-history and irq-history"
+	depends on EXYNOS_SNAPSHOT	
+	default n
+	help
+	  Support saving scheduling-history and irq-history
 endif
 #

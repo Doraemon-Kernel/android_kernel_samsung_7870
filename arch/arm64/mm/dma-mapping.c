@@ -41,7 +41,7 @@ static pgprot_t __get_dma_pgprot(struct dma_attrs *attrs, pgprot_t prot,
 
 static struct gen_pool *atomic_pool;
 
-#define DEFAULT_DMA_COHERENT_POOL_SIZE  SZ_2M
+#define DEFAULT_DMA_COHERENT_POOL_SIZE  SZ_256K
 static size_t atomic_pool_size __initdata = DEFAULT_DMA_COHERENT_POOL_SIZE;
 
 static int __init early_coherent_pool(char *p)
@@ -225,11 +225,9 @@ static int __swiotlb_map_sg_attrs(struct device *dev, struct scatterlist *sgl,
 	int i, ret;
 
 	ret = swiotlb_map_sg_attrs(dev, sgl, nelems, dir, attrs);
-	if (!dma_get_attr(DMA_ATTR_SKIP_CPU_SYNC, attrs)) {
-		for_each_sg(sgl, sg, ret, i)
-			__dma_map_area(phys_to_virt(dma_to_phys(dev, sg->dma_address)),
-					sg->length, dir);
-	}
+	for_each_sg(sgl, sg, ret, i)
+		__dma_map_area(phys_to_virt(dma_to_phys(dev, sg->dma_address)),
+			       sg->length, dir);
 
 	return ret;
 }
@@ -242,11 +240,9 @@ static void __swiotlb_unmap_sg_attrs(struct device *dev,
 	struct scatterlist *sg;
 	int i;
 
-	if (!dma_get_attr(DMA_ATTR_SKIP_CPU_SYNC, attrs)) {
-		for_each_sg(sgl, sg, nelems, i)
-			__dma_unmap_area(phys_to_virt(dma_to_phys(dev, sg->dma_address)),
-					sg->length, dir);
-	}
+	for_each_sg(sgl, sg, nelems, i)
+		__dma_unmap_area(phys_to_virt(dma_to_phys(dev, sg->dma_address)),
+				 sg->length, dir);
 	swiotlb_unmap_sg_attrs(dev, sgl, nelems, dir, attrs);
 }
 

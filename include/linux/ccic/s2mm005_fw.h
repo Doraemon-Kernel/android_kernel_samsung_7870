@@ -8,7 +8,6 @@ enum {
 	FLASH_WRITE3,
 	FLASH_WRITE4,
 	FLASH_WRITE5,
-	FLASH_WRITE5_NODPDM,
 	FLASH_WRITE6,
 	FLASH_WRITE7,
 	FLASH_WRITE_BUILTIN,
@@ -44,6 +43,7 @@ enum {
 struct s2mm005_version {
 	u8 main[3];
 	u8 boot;
+	u8 ver2[4];
 };
 
 struct s2mm005_fw {

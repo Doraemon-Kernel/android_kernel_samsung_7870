@@ -25,21 +25,6 @@
 
 #define MUIC_DEV_NAME   "muic-universal"
 
-#define muic_err(fmt, ...)					\
-	do {							\
-		pr_err(pr_fmt(fmt), ##__VA_ARGS__);		\
-	} while (0)
-
-#define muic_info(fmt, ...)					\
-	do {							\
-		pr_info(pr_fmt(fmt), ##__VA_ARGS__);		\
-	} while (0)
-
-#define muic_dbg(fmt, ...)					\
-	do {							\
-		pr_debug(pr_fmt(fmt), ##__VA_ARGS__);		\
-	} while (0)
-
 enum muic_op_mode {
 	OPMODE_MUIC = 0<<0,
 	OPMODE_CCIC = 1<<0,
@@ -109,33 +94,23 @@ typedef struct _muic_vps_table_t {
 	u8  adclow;
 	u8  chgdetrun;
 	u8  chgtyp;
-	u8  DCDTimedout;
 	const char *vps_name;
-	const muic_attached_dev_t attached_dev;
-	u8 status[3];
-	u8 control[4];
-	u8 hvcontrol[2];
+	muic_attached_dev_t attached_dev;
+	u8 control1;
 }vps_table_type;
 
 struct muic_intr_data {
 	u8	intr1;
 	u8	intr2;
-};
-
-struct muic_irq_t {
-	int irq_adc1k;
-	int irq_adcerr;
-	int irq_adc;
-	int irq_chgtyp;
-	int irq_vbvolt;
-	int irq_dcdtmr;
+	u8	intr3;
 };
 
 typedef union _muic_vps_t {
 	vps_scatterred_type s;
 	vps_table_type t;
-	char vps_data[120];
+	char vps_data[16];
 }vps_data_t;
+
 
 /* muic chip specific internal data structure
  * that setted at muic-xxxx.c file
@@ -147,6 +122,7 @@ typedef struct _muic_data_t {
 	struct device *dev;
 	struct i2c_client *i2c; /* i2c addr: 0x4A; MUIC */
 	struct mutex muic_mutex;
+	struct mutex lock;
 
 	/* model dependant muic platform data */
 	struct muic_platform_data *pdata;
@@ -158,7 +134,6 @@ typedef struct _muic_data_t {
 	int vps_table;
 
 	struct muic_intr_data intr;
-	struct muic_irq_t irqs;
 
 	/* regmap_desc_t */
 	struct regmap_desc *regmapdesc;
@@ -166,34 +141,30 @@ typedef struct _muic_data_t {
 	char *chip_name;
 
 	int gpio_uart_sel;
-#if defined(CONFIG_MUIC_HV_SUPPORT_POGO_DOCK)
-	int dock_int_ap;
-#endif
+	int usb_id_ctr;
+	int mux_sel;
 
 	/* muic Device ID */
 	u8 muic_vendor;			/* Vendor ID */
 	u8 muic_version;		/* Version ID */
 
-	bool			is_gamepad;
+	bool			is_usb_ready;
 	bool			is_factory_start;
 	bool			is_rustproof;
 	bool			is_otg_test;
 	struct delayed_work	init_work;
 	struct delayed_work	usb_work;
 
-	bool			is_muic_ready;
 	bool			undefined_range;
-	bool			discard_interrupt;
 	bool			is_dcdtmr_intr;
-
-	struct hv_data		*phv;
+	bool			is_rescanned;
 
 #if defined(CONFIG_USB_EXTERNAL_NOTIFY)
 	/* USB Notifier */
-	struct notifier_block	usb_nb;
+	struct notifier_block   usb_nb;
 #endif
 
-#if defined(CONFIG_MUIC_SUPPORT_CCIC)
+#if defined(CONFIG_MUIC_UNIVERSAL_CCIC)
 	/* legacy TA or USB for CCIC */
 	muic_attached_dev_t	legacy_dev;
 
@@ -208,14 +179,17 @@ typedef struct _muic_data_t {
 
 	/* Operation Mode */
 	enum muic_op_mode	opmode;
-	bool 			afc_water_disable;
-	bool			afc_tsub_disable;
-	bool			is_ccic_attach;
-	int			is_ccic_afc_enable;
-	int			is_ccic_rp56_enable;
+	bool			afc_water_disable;
+
+	int			rid;
+
+	bool			rprd;
 #endif
+	int is_afc_5v;
+	bool is_camera_on;
+	bool check_charger_lcd_on;
+	int irq_n;
+	int is_afc_device;
+	struct delayed_work	afc_retry_work;
 }muic_data_t;
-
-extern struct device *switch_device;
-
 #endif /* __MUIC_INTERNAL_H__ */

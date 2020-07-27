@@ -1071,10 +1071,11 @@ static void print_other_cpu_stall(struct rcu_state *rsp)
 	 * See Documentation/RCU/stallwarn.txt for info on how to debug
 	 * RCU CPU stall warnings.
 	 */
+	exynos_ss_save_context(NULL);
+	exynos_ss_set_enable("log_kevents", false);
 
-	exynos_ss_printkl((size_t)rsp->name, (size_t)rsp);
 	pr_auto(ASL1, "INFO: %s detected stalls on CPUs/tasks:",
-		   rsp->name);
+	       rsp->name);
 
 	print_cpu_stall_info_begin();
 	rcu_for_each_leaf_node(rsp, rnp) {
@@ -1130,8 +1131,9 @@ static void print_cpu_stall(struct rcu_state *rsp)
 	 * See Documentation/RCU/stallwarn.txt for info on how to debug
 	 * RCU CPU stall warnings.
 	 */
+	exynos_ss_save_context(NULL);
+	exynos_ss_set_enable("log_kevents", false);
 
-	exynos_ss_printkl((size_t)rsp->name, (size_t)rsp);
 	pr_auto(ASL1, "INFO: %s self-detected stall on CPU", rsp->name);
 
 	print_cpu_stall_info_begin();

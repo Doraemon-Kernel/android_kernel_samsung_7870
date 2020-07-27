@@ -2,7 +2,8 @@ obj-$(CONFIG_USE_DIRECT_IS_CONTROL) += fimc-is-hw-api-common.o \
 		fimc-is-hw-api-vra.o
 
 obj-$(CONFIG_CAMERA_FIMC_SCALER_USE) += fimc-is-hw-api-scp.o
-obj-$(CONFIG_CAMERA_MC_SCALER_USE) += fimc-is-hw-api-mcscaler.o
+obj-$(CONFIG_MC_SCALER_V1_20) += fimc-is-hw-api-mcscaler-v120.o
+obj-$(CONFIG_MC_SCALER_V2_10) += fimc-is-hw-api-mcscaler-v210.o
 
 obj-$(CONFIG_USE_HW_API_COMMON) += fimc-is-hw-api-common.o
 

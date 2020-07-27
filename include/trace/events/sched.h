@@ -189,16 +189,16 @@ TRACE_EVENT(sched_cpu_hotplug,
 	TP_ARGS(affected_cpu, error, status),
 
 	TP_STRUCT__entry(
-		__field(	int,	affected_cpu		)
-		__field(	int,	error			)
-		__field(	int,	status			)
-	),
+		__field(        int,    affected_cpu            )
+		__field(        int,    error                   )
+		__field(        int,    status                  )
+		),
 
 	TP_fast_assign(
-		__entry->affected_cpu	= affected_cpu;
-		__entry->error		= error;
-		__entry->status		= status;
-	),
+		__entry->affected_cpu   = affected_cpu;
+		__entry->error          = error;
+		__entry->status         = status;
+		),
 
 	TP_printk("cpu %d %s error=%d", __entry->affected_cpu,
 		__entry->status ? "online" : "offline", __entry->error)
@@ -232,7 +232,7 @@ DECLARE_EVENT_CLASS(sched_process_template,
 DEFINE_EVENT(sched_process_template, sched_process_free,
 	     TP_PROTO(struct task_struct *p),
 	     TP_ARGS(p));
-	     
+
 
 /*
  * Tracepoint for a task exiting:
@@ -633,30 +633,6 @@ TRACE_EVENT(sched_rq_runnable_ratio,
 );
 
 /*
- * Tracepoint for showing tracked rq runnable ratio [0..1023].
- */
-TRACE_EVENT(sched_rq_sysload_ratio,
-
-	TP_PROTO(int cpu, unsigned long ratio),
-
-	TP_ARGS(cpu, ratio),
-
-	TP_STRUCT__entry(
-		__field(int, cpu)
-		__field(unsigned long, ratio)
-	),
-
-	TP_fast_assign(
-		__entry->cpu   = cpu;
-		__entry->ratio = ratio;
-	),
-
-	TP_printk("cpu=%d ratio=%lu",
-			__entry->cpu,
-			__entry->ratio)
-);
-
-/*
  * Tracepoint for showing tracked rq runnable load.
  */
 TRACE_EVENT(sched_rq_runnable_load,
@@ -737,9 +713,6 @@ TRACE_EVENT(sched_task_usage_ratio,
 #define HMP_MIGRATE_FORCE	1
 #define HMP_MIGRATE_OFFLOAD	2
 #define HMP_MIGRATE_IDLE_PULL	3
-#define HMP_MIGRATE_FAMILY	4
-#define HMP_MIGRATE_INFORM	99
-
 TRACE_EVENT(sched_hmp_migrate,
 
 	TP_PROTO(struct task_struct *tsk, int dest, int force),
@@ -765,33 +738,6 @@ TRACE_EVENT(sched_hmp_migrate,
 			__entry->dest, __entry->force)
 );
 
-TRACE_EVENT(sched_hmp_migrate_compensation,
-
-	TP_PROTO(struct task_struct *tsk, int dest, int force, int load),
-
-	TP_ARGS(tsk, dest, force, load),
-
-	TP_STRUCT__entry(
-		__array(char, comm, TASK_COMM_LEN)
-		__field(pid_t, pid)
-		__field(int,  dest)
-		__field(int,  force)
-		__field(int,  load)
-	),
-
-	TP_fast_assign(
-	memcpy(__entry->comm, tsk->comm, TASK_COMM_LEN);
-		__entry->pid   = tsk->pid;
-		__entry->dest  = dest;
-		__entry->force = force;
-		__entry->load = load;
-	),
-
-	TP_printk("comm=%s pid=%d dest=%d force=%d, load=%d",
-			__entry->comm, __entry->pid,
-			__entry->dest, __entry->force, __entry->load)
-);
-
 TRACE_EVENT(sched_hmp_offload_abort,
 
 	TP_PROTO(int cpu, int data, char *label),
@@ -810,7 +756,7 @@ TRACE_EVENT(sched_hmp_offload_abort,
 		__entry->data = data;
 	),
 
-	TP_printk("cpu=%d data=%d label=%s",
+	TP_printk("cpu=%d data=%d label=%63s",
 		__entry->cpu, __entry->data,
 		__entry->label)
 );
@@ -855,65 +801,6 @@ TRACE_EVENT(sched_wake_idle_without_ipi,
 
 	TP_printk("cpu=%d", __entry->cpu)
 );
-
-TRACE_EVENT(sched_hp_event_thread_group,
-
-	TP_PROTO(struct task_struct *g_tsk, struct task_struct *tsk, unsigned long g_ratio, int nr_thread_gr, unsigned long load_avg_ratio, char *label),
-
-	TP_ARGS(g_tsk, tsk, g_ratio, nr_thread_gr, load_avg_ratio, label),
-
-	TP_STRUCT__entry(
-		__array(char, comm, TASK_COMM_LEN)
-		__array(char, comm2, TASK_COMM_LEN)
-		__field(pid_t, g_pid)
-		__field(pid_t, pid)
-		__field(unsigned long, g_ratio)
-		__field(int, nr_thread_gr)
-		__field(unsigned long, load_avg_ratio)
-		__array(char, label, 64)
-	),
-
-	TP_fast_assign(
-		strncpy(__entry->comm, g_tsk->comm, TASK_COMM_LEN);
-		strncpy(__entry->comm2, tsk->comm, TASK_COMM_LEN);
-		__entry->g_pid            = g_tsk->pid;
-		__entry->pid            = tsk->pid;
-		__entry->g_ratio = g_ratio;
-		__entry->nr_thread_gr = nr_thread_gr;
-		__entry->load_avg_ratio = load_avg_ratio;
-		strncpy(__entry->label, label, 64);
-	),
-
-	TP_printk("g_comm %s g_pid=%d comm=%s pid=%d group_load=%lu group_cnt=%d avg_ratio=%lu label=%s",
-			__entry->comm, __entry->g_pid, __entry->comm2, __entry->pid, __entry->g_ratio,
-			__entry->nr_thread_gr, __entry->load_avg_ratio, __entry->label)
-);
-
-TRACE_EVENT(sched_hp_event_system_load,
-
-	TP_PROTO(int cpu, int data0, int data1, char *label),
-
-	TP_ARGS(cpu,data0,data1,label),
-
-	TP_STRUCT__entry(
-		__array(char, label, 64)
-		__field(int, cpu)
-		__field(int, data0)
-		__field(int, data1)
-	),
-
-	TP_fast_assign(
-		strncpy(__entry->label, label, 64);
-		__entry->cpu   = cpu;
-		__entry->data0 = data0;
-		__entry->data1 = data1;
-	),
-
-	TP_printk("cpu=%d data0=%d data1=%d label=%s",
-		__entry->cpu, __entry->data0, __entry->data1,
-		__entry->label)
-);
-
 #endif /* _TRACE_SCHED_H */
 
 /* This part must be outside protection */

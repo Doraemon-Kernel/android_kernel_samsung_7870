@@ -438,14 +438,13 @@ static int cmp_bss(struct cfg80211_bss *a,
 	int i, r;
 
 #if !(defined(CONFIG_BCM4335) || defined(CONFIG_BCM4335_MODULE) \
-	|| defined(CONFIG_BCM4339) || defined(CONFIG_BCM4339_MODULE) \
+        || defined(CONFIG_BCM4339) || defined(CONFIG_BCM4339_MODULE) \
 	|| defined(CONFIG_BCM43438) || defined(CONFIG_BCM43438_MODULE) \
 	|| defined(CONFIG_BCM43454) || defined(CONFIG_BCM43454_MODULE) \
-	|| defined(CONFIG_BCM43455) || defined(CONFIG_BCM43455_MODULE) \
+        || defined(CONFIG_BCM43455) || defined(CONFIG_BCM43455_MODULE) \
 	|| defined(CONFIG_BCM4354) || defined(CONFIG_BCM4354_MODULE) \
-	|| defined(CONFIG_BCM4356) || defined(CONFIG_BCM4356_MODULE) \
-	|| defined(CONFIG_BCM4358) || defined(CONFIG_BCM4358_MODULE) \
-	|| defined(CONFIG_BCM4359) || defined(CONFIG_BCM4359_MODULE))
+        || defined(CONFIG_BCM4356) || defined(CONFIG_BCM4356_MODULE) \
+        || defined(CONFIG_BCM4358) || defined(CONFIG_BCM4358_MODULE))
 	if (a->channel != b->channel)
 		return b->channel->center_freq - a->channel->center_freq;
 #endif /* CONFIG_BCM43xx */
@@ -489,14 +488,13 @@ static int cmp_bss(struct cfg80211_bss *a,
 		return r;
 
 #if (defined(CONFIG_BCM4335) || defined(CONFIG_BCM4335_MODULE) \
-	|| defined(CONFIG_BCM4339) || defined(CONFIG_BCM4339_MODULE) \
+        || defined(CONFIG_BCM4339) || defined(CONFIG_BCM4339_MODULE) \
 	|| defined(CONFIG_BCM43438) || defined(CONFIG_BCM43438_MODULE) \
 	|| defined(CONFIG_BCM43454) || defined(CONFIG_BCM43454_MODULE) \
-	|| defined(CONFIG_BCM43455) || defined(CONFIG_BCM43455_MODULE) \
+        || defined(CONFIG_BCM43455) || defined(CONFIG_BCM43455_MODULE) \
 	|| defined(CONFIG_BCM4354) || defined(CONFIG_BCM4354_MODULE) \
-	|| defined(CONFIG_BCM4356) || defined(CONFIG_BCM4356_MODULE) \
-	|| defined(CONFIG_BCM4358) || defined(CONFIG_BCM4358_MODULE) \
-	|| defined(CONFIG_BCM4359) || defined(CONFIG_BCM4359_MODULE))
+        || defined(CONFIG_BCM4356) || defined(CONFIG_BCM4356_MODULE) \
+        || defined(CONFIG_BCM4358) || defined(CONFIG_BCM4358_MODULE))
 	if (a->channel != b->channel)
 		return b->channel->center_freq - a->channel->center_freq;
 #endif /* CONFIG_BCM43xx */
@@ -1241,6 +1239,8 @@ int cfg80211_wext_siwscan(struct net_device *dev,
 	for (i = 0; i < IEEE80211_NUM_BANDS; i++)
 		if (wiphy->bands[i])
 			creq->rates[i] = (1 << wiphy->bands[i]->n_bitrates) - 1;
+
+	eth_broadcast_addr(creq->bssid);
 
 	rdev->scan_req = creq;
 	err = rdev_scan(rdev, creq);

@@ -40,7 +40,6 @@
 #include <sdp/fs_request.h>
 #include "ecryptfs_sdp_chamber.h"
 #include "ecryptfs_dek.h"
-
 #if (ANDROID_VERSION < 80000)
 #include "sdcardfs.h"
 #endif
@@ -405,7 +404,6 @@ int ecryptfs_initialize_file(struct dentry *ecryptfs_dentry,
 		printk(KERN_ERR "Error writing headers; rc = [%d]\n", rc);
 	ecryptfs_put_lower_file(ecryptfs_inode);
 #endif
-
 out:
 #ifdef CONFIG_DLP
 	if(cmd) {
@@ -499,9 +497,9 @@ static int ecryptfs_lookup_interpose(struct dentry *dentry,
 				     struct dentry *lower_dentry,
 				     struct inode *dir_inode)
 {
-	struct path *path = ecryptfs_dentry_to_lower_path(dentry->d_parent);
-	struct inode *inode, *lower_inode;
+	struct inode *inode, *lower_inode = lower_dentry->d_inode;
 	struct ecryptfs_dentry_info *dentry_info;
+	struct vfsmount *lower_mnt;
 	int rc = 0;
 
 	dentry_info = kmem_cache_alloc(ecryptfs_dentry_info_cache, GFP_KERNEL);
@@ -513,24 +511,19 @@ static int ecryptfs_lookup_interpose(struct dentry *dentry,
 		return -ENOMEM;
 	}
 
-	fsstack_copy_attr_atime(dir_inode, d_inode(path->dentry));
+	lower_mnt = mntget(ecryptfs_dentry_to_lower_mnt(dentry->d_parent));
+	fsstack_copy_attr_atime(dir_inode, lower_dentry->d_parent->d_inode);
 	BUG_ON(!d_count(lower_dentry));
 
 	ecryptfs_set_dentry_private(dentry, dentry_info);
-	dentry_info->lower_path.mnt = mntget(path->mnt);
+	dentry_info->lower_path.mnt = lower_mnt;
 	dentry_info->lower_path.dentry = lower_dentry;
 
-	/*
-	 * negative dentry can go positive under us here - its parent is not
-	 * locked.  That's OK and that could happen just as we return from
-	 * ecryptfs_lookup() anyway.  Just need to be careful and fetch
-	 * ->d_inode only once - it's not stable here.
-	 */
-	lower_inode = READ_ONCE(lower_dentry->d_inode);
-
-	if (!lower_inode) {
+	if (!lower_dentry->d_inode) {
+#if (ANDROID_VERSION >= 80000)
 		/* We want to add because we couldn't find in lower */
 		d_add(dentry, NULL);
+#endif
 		return 0;
 	}
 	inode = __ecryptfs_get_inode(lower_inode, dir_inode->i_sb);
@@ -656,7 +649,7 @@ static struct dentry *ecryptfs_lookup(struct inode *ecryptfs_dir_inode,
 
 		if(IS_UNDER_ROOT(ecryptfs_dentry)) {
 			parent_info->permission = PERMISSION_PRE_ROOT;
-			if(mount_crypt_stat->userid >= 100 && mount_crypt_stat->userid < 2000) {
+			if(mount_crypt_stat->userid >= 100 && mount_crypt_stat->userid <= 200) {
 				parent_info->userid = mount_crypt_stat->userid;
 
 				/* Assume masked off by default. */
@@ -696,7 +689,6 @@ static struct dentry *ecryptfs_lookup(struct inode *ecryptfs_dir_inode,
 		dput(parent);
 	}
 #endif
-
 	lower_dentry = lookup_one_len(encrypted_and_encoded_name,
 				      lower_dir_dentry,
 				      encrypted_and_encoded_name_size);
@@ -1463,6 +1455,10 @@ ecryptfs_setxattr(struct dentry *dentry, const char *name, const void *value,
 {
 	int rc = 0;
 	struct dentry *lower_dentry;
+#ifdef CONFIG_DLP
+	struct ecryptfs_crypt_stat *crypt_stat = NULL;
+	int flag = 1;
+#endif
 
 	lower_dentry = ecryptfs_dentry_to_lower(dentry);
 	if (!lower_dentry->d_inode->i_op->setxattr) {
@@ -1478,6 +1474,17 @@ ecryptfs_setxattr(struct dentry *dentry, const char *name, const void *value,
 		if (!is_root() && !is_system_server()) {
 			printk(KERN_ERR "DLP %s: setting knox_dlp not allowed by [%d]\n", __func__, from_kuid(&init_user_ns, current_uid()));
 			return -EPERM;
+		}
+		if (dentry->d_inode) {
+			crypt_stat = &ecryptfs_inode_to_private(dentry->d_inode)->crypt_stat;
+			if(crypt_stat) {
+				crypt_stat->flags |= ECRYPTFS_DLP_ENABLED;
+				flag = 0;
+			}
+		}
+		if(flag){
+			printk(KERN_ERR "DLP %s: setting knox_dlp failed\n", __func__);
+			return -EOPNOTSUPP;
 		}
 	}
 #endif
@@ -1633,7 +1640,6 @@ const struct inode_operations ecryptfs_dir_iops = {
 	.rename = ecryptfs_rename,
 	.permission = ecryptfs_permission,
 	.setattr = ecryptfs_setattr,
-	.getattr = ecryptfs_getattr,
 	.setxattr = ecryptfs_setxattr,
 	.getxattr = ecryptfs_getxattr,
 	.listxattr = ecryptfs_listxattr,

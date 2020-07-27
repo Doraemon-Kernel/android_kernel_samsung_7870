@@ -32,6 +32,9 @@
 
 #include "hub.h"
 #include "otg_whitelist.h"
+#if defined(CONFIG_USB_OTG_WHITELIST_FOR_MDM)
+#include "otg_whitelist_for_mdm.h"
+#endif
 
 #define USB_VENDOR_GENESYS_LOGIC		0x05e3
 #define HUB_QUIRK_CHECK_PORT_AUTOSUSPEND	0x01
@@ -103,8 +106,6 @@ static void hub_release(struct kref *kref);
 static int usb_reset_and_verify_device(struct usb_device *udev);
 static void hub_usb3_port_prepare_disable(struct usb_hub *hub,
 					  struct usb_port *port_dev);
-static bool hub_port_warm_reset_required(struct usb_hub *hub, int port1,
-		u16 portstatus);
 
 static inline char *portspeed(struct usb_hub *hub, int portstatus)
 {
@@ -1122,11 +1123,6 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 				usb_clear_port_feature(hdev, port1,
 						   USB_PORT_FEAT_ENABLE);
 		}
-
-		/* Make sure a warm-reset request is handled by port_event */
-		if (type == HUB_RESUME &&
-		    hub_port_warm_reset_required(hub, port1, portstatus))
-			set_bit(port1, hub->event_bits);
 
 		/*
 		 * Add debounce if USB3 link is in polling/link training state.
@@ -2346,7 +2342,19 @@ static int usb_enumerate_device(struct usb_device *udev)
 		}
 		return -ENOTSUPP;
 	}
-
+#if defined(CONFIG_USB_OTG_WHITELIST_FOR_MDM)
+	if (IS_ENABLED(CONFIG_USB_OTG_WHITELIST_FOR_MDM) &&
+		/*hcd->tpl_support &&*/
+		!is_targeted_for_samsung_mdm(udev)) {
+		if (IS_ENABLED(CONFIG_USB_OTG) && (udev->bus->b_hnp_enable
+			|| udev->bus->is_b_host)) {
+			err = usb_port_suspend(udev, PMSG_AUTO_SUSPEND);
+			if (err < 0)
+				dev_dbg(&udev->dev, "HNP fail, %d\n", err);
+		}
+		return -ENOTSUPP;
+	}
+#endif
 	usb_detect_interface_quirks(udev);
 
 	return 0;
@@ -3495,7 +3503,6 @@ static int hub_handle_remote_wakeup(struct usb_hub *hub, unsigned int port,
 	struct usb_device *hdev;
 	struct usb_device *udev;
 	int connect_change = 0;
-	u16 link_state;
 	int ret;
 
 	hdev = hub->hdev;
@@ -3505,11 +3512,9 @@ static int hub_handle_remote_wakeup(struct usb_hub *hub, unsigned int port,
 			return 0;
 		usb_clear_port_feature(hdev, port, USB_PORT_FEAT_C_SUSPEND);
 	} else {
-		link_state = portstatus & USB_PORT_STAT_LINK_STATE;
 		if (!udev || udev->state != USB_STATE_SUSPENDED ||
-				(link_state != USB_SS_PORT_LS_U0 &&
-				 link_state != USB_SS_PORT_LS_U1 &&
-				 link_state != USB_SS_PORT_LS_U2))
+				 (portstatus & USB_PORT_STAT_LINK_STATE) !=
+				 USB_SS_PORT_LS_U0)
 			return 0;
 	}
 
@@ -4909,8 +4914,13 @@ static void hub_port_connect_change(struct usb_hub *hub, int port1,
 	struct usb_device *udev = port_dev->child;
 	int status = -ENODEV;
 
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
+	dev_info(&port_dev->dev, "status %04x, change %04x, %s\n", portstatus,
+			portchange, portspeed(hub, portstatus));
+#else
 	dev_dbg(&port_dev->dev, "status %04x, change %04x, %s\n", portstatus,
 			portchange, portspeed(hub, portstatus));
+#endif
 
 	if (hub->has_indicators) {
 		set_port_led(hub, port1, HUB_LED_AUTO);
@@ -5543,7 +5553,7 @@ re_enumerate_no_bos:
 
 /**
  * usb_reset_device - warn interface drivers and perform a USB port reset
- * @udev: device to reset (not in NOTATTACHED state)
+ * @udev: device to reset (not in SUSPENDED or NOTATTACHED state)
  *
  * Warns all drivers bound to registered interfaces (using their pre_reset
  * method), performs the port reset, and then lets the drivers know that
@@ -5571,7 +5581,8 @@ int usb_reset_device(struct usb_device *udev)
 	struct usb_host_config *config = udev->actconfig;
 	struct usb_hub *hub = usb_hub_to_struct_hub(udev->parent);
 
-	if (udev->state == USB_STATE_NOTATTACHED) {
+	if (udev->state == USB_STATE_NOTATTACHED ||
+			udev->state == USB_STATE_SUSPENDED) {
 		dev_dbg(&udev->dev, "device reset not allowed in state %d\n",
 				udev->state);
 		return -EINVAL;
@@ -5639,10 +5650,7 @@ int usb_reset_device(struct usb_device *udev)
 					cintf->needs_binding = 1;
 			}
 		}
-
-		/* If the reset failed, hub_wq will unbind drivers later */
-		if (ret == 0)
-			usb_unbind_and_rebind_marked_interfaces(udev);
+		usb_unbind_and_rebind_marked_interfaces(udev);
 	}
 
 	usb_autosuspend_device(udev);

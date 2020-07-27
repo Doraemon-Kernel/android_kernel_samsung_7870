@@ -187,26 +187,11 @@ static irqreturn_t fimg2d_irq(int irq, void *dev_id)
 static int fimg2d_request_bitblt(struct fimg2d_control *ctrl,
 		struct fimg2d_bltcmd *cmd)
 {
-	unsigned long flags;
-	wait_queue_head_t *waitq;
-	struct fimg2d_context *ctx = cmd->ctx;
-
 	fimg2d_debug("Request bitblt\n");
-
 	if (cmd->blt.use_fence)
-		waitq = &ctrl->waiting_waitq;
+		wake_up(&ctrl->waiting_waitq);
 	else
-		waitq = &ctrl->running_waitq;
-
-	g2d_spin_lock(&ctrl->bltlock, flags);
-	atomic_inc(&ctx->ncmd);
-	fimg2d_enqueue(cmd, ctrl);
-	fimg2d_debug("ctx %p pgd %p ncmd(%d) seq_no(%u)\n", ctx,
-			ctx->mm ? (unsigned long *)ctx->mm->pgd : NULL,
-			atomic_read(&ctx->ncmd), cmd->blt.seq_no);
-	g2d_spin_unlock(&ctrl->bltlock, flags);
-
-	wake_up(waitq);
+		wake_up(&ctrl->running_waitq);
 
 	return 0;
 }
@@ -307,7 +292,6 @@ static long fimg2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		fimg2d_pm_qos_update(ctrl, FIMG2D_QOS_ON);
 
 		if (bltcmd->blt.use_fence) {
-			mmput(mm);
 			user_blt = (struct fimg2d_blit __user *)arg;
 			for (i = 0; i < MAX_SRC; i++) {
 				img = &bltcmd->image_src[i];
@@ -328,16 +312,17 @@ static long fimg2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		ret = fimg2d_request_bitblt(ctrl, bltcmd);
 		if (ret) {
-			/* actually dead code */
 			fimg2d_info("request bitblit not allowed\n");
 			fimg2d_info("so passing to s/w fallback.\n");
 			g2d_unlock(&ctrl->drvlock);
-			if (!bltcmd->blt.use_fence)
-				mmput(mm);
+			mmput(mm);
 			return -EBUSY;
 		}
 
 		g2d_unlock(&ctrl->drvlock);
+
+		if (!bltcmd->mm)
+			mmput(mm);
 
 		break;
 
@@ -347,9 +332,6 @@ static long fimg2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (ret)
 			fimg2d_err("Failed to wait, ret = %d\n", ret);
 		fimg2d_debug("End of sync ctx %p\n", ctx);
-
-		/* assumes fence user does not call this ioctl */
-		mmput(ctx->mm);
 		break;
 
 	default:

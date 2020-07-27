@@ -33,6 +33,7 @@
 
 #include <soc/samsung/exynos-powermode.h>
 #include <soc/samsung/exynos-devfreq.h>
+#include <soc/samsung/bts.h>
 
 #define PM_DOMAIN_PREFIX	"PM DOMAIN: "
 

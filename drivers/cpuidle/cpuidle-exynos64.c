@@ -32,11 +32,11 @@
 #include "dt_idle_states.h"
 
 #ifdef CONFIG_SEC_PM
-#define CPUIDLE_ENABLE_MASK (ENABLE_C2 | ENABLE_LPM)
+#define CPUIDLE_ENABLE_MASK (ENABLE_C2 | ENABLE_C3_LPM)
 
 static enum {
 	ENABLE_C2	= BIT(0),
-	ENABLE_LPM	= BIT(1),
+	ENABLE_C3_LPM	= BIT(1),
 } enable_mask = CPUIDLE_ENABLE_MASK;
 
 DEFINE_SPINLOCK(enable_mask_lock);
@@ -89,14 +89,11 @@ module_param_named(log_en, log_en, uint, 0644);
  * IDLE_C2 : Local CPU power gating
  * IDLE_LPM : Low Power Mode, specified by platform
  */
-enum exynos_cpuidle_state {
+enum idle_state {
 	IDLE_C1 = 0,
 	IDLE_C2,
 	IDLE_LPM,
-	IDLE_STATE_MAX,
 };
-
-static char *idle_state_name[IDLE_STATE_MAX] = {"c1", "c2", "lpm"};
 
 /***************************************************************************
  *                             Helper function                             *
@@ -156,6 +153,7 @@ static int exynos_enter_c2(struct cpuidle_device *dev,
 	if (unlikely(log_en & ENABLE_C2))
 		pr_info("+++c2\n");
 #endif
+
 	prepare_idle(dev->cpu);
 
 	entry_index = enter_c2(dev->cpu, index);
@@ -187,7 +185,7 @@ static int exynos_enter_lpm(struct cpuidle_device *dev,
 	mode = determine_lpm();
 
 #ifdef CONFIG_SEC_PM_DEBUG
-	if (unlikely(log_en & ENABLE_LPM))
+	if (unlikely(log_en & ENABLE_C3_LPM))
 		pr_info("+++lpm:%d\n", mode);
 #endif
 	prepare_idle(dev->cpu);
@@ -205,8 +203,8 @@ static int exynos_enter_lpm(struct cpuidle_device *dev,
 	post_idle(dev->cpu);
 
 #ifdef CONFIG_SEC_PM_DEBUG
-	if (unlikely(log_en & ENABLE_LPM))
-		pr_info("+++lpm:%d\n", mode);
+	if (unlikely(log_en & ENABLE_C3_LPM))
+		pr_info("---lpm:%d\n", mode);
 #endif
 	return index;
 }
@@ -215,11 +213,6 @@ static int exynos_enter_idle_state(struct cpuidle_device *dev,
 				struct cpuidle_driver *drv, int index)
 {
 	int (*func)(struct cpuidle_device *, struct cpuidle_driver *, int);
-	ktime_t time_start, time_end;
-	int ret;
-
-	exynos_ss_cpuidle(idle_state_name[index], index, 0, ESS_FLAG_IN);
-	time_start = ktime_get();
 
 #ifdef CONFIG_SEC_PM
 	switch (index) {
@@ -228,7 +221,7 @@ static int exynos_enter_idle_state(struct cpuidle_device *dev,
 			index = IDLE_C1;
 		break;
 	case IDLE_LPM:
-		if (unlikely(!(enable_mask & ENABLE_LPM))) {
+		if (unlikely(!(enable_mask & ENABLE_C3_LPM))) {
 			if (enable_mask & ENABLE_C2)
 				index = IDLE_C2;
 			else
@@ -239,7 +232,6 @@ static int exynos_enter_idle_state(struct cpuidle_device *dev,
 		break;
 	}
 #endif
-
 	switch (index) {
 	case IDLE_C1:
 		func = exynos_enter_idle;
@@ -264,13 +256,7 @@ static int exynos_enter_idle_state(struct cpuidle_device *dev,
 		return -EINVAL;
 	}
 
-	ret = (*func)(dev, drv, index);
-
-	time_end = ktime_get();
-	exynos_ss_cpuidle(idle_state_name[index], ret,
-		(int)ktime_to_us(ktime_sub(time_end, time_start)), ESS_FLAG_OUT);
-
-	return ret;
+	return (*func)(dev, drv, index);
 }
 
 /***************************************************************************

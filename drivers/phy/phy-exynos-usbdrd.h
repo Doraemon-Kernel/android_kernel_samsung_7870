@@ -14,8 +14,8 @@
 
 /* PMU register offset for USB */
 #define EXYNOS_USBDEV_PHY_CONTROL	(0x704)
-#define EXYNOS_USBDRD_ENABLE		BIT(0)
-#define EXYNOS_USBHOST_ENABLE		BIT(1)
+#define EXYNOS_USB3PHY_ENABLE		BIT(0)
+#define EXYNOS_USB2PHY_ENABLE		BIT(1)
 
 /* Exynos USB PHY registers */
 #define EXYNOS_FSEL_9MHZ6		0x0
@@ -116,6 +116,7 @@ struct exynos_usbdrd_phy_config {
 
 struct exynos_usbdrd_phy_drvdata {
 	const struct exynos_usbdrd_phy_config *phy_cfg;
+	bool phy_usermux;
 	u32 pmu_offset_usbdrd0_phy;
 	u32 pmu_offset_usbdrd1_phy;
 	u32 cpu_type;
@@ -140,6 +141,7 @@ struct exynos_usbdrd_phy {
 	struct device *dev;
 	void __iomem *reg_phy;
 	struct clk **clocks;
+	struct clk **phy_clocks;
 	const struct exynos_usbdrd_phy_drvdata *drv_data;
 	struct phy_usb_instance {
 		struct phy *phy;
@@ -153,14 +155,6 @@ struct exynos_usbdrd_phy {
 	struct clk *ref_clk;
 	struct regulator *vbus;
 	struct exynos_usbphy_info usbphy_info;
-#if IS_ENABLED(CONFIG_EXYNOS_OTP)
-#define OTP_SUPPORT_USBPHY_NUMBER	2
-#define OTP_USB3PHY_INDEX		0
-#define OTP_USB2PHY_INDEX		1
-	u8 otp_type[OTP_SUPPORT_USBPHY_NUMBER];
-	u8 otp_index[OTP_SUPPORT_USBPHY_NUMBER];
-	struct tune_bits *otp_data[OTP_SUPPORT_USBPHY_NUMBER];
-#endif
 };
 
 #endif	/* __PHY_EXYNOS_USBDRD_H__ */

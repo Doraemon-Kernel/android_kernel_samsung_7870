@@ -31,6 +31,7 @@
 #include <mali_base_hwconfig_features.h>
 #include <mali_base_hwconfig_issues.h>
 #include <mali_kbase_mem_lowlevel.h>
+#include <mali_kbase_mem_alloc.h>
 #include <mali_kbase_mmu_hw.h>
 #include <mali_kbase_mmu_mode.h>
 #include <mali_kbase_instr.h>
@@ -38,11 +39,6 @@
 #include <linux/atomic.h>
 #include <linux/mempool.h>
 #include <linux/slab.h>
-
-#ifdef CONFIG_MALI_FPGA_BUS_LOGGER
-#include <linux/bus_logger.h>
-#endif
-
 
 #ifdef CONFIG_KDS
 #include <linux/kds.h>
@@ -62,12 +58,9 @@
 
 #include <linux/clk.h>
 #include <linux/regulator/consumer.h>
+
 /* MALI_SEC_INTEGRATION */
 #include <platform/exynos/gpu_integration_defs.h>
-#if defined(CONFIG_PM_RUNTIME) || \
-	(defined(CONFIG_PM) && LINUX_VERSION_CODE >= KERNEL_VERSION(3, 19, 0))
-#define KBASE_PM_RUNTIME 1
-#endif
 
 /** Enable SW tracing when set */
 /* MALI_SEC_INTEGRATION */
@@ -774,74 +767,27 @@ struct kbase_secure_ops {
 	int (*secure_mode_disable)(struct kbase_device *kbdev);
 
 /* MALI_SEC_SECURE_RENDERING */
-	/** Platform specific function for initializing the secure region
-	 *
-	 * Return 0 if successful, otherwise error
-	 */
-	 int (*secure_mode_init)(struct kbase_device *kbdev);
-
-/* MALI_SEC_SECURE_RENDERING */
 	/** Platform specific function for setting the Memory to secure mode.
 	 *
 	 * Return 0 if successful, otherwise error
 	 */
-	int (*secure_mem_enable)(struct kbase_device *kbdev, int ion_fd, u64 flags, struct kbase_va_region *reg);
-
+	int (*secure_mem_enable)(void);
 /* MALI_SEC_SECURE_RENDERING */
 	/** Platform specific function for setting the Memory back to normal mode.
 	 *
 	 * Return 0 if successful, otherwise error
 	 */
-	int (*secure_mem_disable)(struct kbase_device *kbdev, struct kbase_va_region *reg);
+	int (*secure_mem_disable)(void);
 };
 
-/* MALI_SEC_SECURE_RENDERING */
-typedef struct sec_sr_resources {
-	u64             secure_flags_crc_asp;
-
-	phys_addr_t     secure_crc_phys;
-	size_t          secure_crc_sizes;
-} sec_sr_resources;
 #ifdef MALI_SEC_HWCNT
 typedef struct hwc_resources {
-	u64 arith_words;
-	u64 ls_issues;
-	u64 tex_issues;
-	u64 tripipe_active;
-#ifdef MALI_SEC_HWCNT_VERT
-	u64 gpu_active;
-	u64 js0_active;
-	u64 tiler_active;
-	u64 external_read_bits;
-#endif
+	u32 arith_words;
+	u32 ls_issues;
+	u32 tex_issues;
+	u32 tripipe_active;
 } hwc_resources;
 #endif
-
-/**
- * struct kbase_mem_pool - Page based memory pool for kctx/kbdev
- * @kbdev:     Kbase device where memory is used
- * @cur_size:  Number of free pages currently in the pool (may exceed @max_size
- *             in some corner cases)
- * @max_size:  Maximum number of free pages in the pool
- * @pool_lock: Lock protecting the pool - must be held when modifying @cur_size
- *             and @page_list
- * @page_list: List of free pages in the pool
- * @reclaim:   Shrinker for kernel reclaim of free pages
- * @next_pool: Pointer to next pool where pages can be allocated when this pool
- *             is empty. Pages will spill over to the next pool when this pool
- *             is full. Can be NULL if there is no next pool.
- */
-struct kbase_mem_pool {
-	struct kbase_device *kbdev;
-	size_t              cur_size;
-	size_t              max_size;
-	spinlock_t          pool_lock;
-	struct list_head    page_list;
-	struct shrinker     reclaim;
-
-	struct kbase_mem_pool *next_pool;
-};
-
 
 #define DEVNAME_SIZE	16
 
@@ -851,7 +797,6 @@ struct kbase_device {
 	u32 hw_quirks_sc;
 	u32 hw_quirks_tiler;
 	u32 hw_quirks_mmu;
-	u32 hw_quirks_jm;
 
 	struct list_head entry;
 	struct device *dev;
@@ -883,7 +828,6 @@ struct kbase_device {
 
 	struct kbase_pm_device_data pm;
 	struct kbasep_js_device_data js_data;
-	struct kbase_mem_pool mem_pool;
 	struct kbasep_mem_device memdev;
 	struct kbase_mmu_mode const *mmu_mode;
 
@@ -897,6 +841,11 @@ struct kbase_device {
 	unsigned long hw_issues_mask[(BASE_HW_ISSUE_END + BITS_PER_LONG - 1) / BITS_PER_LONG];
 	/** List of features available */
 	unsigned long hw_features_mask[(BASE_HW_FEATURE_END + BITS_PER_LONG - 1) / BITS_PER_LONG];
+
+	/* Cached present bitmaps - these are the same as the corresponding hardware registers */
+	u64 shader_present_bitmap;
+	u64 tiler_present_bitmap;
+	u64 l2_present_bitmap;
 
 	/* Bitmaps of cores that are currently in use (running jobs).
 	 * These should be kept up to date by the job scheduler.
@@ -964,13 +913,11 @@ struct kbase_device {
 		struct kbase_instr_backend backend;
 
 #ifdef MALI_SEC_HWCNT
-		s32 hwcnt_fd;
 		struct mutex mlock;
 		bool is_hwcnt_attach;
 		bool is_hwcnt_enable;
 		bool is_hwcnt_gpr_enable;
 		bool is_hwcnt_force_stop;
-		u32 timeout;
 		struct hwc_resources resources;
 		struct hwc_resources resources_log;
 		u32 cnt_for_bt_start;
@@ -1039,8 +986,6 @@ struct kbase_device {
 #endif
 #endif
 
-	struct kbase_ipa_context *ipa_ctx;
-
 #ifdef CONFIG_MALI_TRACE_TIMELINE
 	struct kbase_trace_kbdev_timeline timeline;
 #endif
@@ -1099,7 +1044,6 @@ struct kbase_device {
 
 	/* defaults for new context created for this device */
 	u32 infinite_cache_active_default;
-	size_t mem_pool_max_size_default;
 
 	/* system coherency mode  */
 	u32 system_coherency;
@@ -1117,25 +1061,6 @@ struct kbase_device {
 	 */
 	bool secure_mode_support;
 
-	/*
-	 * MALI_SEC_SECURE_RENDERING
-	 *
-	 * information for secure ASP setting
-	 *
-	 */
-	sec_sr_resources sec_sr_info;
-
-#ifdef CONFIG_MALI_DEBUG
-	wait_queue_head_t driver_inactive_wait;
-	bool driver_inactive;
-#endif /* CONFIG_MALI_DEBUG */
-
-#ifdef CONFIG_MALI_FPGA_BUS_LOGGER
-	/*
-	 * Bus logger integration.
-	 */
-	struct bus_logger_client *buslogger;
-#endif
 	/* MALI_SEC_INTEGRATION */
 	struct kbase_vendor_callbacks *vendor_callbacks;
 };
@@ -1200,7 +1125,7 @@ struct kbase_context {
 
 	u64 *mmu_teardown_pages;
 
-	struct page *aliasing_sink_page;
+	phys_addr_t aliasing_sink_page;
 
 	struct mutex            reg_lock; /* To be converted to a rwlock? */
 	struct rb_root          reg_rbtree; /* Red-Black tree of GPU regions (live regions) */
@@ -1216,7 +1141,8 @@ struct kbase_context {
 	atomic_t used_pages;
 	atomic_t         nonmapped_pages;
 
-	struct kbase_mem_pool mem_pool;
+	struct kbase_mem_allocator osalloc;
+	struct kbase_mem_allocator *pgd_allocator;
 
 	struct list_head waiting_soft_jobs;
 #ifdef CONFIG_KDS
@@ -1296,11 +1222,6 @@ struct kbase_context {
 
 	/* Must hold queue_mutex when accessing */
 	bool ctx_active;
-
-	/* List of completed jobs waiting for events to be posted */
-	struct list_head completed_jobs;
-	/* Number of work items currently pending on job_done_wq */
-	atomic_t work_count;
 
 	/* MALI_SEC_INTEGRATION */
 	int ctx_status;

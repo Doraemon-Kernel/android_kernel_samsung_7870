@@ -132,7 +132,7 @@ int __init early_init_dt_scan_ect(unsigned long node, const char *uname,
 	if (psize == NULL)
 		return -1;
 
-	printk("[ECT] Address %x, Size %x\b", be32_to_cpu(*paddr), be32_to_cpu(*psize));
+	pr_info("[ECT] Address %x, Size %x\b", be32_to_cpu(*paddr), be32_to_cpu(*psize));
 	memblock_reserve(be32_to_cpu(*paddr), be32_to_cpu(*psize));
 	ect_init(be32_to_cpu(*paddr), be32_to_cpu(*psize));
 
@@ -340,14 +340,12 @@ void __init setup_arch(char **cmdline_p)
 	conswitchp = &dummy_con;
 #endif
 #endif
-#if !(defined CONFIG_RELOCATABLE_KERNEL) && !(defined CONFIG_RANDOMIZE_BASE)
 	if (boot_args[1] || boot_args[2] || boot_args[3]) {
 		pr_err("WARNING: x1-x3 nonzero in violation of boot protocol:\n"
 			"\tx1: %016llx\n\tx2: %016llx\n\tx3: %016llx\n"
 			"This indicates a broken bootloader or old kernel\n",
 			boot_args[1], boot_args[2], boot_args[3]);
 	}
-#endif
 }
 
 static int __init arm64_device_init(void)

@@ -1343,6 +1343,12 @@ config NETFILTER_XT_MATCH_QUOTA2_LOG
 
 	  If unsure, say `N'.
 
+config NETFILTER_XT_MATCH_QUOTA2_LOG_32BIT
+	bool '"quota2" Netfilter LOG support'
+	default n
+	help
+	  Enabel to support an old 32-bit Android platform with 64-bit Kernel.
+
 config NETFILTER_XT_MATCH_RATEEST
 	tristate '"rateest" match support'
 	depends on NETFILTER_ADVANCED

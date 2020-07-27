@@ -451,7 +451,6 @@ DECLARE_STATE_FUNC(idle)
 		int i;
 		pr_debug("[Input Booster] %s      State0 : Idle  index : %d, hmp : %d, cpu : %d, time : %d, input_booster_event : %d\n", glGage, _this->index, _this->param[_this->index].hmp_boost, _this->param[_this->index].cpu_freq, _this->param[_this->index].time, input_booster_event);
 		_this->index=0;
-		_this->level = -1;
 		for(i=0;i<2;i++) {
 			if(delayed_work_pending(&_this->input_booster_timeout_work[i])) {
 				pr_debug("[Input Booster] ****             cancel the pending workqueue\n");
@@ -516,21 +515,25 @@ void input_booster_disable(struct t_input_booster *_this)
 // ********** Detect Events ********** //
 void input_booster(struct input_dev *dev)
 {
-	int i, j, iTouchID = -1, iTouchSlot = -1;
+	int i, j, DetectedCategory = false, iTouchID = -1, iTouchSlot = -1;
 #if defined(CONFIG_SOC_EXYNOS7420) // This code should be working properly in Exynos7420(Noble & Zero2) only.
 	int lcdoffcounter = 0;
 #endif
 	for (i = 0; i < input_count && i < MAX_EVENTS; i++) {
-		if (input_events[i].type == EV_KEY) {
+		if (DetectedCategory) {
+			break;
+		} else if (input_events[i].type == EV_KEY) {
 			switch (input_events[i].code) {
 				case BTN_TOUCH :
 					if(input_events[i+1].type == EV_KEY && input_events[i+1].code == BTN_TOOL_PEN) {
 						if(input_events[i].value && !pen_booster.multi_events) {
 							pr_debug("[Input Booster] PEN EVENT - PRESS\n");
 							RUN_BOOSTER(pen, BOOSTER_ON);
+							DetectedCategory = true;
 						} else if(!input_events[i].value && pen_booster.multi_events) {
 							pr_debug("[Input Booster] PEN EVENT - RELEASE\n");
 							RUN_BOOSTER(pen, BOOSTER_OFF);
+							DetectedCategory = true;
 						}
 					} else if(iTouchID >= 0) { // ***************** Checking Touch Event's ID whethere it is same with previous ID.
 						if(!input_events[i].value && input_events[iTouchID].value < 0) {  // If this event is 'Release'
@@ -544,13 +547,11 @@ void input_booster(struct input_dev *dev)
 					if(input_events[i].value && !hover_booster.multi_events) {
 						pr_debug("[Input Booster] PEN EVENT - HOVER ON\n");
 						RUN_BOOSTER(hover, BOOSTER_ON);
+						DetectedCategory = true;
 					} else if(!input_events[i].value && hover_booster.multi_events) {
 						pr_debug("[Input Booster] PEN EVENT - HOVER OFF\n");
 						RUN_BOOSTER(hover, BOOSTER_OFF);
-						if(pen_booster.multi_events) {
-							pr_debug("[Input Booster] PEN EVENT - RELEASE\n");
-							RUN_BOOSTER(pen, BOOSTER_OFF);
-						}
+						DetectedCategory = true;
 					}
 					break;
 				case KEY_BACK : // ***************** Checking Key & Touch key Event
@@ -558,6 +559,7 @@ void input_booster(struct input_dev *dev)
 						key_back = input_events[i].value;
 						pr_debug("[Input Booster] TOUCHKEY EVENT - %s\n", (input_events[i].value) ? "PRESS" : "RELEASE");
 						RUN_BOOSTER(touchkey, (input_events[i].value) ? BOOSTER_ON : BOOSTER_OFF );
+						DetectedCategory = true;
 					}
 					break;
 				case KEY_HOMEPAGE :
@@ -565,6 +567,7 @@ void input_booster(struct input_dev *dev)
 						key_home = input_events[i].value;
 						pr_debug("[Input Booster] TOUCHKEY EVENT - %s\n", (input_events[i].value) ? "PRESS" : "RELEASE");
 						RUN_BOOSTER(touchkey, (input_events[i].value) ? BOOSTER_ON : BOOSTER_OFF );
+						DetectedCategory = true;
 					}
 					break;
 				case KEY_RECENT :
@@ -572,6 +575,7 @@ void input_booster(struct input_dev *dev)
 						key_recent = input_events[i].value;
 						pr_debug("[Input Booster] TOUCHKEY EVENT - %s\n", (input_events[i].value) ? "PRESS" : "RELEASE");
 						RUN_BOOSTER(touchkey, (input_events[i].value) ? BOOSTER_ON : BOOSTER_OFF );
+						DetectedCategory = true;
 					}
 					break;
 				case KEY_VOLUMEUP :
@@ -579,6 +583,7 @@ void input_booster(struct input_dev *dev)
 				case KEY_POWER :
 					pr_debug("[Input Booster] KEY EVENT - %s\n", (input_events[i].value) ? "PRESS" : "RELEASE");
 					RUN_BOOSTER(key, (input_events[i].value) ? BOOSTER_ON : BOOSTER_OFF );
+					DetectedCategory = true;
 					break;
 				default :
 					break;
@@ -586,7 +591,7 @@ void input_booster(struct input_dev *dev)
 		} else if (input_events[i].type == EV_ABS) {
 			if (input_events[i].code == ABS_MT_TRACKING_ID) {
 				iTouchID = i;
-				if(input_events[iTouchSlot].value < MAX_MULTI_TOUCH_EVENTS && iTouchID < MAX_EVENTS) {
+				if(input_events[iTouchSlot].value < MAX_MULTI_TOUCH_EVENTS && input_events[iTouchSlot].value >= 0 && iTouchID < MAX_EVENTS && iTouchSlot <= MAX_EVENTS) {
 					if(TouchIDs[input_events[iTouchSlot].value] < 0 && input_events[iTouchID].value >= 0) {
 						TouchIDs[input_events[iTouchSlot].value] = input_events[iTouchID].value;
 						if((input_events[iTouchSlot].value >= 0 && touch_booster.multi_events <= 0) || (input_events[iTouchSlot].value == 0 && TouchIDs[1] < 0)) {
@@ -597,7 +602,6 @@ void input_booster(struct input_dev *dev)
 							pr_debug("[Input Booster] MULTI-TOUCH EVENT - PRESS - ID: 0x%x, Slot: 0x%x, multi : %d\n", input_events[iTouchID].value, input_events[iTouchSlot].value, touch_booster.multi_events);
 							touch_booster.multi_events++;
 							RUN_BOOSTER(multitouch, BOOSTER_ON );
-/*
 							if(delayed_work_pending(&touch_booster.input_booster_timeout_work[0])) {
 								int temp_hmp_boost = touch_booster.param[0].hmp_boost, temp_index = touch_booster.index;
 								pr_debug("[Input Booster] ****             cancel the pending touch booster workqueue\n");
@@ -608,7 +612,6 @@ void input_booster(struct input_dev *dev)
 								touch_booster.param[0].hmp_boost = temp_hmp_boost;
 								touch_booster.index = ( temp_index >= 2 ? 1 : temp_index );
 							}
-*/
 						}
 					} else if(TouchIDs[input_events[iTouchSlot].value] >= 0 && input_events[iTouchID].value < 0) {
 						TouchIDs[input_events[iTouchSlot].value] = input_events[iTouchID].value;
@@ -650,10 +653,12 @@ void input_booster(struct input_dev *dev)
 					case BTN_MIDDLE :
 						pr_debug("[Input Booster] MOUSE EVENT - %s\n", (input_events[i+1].value) ? "PRESS" : "RELEASE");
 						RUN_BOOSTER(mouse, (input_events[i+1].value) ? BOOSTER_ON : BOOSTER_OFF );
+						DetectedCategory = true;
 						break;
 					default : // ***************** Checking Keyboard Event
 						pr_debug("[Input Booster] KEYBOARD EVENT - %s (multi count %d )\n", (input_events[i+1].value) ? "PRESS" : "RELEASE", keyboard_booster.multi_events);
 						RUN_BOOSTER(keyboard, (input_events[i+1].value) ? BOOSTER_ON : BOOSTER_OFF );
+						//DetectedCategory = true; // keyboard event can be continue in a set.
 						break;
 				}
 			}
@@ -661,6 +666,7 @@ void input_booster(struct input_dev *dev)
 			if (input_events[0].type == EV_KEY && input_events[0].code == BTN_LEFT) {
 				pr_debug("[Input Booster] MOUSE EVENT - %s\n", "WHELL");
 				RUN_BOOSTER(mouse_wheel, BOOSTER_ON);
+				DetectedCategory = true;
 			}
 		}
 	}
@@ -1093,6 +1099,7 @@ void input_close_device(struct input_handle *handle)
 	mutex_unlock(&dev->mutex);
 }
 EXPORT_SYMBOL(input_close_device);
+
 static int input_enable_device(struct input_dev *dev)
 {
 	int retval;
@@ -1320,18 +1327,16 @@ static int input_default_setkeycode(struct input_dev *dev,
 		}
 	}
 
-	if (*old_keycode <= KEY_MAX) {
-		__clear_bit(*old_keycode, dev->keybit);
-		for (i = 0; i < dev->keycodemax; i++) {
-			if (input_fetch_keycode(dev, i) == *old_keycode) {
-				__set_bit(*old_keycode, dev->keybit);
-				/* Setting the bit twice is useless, so break */
-				break;
-			}
+	__clear_bit(*old_keycode, dev->keybit);
+	__set_bit(ke->keycode, dev->keybit);
+
+	for (i = 0; i < dev->keycodemax; i++) {
+		if (input_fetch_keycode(dev, i) == *old_keycode) {
+			__set_bit(*old_keycode, dev->keybit);
+			break; /* Setting the bit twice is useless, so break */
 		}
 	}
 
-	__set_bit(ke->keycode, dev->keybit);
 	return 0;
 }
 
@@ -1387,13 +1392,9 @@ int input_set_keycode(struct input_dev *dev,
 	 * Simulate keyup event if keycode is not present
 	 * in the keymap anymore
 	 */
-	if (old_keycode > KEY_MAX) {
-		dev_warn(dev->dev.parent ?: &dev->dev,
-			 "%s: got too big old keycode %#x\n",
-			 __func__, old_keycode);
-	} else if (test_bit(EV_KEY, dev->evbit) &&
-		   !is_event_supported(old_keycode, dev->keybit, KEY_MAX) &&
-		   __test_and_clear_bit(old_keycode, dev->key)) {
+	if (test_bit(EV_KEY, dev->evbit) &&
+	    !is_event_supported(old_keycode, dev->keybit, KEY_MAX) &&
+	    __test_and_clear_bit(old_keycode, dev->key)) {
 		struct input_value vals[] =  {
 			{ EV_KEY, old_keycode, 0 },
 			input_value_sync

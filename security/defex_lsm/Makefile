@@ -5,8 +5,8 @@
 # Features to Enable
 PED_ENABLE=true
 SAFEPLACE_ENABLE=true
-# Exynos8890 doesn't include IMA, INTEGRITY Feature is disabled at this chipset. 
-INTEGRITY_ENABLE=false
+#Disabled Integrity
+#INTEGRITY_ENABLE=true
 
 # caches to enable
 CACHES_ENABLE=true

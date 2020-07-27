@@ -33,8 +33,6 @@ extern unsigned long cal_dfs_cached_get_rate(unsigned int id);
 extern unsigned long cal_dfs_get_rate(unsigned int id);
 extern int cal_dfs_get_rate_table(unsigned int id, unsigned long *table);
 extern int cal_dfs_get_asv_table(unsigned int id, unsigned int *table);
-extern int cal_asv_pmic_info(void);
-extern int cal_asv_get_ids_info(unsigned int domain);
 
 
 struct dvfs_rate_volt {
@@ -53,7 +51,6 @@ enum cal_dfs_ext_ops {
 	cal_dfs_initsmpl		= 0,
 	cal_dfs_setsmpl		= 1,
 	cal_dfs_get_smplstatus	= 2,
-	cal_dfs_deinitsmpl	= 3,
 
 	cal_dfs_dvs = 30,
 
@@ -61,10 +58,6 @@ enum cal_dfs_ext_ops {
 	cal_dfs_mif_is_dll_on	= 50,
 
 	cal_dfs_cpu_idle_clock_down = 60,
-
-	cal_dfs_ctrl_clk_gate	= 70,
-
-	cal_dfs_rate_lock = 80,
 };
 
 extern int cal_dfs_ext_ctrl(unsigned int id,
@@ -80,9 +73,10 @@ extern int cal_asv_get_grp(unsigned int id, unsigned int lv);
 extern void cal_asv_set_tablever(unsigned int version);
 extern int cal_asv_get_tablever(void);
 extern void cal_asv_set_ssa0(unsigned int id, unsigned int ssa0);
-extern void cal_dram_print_info(void);
+
 
 extern int cal_init(void);
+extern int is_sicd_factory(void);
 
 /* It is for debugging. */
 extern void cal_vclk_dbg_info(unsigned int id);

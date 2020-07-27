@@ -59,11 +59,6 @@
 #define ESR_EL1_EC_BKPT32	(0x38)
 #define ESR_EL1_EC_VECTOR32	(0x3A)
 #define ESR_EL1_EC_BRK64	(0x3C)
-#define ESR_EL1_ISS_DFSC_MASK	(0x3F)
-#define ESR_EL1_ISS_DFSC_TLB_CONFLICT	(0x30)
-
-/* The following definitions are ported back from kernel 4.4 for esr_get_class_string */
-#define ESR_EL1_EC_MAX		(0x3F)
 
 #define ESR_ELx_EC_UNKNOWN	(0x00)
 #define ESR_ELx_EC_WFx		(0x01)
@@ -144,6 +139,16 @@
 #define ESR_ELx_COND_SHIFT	(20)
 #define ESR_ELx_COND_MASK	(UL(0xF) << ESR_ELx_COND_SHIFT)
 #define ESR_ELx_WFx_ISS_WFE	(UL(1) << 0)
+
+#ifndef __ASSEMBLY__
+#include <asm/types.h>
+
+const char *esr_get_class_string(u32 esr);
+#endif /* __ASSEMBLY */
+
+/* The following definitions are ported back from kernel 4.4 for esr_get_class_string */
+
+#define ESR_EL1_EC_MAX		(0x3F)
 
 /* ISS field definitions for System instruction traps */
 #define ESR_ELx_SYS64_ISS_RES0_SHIFT	22

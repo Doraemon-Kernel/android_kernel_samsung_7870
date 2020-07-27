@@ -56,7 +56,6 @@
 static void kbase_mmu_sync_pgd(struct device *dev,
 		dma_addr_t handle, size_t size)
 {
-
 	dma_sync_single_for_device(dev, handle, size, DMA_TO_DEVICE);
 }
 
@@ -313,6 +312,7 @@ fault_done:
 
 phys_addr_t kbase_mmu_alloc_pgd(struct kbase_context *kctx)
 {
+	phys_addr_t pgd;
 	u64 *page;
 	int i;
 	struct page *p;
@@ -321,10 +321,10 @@ phys_addr_t kbase_mmu_alloc_pgd(struct kbase_context *kctx)
 	kbase_atomic_add_pages(1, &kctx->used_pages);
 	kbase_atomic_add_pages(1, &kctx->kbdev->memdev.used_pages);
 
-	p = kbase_mem_pool_alloc(&kctx->mem_pool);
-	if (!p)
+	if (kbase_mem_allocator_alloc(kctx->pgd_allocator, 1, &pgd) != 0)
 		goto sub_pages;
 
+	p = pfn_to_page(PFN_DOWN(pgd));
 	page = kmap(p);
 	if (NULL == page)
 		goto alloc_free;
@@ -336,11 +336,11 @@ phys_addr_t kbase_mmu_alloc_pgd(struct kbase_context *kctx)
 
 	kbase_mmu_sync_pgd(kctx->kbdev->dev, kbase_dma_addr(p), PAGE_SIZE);
 
-	kunmap(p);
-	return page_to_phys(p);
+	kunmap(pfn_to_page(PFN_DOWN(pgd)));
+	return pgd;
 
 alloc_free:
-	kbase_mem_pool_free(&kctx->mem_pool, p, false);
+	kbase_mem_allocator_free(kctx->pgd_allocator, 1, &pgd, false);
 sub_pages:
 	kbase_atomic_sub_pages(1, &kctx->used_pages);
 	kbase_atomic_sub_pages(1, &kctx->kbdev->memdev.used_pages);
@@ -965,9 +965,7 @@ static void mmu_teardown_level(struct kbase_context *kctx, phys_addr_t pgd, int 
 
 			beenthere(kctx, "pte %lx level %d", (unsigned long)target_pgd, level + 1);
 			if (zap) {
-				struct page *p = phys_to_page(target_pgd);
-
-				kbase_mem_pool_free(&kctx->mem_pool, p, true);
+				kbase_mem_allocator_free(kctx->pgd_allocator, 1, &target_pgd, true);
 				kbase_process_page_usage_dec(kctx, 1);
 				kbase_atomic_sub_pages(1, &kctx->used_pages);
 				kbase_atomic_sub_pages(1, &kctx->kbdev->memdev.used_pages);
@@ -1009,7 +1007,7 @@ void kbase_mmu_free_pgd(struct kbase_context *kctx)
 	mmu_teardown_level(kctx, kctx->pgd, MIDGARD_MMU_TOPLEVEL, 1, kctx->mmu_teardown_pages);
 
 	beenthere(kctx, "pgd %lx", (unsigned long)kctx->pgd);
-	kbase_mem_pool_free(&kctx->mem_pool, phys_to_page(kctx->pgd), true);
+	kbase_mem_allocator_free(kctx->pgd_allocator, 1, &kctx->pgd, true);
 	kbase_process_page_usage_dec(kctx, 1);
 	kbase_atomic_sub_pages(1, &kctx->used_pages);
 	kbase_atomic_sub_pages(1, &kctx->kbdev->memdev.used_pages);

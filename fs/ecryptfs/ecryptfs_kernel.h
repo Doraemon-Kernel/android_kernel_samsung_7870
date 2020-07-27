@@ -49,11 +49,6 @@
 #include "ecryptfs_dlp.h"
 #endif
 
-#ifdef CONFIG_ECRYPTFS_FEK_INTEGRITY
-#define HASH_OFFSET 512
-#define FEK_HASH_SIZE 32
-#endif
-
 #ifdef CONFIG_WTL_ENCRYPTION_FILTER
 #define ENC_NAME_FILTER_MAX_INSTANCE 5
 #define ENC_NAME_FILTER_MAX_LEN (256*5)
@@ -74,12 +69,6 @@
 #define ECRYPTFS_BASE_PATH_SIZE 1024
 #define ECRYPTFS_LABEL_SIZE 1024
 
-#if defined(CONFIG_MMC_DW_FMP_ECRYPT_FS) || defined(CONFIG_UFS_FMP_ECRYPT_FS)
-#define RA_CLEAR	0
-#define RA_RESTORE	1
-#define FMPINFO_CLEAR	0
-#define FMPINFO_SET	1
-#endif
 #ifdef CONFIG_SDP
 #define PKG_NAME_SIZE 16
 #endif
@@ -310,9 +299,6 @@ struct ecryptfs_crypt_stat {
 	unsigned char cipher[ECRYPTFS_MAX_CIPHER_NAME_SIZE];
 	unsigned char key[ECRYPTFS_MAX_KEY_BYTES];
 	unsigned char root_iv[ECRYPTFS_MAX_IV_BYTES];
-#ifdef CONFIG_ECRYPTFS_FEK_INTEGRITY
-	unsigned char hash[FEK_HASH_SIZE];
-#endif
 	struct list_head keysig_list;
 	struct mutex keysig_list_mutex;
 	struct mutex cs_tfm_mutex;
@@ -418,9 +404,6 @@ struct ecryptfs_mount_crypt_stat {
 #define ECRYPTFS_GLOBAL_ENCFN_USE_MOUNT_FNEK   0x00000020
 #define ECRYPTFS_GLOBAL_ENCFN_USE_FEK          0x00000040
 #define ECRYPTFS_GLOBAL_MOUNT_AUTH_TOK_ONLY    0x00000080
-#if defined(CONFIG_MMC_DW_FMP_ECRYPT_FS) || defined(CONFIG_UFS_FMP_ECRYPT_FS)
-#define ECRYPTFS_USE_FMP		       0x00001000
-#endif
 #ifdef CONFIG_WTL_ENCRYPTION_FILTER
 #define ECRYPTFS_ENABLE_FILTERING              0x00000100
 #define ECRYPTFS_ENABLE_NEW_PASSTHROUGH        0x00000200
@@ -445,9 +428,6 @@ struct ecryptfs_mount_crypt_stat {
 	unsigned char global_default_fn_cipher_name[
 		ECRYPTFS_MAX_CIPHER_NAME_SIZE + 1];
 	char global_default_fnek_sig[ECRYPTFS_SIG_SIZE_HEX + 1];
-#if defined(CONFIG_MMC_DW_FMP_ECRYPT_FS) || defined(CONFIG_UFS_FMP_ECRYPT_FS)
-	u8 cipher_code;
-#endif
 #ifdef CONFIG_WTL_ENCRYPTION_FILTER
 	int max_name_filter_len;
 	char enc_filter_name[ENC_NAME_FILTER_MAX_INSTANCE]
@@ -878,10 +858,6 @@ int ecryptfs_set_f_namelen(long *namelen, long lower_namelen,
 			   struct ecryptfs_mount_crypt_stat *mount_crypt_stat);
 int ecryptfs_derive_iv(char *iv, struct ecryptfs_crypt_stat *crypt_stat,
 		       loff_t offset);
-#if defined(CONFIG_MMC_DW_FMP_ECRYPT_FS) || defined(CONFIG_UFS_FMP_ECRYPT_FS)
-void ecryptfs_propagate_rapages(struct file *file, unsigned int crypt);
-int ecryptfs_propagate_fmpinfo(struct inode *inode, unsigned int flag);
-#endif
 
 #ifdef CONFIG_WTL_ENCRYPTION_FILTER
 extern int is_file_name_match(struct ecryptfs_mount_crypt_stat *mcs,

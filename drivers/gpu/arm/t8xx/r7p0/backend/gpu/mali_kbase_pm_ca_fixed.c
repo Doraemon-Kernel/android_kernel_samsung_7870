@@ -34,7 +34,7 @@ static void fixed_term(struct kbase_device *kbdev)
 
 static u64 fixed_get_core_mask(struct kbase_device *kbdev)
 {
-	return kbdev->gpu_props.props.raw_props.shader_present;
+	return kbdev->shader_present_bitmap;
 }
 
 static void fixed_update_core_status(struct kbase_device *kbdev,

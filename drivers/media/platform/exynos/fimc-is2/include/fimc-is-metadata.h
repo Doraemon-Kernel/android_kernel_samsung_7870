@@ -140,7 +140,7 @@ enum optical_stabilization_mode {
 	OPTICAL_STABILIZATION_MODE_SINE_Y,
 	OPTICAL_STABILIZATION_MODE_CENTERING,
 	OPTICAL_STABILIZATION_MODE_VDIS,
-	OPTICAL_STABILIZATION_MODE_VIDEO_RATIO_4_3, // Recording mode(VGA)
+	OPTICAL_STABILIZATION_MODE_VIDEO_RATIO_4_3,
 };
 
 enum lens_state {
@@ -750,6 +750,7 @@ enum aa_scene_mode {
 	AA_SCENE_MODE_HIGH_SPEED_VIDEO,
 	AA_SCENE_MODE_HDR,
 	AA_SCENE_MODE_FACE_PRIORITY_LOW_LIGHT,
+	A_SCENE_MODE_MANUAL_MFHDR,
 
 	/* vendor feature */
 	AA_SCENE_MODE_NIGHT_CAPTURE = 100,
@@ -774,6 +775,7 @@ enum aa_scene_mode {
 	AA_SCENE_MODE_THERMAL,
 	AA_SCENE_MODE_VIDEO_COLLAGE,
 	AA_SCENE_MODE_PRO_MODE,
+	AA_SCENE_MODE_FACE_LOCK,
 };
 
 enum aa_effect_mode {
@@ -824,6 +826,12 @@ enum aa_aemode {
 	AA_AEMODE_SPOT_TOUCH,
 	UNKNOWN_AA_AE_MODE
 };
+
+enum aa_ae_frontflash_brightness {
+    AA_FRONTFLASH_BRIGHTNESS_25MA = 1,
+    AA_FRONTFLASH_BRIGHTNESS_50MA,
+    AA_FRONTFLASH_BRIGHTNESS_100MA,
+};	/*For control brightness of front flash led*/
 
 enum aa_ae_flashmode {
 	/*all flash control stop*/
@@ -1019,7 +1027,14 @@ struct camera2_aa_ctl {
 	uint32_t			vendor_touchBvChange;
 	uint32_t			vendor_captureCount;
 	uint32_t			vendor_captureExposureTime;
-	uint32_t			vendor_reserved[10];
+#if defined(USE_MFHDR_CAMERA_INTERFACE)
+    uint32_t            vendor_expBracketingCount;
+    float               vendor_expBracketing[15];
+    float               vendor_expBracketingCapture;
+#endif
+	/*For control brightness of front flash led*/
+	enum aa_ae_frontflash_brightness vendor_aeFrontFlashBrightness;
+	uint32_t			vendor_reserved[9];
 };
 
 struct camera2_aa_dm {
@@ -1062,6 +1077,11 @@ struct camera2_aa_dm {
 	uint32_t			vendor_touchBvChange;
 	uint32_t			vendor_captureCount;
 	uint32_t			vendor_captureExposureTime;
+#if defined(USE_MFHDR_CAMERA_INTERFACE)
+    uint32_t            vendor_expBracketingCount;
+    float               vendor_expBracketing[15];
+    float               vendor_expBracketingCapture;
+#endif
 	uint32_t			vendor_reserved[10];
 };
 
@@ -1499,7 +1519,6 @@ enum companion_wdr_mode {
 	COMPANION_WDR_OFF 	= 1,
 	COMPANION_WDR_ON 	= 2,
 	COMPANION_WDR_AUTO 	= 3,
-	COMPANION_WDR_AUTO_LIKE = 4,
 	TOTALCOUNT_COMPANION_WDR,
 	COMPANION_WDR_UNKNOWN,
 };
@@ -1548,6 +1567,9 @@ enum camera_op_mode {
 	CAMERA_OP_MODE_GED = 0,   // default
 	CAMERA_OP_MODE_TW,
 	CAMERA_OP_MODE_HAL3_GED,
+	CAMERA_OP_MODE_HAL3_TW,
+	CAMERA_OP_MODE_FAC,
+	CAMERA_OP_MODE_HAL3_FAC,
 };
 
 struct camera2_companion_uctl {
@@ -1646,6 +1668,7 @@ enum camera_vt_mode {
 	VT_MODE_2,   /* qvga ~ vga*/
 	VT_MODE_3,   /* reserved : smart stay */
 	VT_MODE_4,   /* vga ~ hd  */
+	VT_MODE_5,   /* vga ~ hd 20Fps */
 };
 
 /** \brief
@@ -1685,8 +1708,9 @@ struct camera2_uctl {
 	enum camera_vt_mode		vtMode;
 	float				zoomRatio;
 	enum camera_flash_mode		flashMode;
-	enum camera_op_mode             opMode;
-	uint32_t			reserved[8];
+	enum camera_op_mode		opMode;
+	uint8_t				countryCode[4];
+	uint32_t			reserved[7];
 };
 
 struct camera2_udm {

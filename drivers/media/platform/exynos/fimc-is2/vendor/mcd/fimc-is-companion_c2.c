@@ -276,10 +276,10 @@ p_err:
 	return ret;
 }
 
-static int fimc_is_comp_i2c_read(struct i2c_client *client, u16 addr, u16 *data)
+int fimc_is_comp_i2c_read(struct i2c_client *client, u16 addr, u16 *data)
 {
 	int err;
-	u8 rxbuf[2], txbuf[2];
+	u8 rxbuf[2], txbuf[2] = {0, 0};
 	struct i2c_msg msg[2];
 
 	rxbuf[0] = (addr & 0xff00) >> 8;
@@ -305,7 +305,7 @@ static int fimc_is_comp_i2c_read(struct i2c_client *client, u16 addr, u16 *data)
 	return 0;
 }
 
-static int fimc_is_comp_i2c_write(struct i2c_client *client ,u16 addr, u16 data)
+int fimc_is_comp_i2c_write(struct i2c_client *client ,u16 addr, u16 data)
 {
         int retries = I2C_RETRY_COUNT;
         int ret = 0, err = 0;

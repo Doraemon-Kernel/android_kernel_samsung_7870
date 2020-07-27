@@ -169,7 +169,6 @@
 #define L2_PWRACTIVE_HI         0x264	/* (RO) Level 2 cache active bitmap, high word */
 
 
-#define JM_CONFIG               0xF00   /* (RW) Job Manager configuration register (Implementation specific register) */
 #define SHADER_CONFIG           0xF04	/* (RW) Shader core configuration settings (Implementation specific register) */
 #define TILER_CONFIG            0xF08   /* (RW) Tiler core configuration settings (Implementation specific register) */
 #define L2_MMU_CONFIG           0xF0C	/* (RW) Configuration of the L2 cache and MMU (Implementation specific register) */

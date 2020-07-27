@@ -16,21 +16,18 @@
 #include <linux/device.h>
 #include <linux/sec_sysfs.h>
 #include <linux/soc/samsung/exynos-soc.h>
+#include <asm/io.h>
 
 #define MAX_DDR_VENDOR 16
-#define MAX_RANK_NUM 2
-#define LPDDR4_CH_NUM 4
-#define NUM_DQS2DQ_ID 18 // DQ0 ~ DQ7, DM0, DQ8 ~ DQ15, DM1
+#define LPDDR_BASE 0x104809A4
 #define DATA_SIZE 700
 
-enum ids_info {
-	tg,
-	lg,
-	bg,
-	g3dg,
-	mifg,
-	bids,
-	gids,
+enum ids_info
+{
+	table_ver,
+	cpu_asv,
+	g3d_asv,
+	mif_asv
 };
 
 /*
@@ -64,8 +61,6 @@ static char* lpddr4_manufacture_name[MAX_DDR_VENDOR] =
 	"MIC" /* Micron */,};
 
 extern int asv_ids_information(enum ids_info id);
-extern int pwrcal_get_dram_tdqsck(int ch, int rank, int byte, unsigned int *tdqsck);
-extern int pwrcal_get_dram_tdqs2dq(int ch, int rank, int idx, unsigned int *tdqs2dq);
 extern unsigned long long pwrcal_get_dram_manufacturer(void);
 extern struct exynos_chipid_info exynos_soc_info;
 static unsigned int sec_hw_rev;
@@ -106,65 +101,29 @@ static void chipid_dec_to_36(u32 in, char *p)
 	p[5] = 0;
 }
 
-static void get_dram_param(int *mr5_vendor_id, int *rank_cnt)
+static char* get_dram_manufacturer(void)
 {
-	unsigned long long ect_key;
+	void* lpddr_reg;
+	u32 val;
+	int mr5_vendor_id = 0;
+
+	lpddr_reg = ioremap(LPDDR_BASE, SZ_32);
+
+	if (!lpddr_reg) {
+		pr_err("failed to get i/o address lpddr_reg\n");
+		return lpddr4_manufacture_name[mr5_vendor_id];
+	}
 	
-	ect_key = pwrcal_get_dram_manufacturer();
+	val = readl((void __iomem *)lpddr_reg);
 
-	*rank_cnt = 0xf & (ect_key >> 8);
-	*mr5_vendor_id = 0xf & (ect_key >> 24);
-}
+	mr5_vendor_id = 0xf & (val >> 24);
 
-static void get_pwrcal_dram_info(char *tdqs2dq, char *tdqsck, int rank_cnt)
-{
-	int ch;
-	int rank;
-	int byte;
-	int idx;
-	int offset = 0;
-
-	unsigned int dqs2dq;
-	unsigned int clk2dqs[2];
-
-	for (ch = 0; ch < LPDDR4_CH_NUM; ch++) {
-		offset += sprintf((char*)(tdqsck+offset), "ch%d", ch);
-		for (rank = 0; rank < rank_cnt; rank++) {
-
-			for (byte = 0; byte < 2; byte++)
-				pwrcal_get_dram_tdqsck(ch, rank, byte, &clk2dqs[byte]);
-
-			offset += sprintf((char*)(tdqsck+offset), "(%x:%x)", clk2dqs[0], clk2dqs[1]);
-		}
-	}
-
-	offset = 0;
-
-	for (rank = 0; rank < rank_cnt; rank++) {
-		for (ch = 0; ch < LPDDR4_CH_NUM; ch++) {
-			offset += sprintf((char*)(tdqs2dq+offset), "rank%dch%d(", rank, ch);
-
-			// get tDQS2DQ data(DQ0 ~ DQ7, DM0, DQ8 ~ DQ15, DM1)
-			for (idx = 0; idx < NUM_DQS2DQ_ID; idx++) {
-				pwrcal_get_dram_tdqs2dq(ch, rank, idx, &dqs2dq);
-				offset += sprintf((char*)(tdqs2dq+offset), "%02x", dqs2dq);
-			}
-			offset += sprintf((char*)(tdqs2dq+offset), ")");
-		}
-	}
+	return lpddr4_manufacture_name[mr5_vendor_id];
 }
 
 static ssize_t sec_hw_param_ap_info_show(struct kobject *kobj,
 			         struct kobj_attribute *attr, char *buf)
 {
-	/* store ap info
-		"LOT_ID":""     : lot id
-		"ASV_CL0":""    : ASV for apl
-		"ASV_CL1":""    : ASV for mgs
-		"ASV_MIF":""    : ASV for mif
-		"IDS_CL1":""    : IDS value for mgs
-	*/
-	
 	ssize_t info_size = 0;
 	int reverse_id_0 = 0;
 	int tmp = 0;
@@ -176,10 +135,11 @@ static ssize_t sec_hw_param_ap_info_show(struct kobject *kobj,
 
 	info_size += snprintf(buf, DATA_SIZE, "\"HW_REV\":\"%d\",", sec_hw_rev);
 	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"LOT_ID\":\"%s\",", lot_id);
-	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"ASV_CL0\":\"%d\",", asv_ids_information(lg));
-	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"ASV_CL1\":\"%d\",", asv_ids_information(bg));
-	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"ASV_MIF\":\"%d\",", asv_ids_information(mifg));
-	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"IDS_CL1\":\"%d\",", asv_ids_information(bids));
+	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"ASV_LIT\":\"%d\",", asv_ids_information(cpu_asv));
+	//CPUCL0/1 use same ASV table
+	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"ASV_BIG\":\"%d\",", asv_ids_information(cpu_asv));
+	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"ASV_MIF\":\"%d\",", asv_ids_information(mif_asv));
+	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"IDS_BIG\":\"\",");
 	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"PARAM0\":\"\"");
 	
 	return info_size;
@@ -188,30 +148,11 @@ static ssize_t sec_hw_param_ap_info_show(struct kobject *kobj,
 static ssize_t sec_hw_param_ddr_info_show(struct kobject *kobj,
 			         struct kobj_attribute *attr, char *buf)
 {
-	/* store dram info
-		"DDRV":""    : dram vendor
-		"C2D":""     : tDOSCK - Clk-to-DQS delay, Gate Training Result		
-		"D2D":""     : tDQS2DQ - DQS-to-DQ delay, DQ-DQS Training Result 
-
-		The tDOSCK lookup value for each channel, rank, byte, and unit is step.
-		The tDQS2DQ lookup value for each channel, rank, dq, dm, and unit is step.
-		The tDQS2DQ data is stored in the following order.
-		Total idx : 18(dq0 ~ dq7, dm0, dq8 ~ dq15, dm1)
-	*/
-
-	char tdqsck[SZ_128] = {0,};
-	char tdqs2dq[SZ_512] = {0,};
-	int rank_cnt, mr5_vendor_id;
 	ssize_t info_size = 0;
 
-	get_dram_param(&mr5_vendor_id, &rank_cnt);
-
-	if(rank_cnt <= MAX_RANK_NUM)
-		get_pwrcal_dram_info(tdqs2dq, tdqsck, rank_cnt);
-
-	info_size += snprintf((char*)(buf), DATA_SIZE, "\"DDRV\":\"%s\",", lpddr4_manufacture_name[mr5_vendor_id]);
-	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"C2D\":\"%s\",", tdqsck);
-	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"D2D\":\"%s\"", tdqs2dq);
+	info_size += snprintf((char*)(buf), DATA_SIZE, "\"DDRV\":\"%s\",", get_dram_manufacturer());
+	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"C2D\":\"\",");
+	info_size += snprintf((char*)(buf+info_size), DATA_SIZE - info_size, "\"D2D\":\"\"");
 	
 	return info_size;
 }

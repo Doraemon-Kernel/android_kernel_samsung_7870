@@ -18,9 +18,6 @@
 #define MAX_DECON_WIN		8
 #define MAX_VPP_SUBDEV		9
 #define SHADOW_UPDATE_TIMEOUT	(300 * 1000) /* 300ms */
-#define CEIL(x)			((x-(u32)(x) > 0 ? (u32)(x+1) : (u32)(x)))
-
-#define DSC_INIT_XMIT_DELAY	0x200
 
 enum decon_trig_mode {
 	DECON_HW_TRIG = 0,
@@ -77,7 +74,6 @@ enum decon_win_func {
 	PD_FUNC_XOR			= 0xb,
 	PD_FUNC_PLUS			= 0xc,
 	PD_FUNC_LEGACY			= 0xd,
-	PD_FUNC_LEGACY2			= 0xe,
 };
 
 enum decon_win_alpha_sel {
@@ -155,7 +151,7 @@ enum decon_clk_id {
 };
 
 struct decon_clocks {
-	signed long decon[CLK_ID_DPLL + 1];
+	unsigned long decon[CLK_ID_DPLL + 1];
 };
 
 enum decon_data_path {
@@ -254,10 +250,6 @@ enum decon_enhance_path {
 	ENHANCEPATH_MDNIE_DITHER_ON	= 0x5,
 };
 
-enum decon_dsc_id {
-	DECON_DSC_ENC_0	= 0x0,
-	DECON_DSC_ENC_1,
-};
 
 /* CAL APIs list */
 int decon_reg_init(u32 id, u32 dsi_idx, struct decon_param *p);
@@ -265,7 +257,6 @@ void decon_reg_init_probe(u32 id, u32 dsi_idx, struct decon_param *p);
 int decon_reg_start(u32 id, struct decon_mode_info *psr);
 int decon_reg_stop(u32 id, u32 dsi_idx, struct decon_mode_info *psr);
 void decon_reg_release_resource(u32 id, struct decon_mode_info *psr);
-void decon_reg_release_resource_instantly(u32 id);
 void decon_reg_set_int(u32 id, struct decon_mode_info *psr, u32 en);
 void decon_reg_set_window_control(u32 id, int win_idx, struct decon_window_regs *regs, u32 winmap_en);
 void decon_reg_update_req_and_unmask(u32 id, struct decon_mode_info *psr);
@@ -275,9 +266,6 @@ void decon_reg_set_trigger(u32 id, struct decon_mode_info *psr,
 int decon_reg_wait_for_update_timeout(u32 id, unsigned long timeout);
 int decon_reg_wait_for_window_update_timeout(u32 id, u32 win_idx, unsigned long timeout);
 int decon_reg_get_interrupt_and_clear(u32 id);
-
-/* DSC related functions */
-int dsc_reg_init(u32 id, enum decon_dsi_mode dsi_mode, struct decon_lcd *lcd_info);
 
 /* CAL raw functions list */
 void decon_reg_set_disp_ss_cfg(u32 id, void __iomem *disp_ss_regs, u32 dsi_idx, struct decon_mode_info *psr);

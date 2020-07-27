@@ -3,7 +3,11 @@
 #
 
 ifeq ($(CONFIG_SOC_EXYNOS8890),y)
+ifeq ($(CONFIG_SOC_EXYNOS8890_EVT1),y)
 obj-$(CONFIG_EXYNOS_BUSMONITOR) += exynos8890-busmon.o
+else
+obj-$(CONFIG_EXYNOS_BUSMONITOR) += exynos8890-busmon-evt0.o
+endif
 else
 obj-$(CONFIG_EXYNOS_BUSMONITOR) += exynos-busmon.o
 endif

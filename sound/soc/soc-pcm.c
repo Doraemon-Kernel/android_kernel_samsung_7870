@@ -674,7 +674,7 @@ static int soc_pcm_close(struct snd_pcm_substream *substream)
 		platform->driver->ops->close(substream);
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		if (!codec_dai->playback_active) {
+		if (!codec_dai->playback_active && !codec_dai->component->active) {
 
 			if (snd_soc_runtime_ignore_pmdown_time(rtd)) {
 				/* powered down playback stream now */
@@ -690,7 +690,7 @@ static int soc_pcm_close(struct snd_pcm_substream *substream)
 			}
 		}
 	} else {
-		if (!codec_dai->capture_active) {
+		if (!codec_dai->capture_active && !codec_dai->component->active) {
 			/* capture streams can be powered down now */
 			snd_soc_dapm_stream_event(rtd, SNDRV_PCM_STREAM_CAPTURE,
 					SND_SOC_DAPM_STREAM_STOP);
@@ -1511,7 +1511,7 @@ static void dpcm_init_runtime_hw(struct snd_pcm_runtime *runtime,
 	struct snd_soc_pcm_stream *stream)
 {
 	runtime->hw.rate_min = stream->rate_min;
-	runtime->hw.rate_max = min_not_zero(stream->rate_max, UINT_MAX);
+	runtime->hw.rate_max = stream->rate_max;
 	runtime->hw.channels_min = stream->channels_min;
 	runtime->hw.channels_max = stream->channels_max;
 	if (runtime->hw.formats)

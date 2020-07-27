@@ -32,10 +32,6 @@
 #include <linux/exynos-busmon.h>
 #endif
 
-#if defined(CONFIG_SECURE_CAMERA_USE)
-#include <linux/smc.h>
-#endif
-
 #include "fimc-is-resourcemgr.h"
 #include "fimc-is-hw.h"
 #include "fimc-is-debug.h"
@@ -44,9 +40,8 @@
 #include "fimc-is-clk-gate.h"
 #if !defined(ENABLE_IS_CORE)
 #include "fimc-is-interface-library.h"
+#include "hardware/fimc-is-hw-control.h"
 #endif
-#include <linux/memblock.h>
-#include <asm/map.h>
 
 #define CLUSTER_MIN_MASK			0x0000FFFF
 #define CLUSTER_MIN_SHIFT			0
@@ -57,11 +52,11 @@ struct pm_qos_request exynos_isp_qos_int;
 struct pm_qos_request exynos_isp_qos_mem;
 struct pm_qos_request exynos_isp_qos_cam;
 struct pm_qos_request exynos_isp_qos_disp;
-struct pm_qos_request exynos_isp_qos_hpg;
 struct pm_qos_request exynos_isp_qos_cluster0_min;
 struct pm_qos_request exynos_isp_qos_cluster0_max;
 struct pm_qos_request exynos_isp_qos_cluster1_min;
 struct pm_qos_request exynos_isp_qos_cluster1_max;
+struct pm_qos_request exynos_isp_qos_cpu_online_min;
 
 #define C0MIN_QOS_ADD(freq) pm_qos_add_request(&exynos_isp_qos_cluster0_min, PM_QOS_CLUSTER0_FREQ_MIN, freq * 1000)
 #define C0MIN_QOS_DEL() pm_qos_remove_request(&exynos_isp_qos_cluster0_min)
@@ -83,224 +78,51 @@ extern int fimc_is_sensor_runtime_resume(struct device *dev);
 #ifdef ENABLE_IS_CORE
 static int fimc_is_resourcemgr_allocmem(struct fimc_is_resourcemgr *resourcemgr)
 {
+	struct fimc_is_mem *mem = &resourcemgr->mem;
+	struct fimc_is_minfo *minfo = &resourcemgr->minfo;
 	int ret = 0;
-	void *fw_cookie;
-	size_t fw_size = FIMC_IS_A5_MEM_SIZE;
-#ifdef FW_SUSPEND_RESUME
-	fw_size += FIMC_IS_BACKUP_SIZE;
+
+	minfo->total_size = FW_MEM_SIZE;
+#if defined (FW_SUSPEND_RESUME)
+	minfo->total_size += FW_BACKUP_SIZE;
 #endif
-#ifdef ENABLE_ODC
-	fw_size += SIZE_ODC_INTERNAL_BUF * NUM_ODC_INTERNAL_BUF;
+#if defined (ENABLE_ODC)
+	minfo->total_size += SIZE_ODC_INTERNAL_BUF * NUM_ODC_INTERNAL_BUF;
 #endif
-#ifdef ENABLE_VDIS
-	fw_size += SIZE_DIS_INTERNAL_BUF * NUM_DIS_INTERNAL_BUF;
+#if defined (ENABLE_VDIS)
+	minfo->total_size += SIZE_DIS_INTERNAL_BUF * NUM_DIS_INTERNAL_BUF;
 #endif
-#ifdef ENABLE_DNR
-	fw_size += SIZE_DNR_INTERNAL_BUF * NUM_DNR_INTERNAL_BUF;
+#if defined (ENABLE_DNR)
+	minfo->total_size += SIZE_DNR_INTERNAL_BUF * NUM_DNR_INTERNAL_BUF;
 #endif
-#ifdef ENABLE_FD_SW
-	fw_size += SIZE_LHFD_INTERNEL_BUF * NUM_LHFD_INTERNAL_BUF;
-#endif
-#ifdef ENABLE_FD_DMA_INPUT
-	fw_size += SIZE_LHFD_SHOT_BUF * MAX_LHFD_SHOT_BUF;
+#if defined (ENABLE_FD_DMA_INPUT)
+	minfo->total_size += SIZE_LHFD_SHOT_BUF * MAX_LHFD_SHOT_BUF;
 #endif
 
-	fw_size = PAGE_ALIGN(fw_size);
-
-	dbg_core("Allocating memory for FIMC-IS firmware.\n");
-
-	fw_cookie = vb2_ion_private_alloc(resourcemgr->mem.alloc_ctx, fw_size);
-	if (IS_ERR(fw_cookie)) {
-		err("Allocating bitprocessor buffer failed");
-		fw_cookie = NULL;
-		ret = -ENOMEM;
-		goto p_err;
+	minfo->pb_fw = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, minfo->total_size, 16);
+	if (IS_ERR(minfo->pb_fw)) {
+		err("failed to allocate buffer for FW");
+		return -ENOMEM;
 	}
 
-	ret = vb2_ion_dma_address(fw_cookie, &resourcemgr->minfo.dvaddr);
-	if ((ret < 0) || (resourcemgr->minfo.dvaddr  & FIMC_IS_FW_BASE_MASK)) {
-		err("The base memory is not aligned to 64MB.");
-		vb2_ion_private_free(fw_cookie);
-		resourcemgr->minfo.dvaddr = 0;
-		fw_cookie = NULL;
-		ret = -EIO;
-		goto p_err;
-	}
-
-#ifdef PRINT_BUFADDR
-	info("[RSC] daddr = %pa, size = %08X\n", &resourcemgr->minfo.dvaddr, FIMC_IS_A5_MEM_SIZE);
-#endif
-
-	resourcemgr->minfo.kvaddr = (ulong)vb2_ion_private_vaddr(fw_cookie);
-	if (IS_ERR((void *)resourcemgr->minfo.kvaddr)) {
-		err("Bitprocessor memory remap failed");
-		vb2_ion_private_free(fw_cookie);
-		resourcemgr->minfo.kvaddr = 0;
-		fw_cookie = NULL;
-		ret = -EIO;
-		goto p_err;
-	}
-
-	vb2_ion_sync_for_device(fw_cookie, 0, fw_size, DMA_BIDIRECTIONAL);
-
-p_err:
-	info("[RSC] Device virtual for internal: %08lx\n", resourcemgr->minfo.kvaddr);
-	resourcemgr->minfo.fw_cookie = fw_cookie;
-
-	return ret;
-}
-
-static int fimc_is_resourcemgr_initmem(struct fimc_is_resourcemgr *resourcemgr)
-{
-	int ret = 0;
-#ifdef ENABLE_FD_SW
-	int num_buf = 0;
-#endif
-	u32 offset;
-
-	dbg_core("fimc_is_init_mem - ION\n");
-
-	ret = fimc_is_resourcemgr_allocmem(resourcemgr);
-	if (ret) {
-		err("Couldn't alloc for FIMC-IS firmware\n");
-		ret = -ENOMEM;
-		goto p_err;
-	}
-
-	offset = FIMC_IS_SHARED_OFFSET;
-	resourcemgr->minfo.dvaddr_fshared = resourcemgr->minfo.dvaddr + offset;
-	resourcemgr->minfo.kvaddr_fshared = resourcemgr->minfo.kvaddr + offset;
-
-	offset = FIMC_IS_A5_MEM_SIZE - FIMC_IS_REGION_SIZE;
-	resourcemgr->minfo.dvaddr_region = resourcemgr->minfo.dvaddr + offset;
-	resourcemgr->minfo.kvaddr_region = resourcemgr->minfo.kvaddr + offset;
-
-	offset = FIMC_IS_A5_MEM_SIZE;
-#ifdef FW_SUSPEND_RESUME
-	offset += FIMC_IS_BACKUP_SIZE;
-#endif
-
-#ifdef ENABLE_ODC
-	resourcemgr->minfo.dvaddr_odc = resourcemgr->minfo.dvaddr + offset;
-	resourcemgr->minfo.kvaddr_odc = resourcemgr->minfo.kvaddr + offset;
-	offset += (SIZE_ODC_INTERNAL_BUF * NUM_ODC_INTERNAL_BUF);
-#else
-	resourcemgr->minfo.dvaddr_odc = 0;
-	resourcemgr->minfo.kvaddr_odc = 0;
-#endif
-
-#ifdef ENABLE_VDIS
-	resourcemgr->minfo.dvaddr_dis = resourcemgr->minfo.dvaddr + offset;
-	resourcemgr->minfo.kvaddr_dis = resourcemgr->minfo.kvaddr + offset;
-	offset += (SIZE_DIS_INTERNAL_BUF * NUM_DIS_INTERNAL_BUF);
-#else
-	resourcemgr->minfo.dvaddr_dis = 0;
-	resourcemgr->minfo.kvaddr_dis = 0;
-#endif
-
-#ifdef ENABLE_DNR
-	resourcemgr->minfo.dvaddr_3dnr = resourcemgr->minfo.dvaddr + offset;
-	resourcemgr->minfo.kvaddr_3dnr = resourcemgr->minfo.kvaddr + offset;
-	offset += (SIZE_DNR_INTERNAL_BUF * NUM_DNR_INTERNAL_BUF);
-#else
-	resourcemgr->minfo.dvaddr_3dnr = 0;
-	resourcemgr->minfo.kvaddr_3dnr = 0;
-#endif
-
-#ifdef ENABLE_FD_SW
-	for (num_buf = 0; num_buf < NUM_LHFD_INTERNAL_BUF; num_buf++) {
-		resourcemgr->minfo.dvaddr_fd[num_buf] = resourcemgr->minfo.dvaddr + offset;
-		resourcemgr->minfo.kvaddr_fd[num_buf] = resourcemgr->minfo.kvaddr + offset;
-		offset += (SIZE_LHFD_INTERNEL_BUF);
-	}
-#else
-	memset(&resourcemgr->minfo.dvaddr_fd, 0, sizeof(resourcemgr->minfo.dvaddr_fd));
-	memset(&resourcemgr->minfo.kvaddr_fd, 0, sizeof(resourcemgr->minfo.dvaddr_fd));
-#endif
-
-	dbg_core("fimc_is_init_mem done\n");
-
-p_err:
-	return ret;
-}
-#else /* #ifdef ENABLE_IS_CORE */
-static int fimc_is_resourcemgr_allocmem(struct fimc_is_resourcemgr *resourcemgr)
-{
-	int ret = 0;
-	void *fw_cookie;
-	size_t fw_size = FIMC_IS_A5_MEM_SIZE;
-#ifdef ENABLE_RESERVED_INTERNAL_DMA
-	fw_size += FIMC_IS_THUMBNAIL_SDMA_SIZE + FIMC_IS_GUARD_SIZE;
 #if defined (ENABLE_FD_SW)
-	fw_size += FIMC_IS_LHFD_DMA_SIZE + FIMC_IS_GUARD_SIZE;
-#elif defined (ENABLE_VRA)
-	fw_size += FIMC_IS_VRA_DMA_SIZE + FIMC_IS_GUARD_SIZE;
-#endif
-	fw_size += FIMC_IS_RESERVE_SIZE + FIMC_IS_GUARD_SIZE;
-#endif
-
-#ifdef ENABLE_ODC
-	fw_size += SIZE_ODC_INTERNAL_BUF * NUM_ODC_INTERNAL_BUF;
-#endif
-#ifdef ENABLE_VDIS
-	fw_size += SIZE_DIS_INTERNAL_BUF * NUM_DIS_INTERNAL_BUF;
-#endif
-#ifdef ENABLE_DNR
-	fw_size += SIZE_DNR_INTERNAL_BUF * NUM_DNR_INTERNAL_BUF;
-#endif
-
-	probe_info("[RSC] Internal memory size : %08lx\n", fw_size);
-	fw_size = PAGE_ALIGN(fw_size);
-	probe_info("[RSC] Internal memory size (aligned) : %08lx\n", fw_size);
-
-	fw_cookie = vb2_ion_private_alloc(resourcemgr->mem.alloc_ctx, fw_size);
-	if (IS_ERR(fw_cookie)) {
-		err("Allocating bitprocessor buffer failed");
-		fw_cookie = NULL;
-		ret = -ENOMEM;
-		goto p_err;
+	minfo->pb_lhfd = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, LHFD_MAP_SIZE, 16);
+	if (IS_ERR(minfo->pb_lhfd)) {
+		err("failed to allocate buffer for LHFD_MAP");
+		return -ENOMEM;
 	}
-
-	ret = vb2_ion_dma_address(fw_cookie, &resourcemgr->minfo.dvaddr);
-	if ((ret < 0) || (resourcemgr->minfo.dvaddr  & FIMC_IS_FW_BASE_MASK)) {
-		err("The base memory is not aligned to 64MB.");
-		vb2_ion_private_free(fw_cookie);
-		resourcemgr->minfo.dvaddr = 0;
-		fw_cookie = NULL;
-		ret = -EIO;
-		goto p_err;
-	}
-
-#ifdef PRINT_BUFADDR
-	info("[RSC] daddr = %pa, size = %08X\n", &resourcemgr->minfo.dvaddr, FIMC_IS_A5_MEM_SIZE);
+	minfo->total_size += minfo->pb_lhfd->size;
 #endif
 
-	resourcemgr->minfo.kvaddr = (ulong)vb2_ion_private_vaddr(fw_cookie);
-	if (IS_ERR((void *)resourcemgr->minfo.kvaddr)) {
-		err("Bitprocessor memory remap failed");
-		vb2_ion_private_free(fw_cookie);
-		resourcemgr->minfo.kvaddr = 0;
-		fw_cookie = NULL;
-		ret = -EIO;
-		goto p_err;
-	}
-
-	vb2_ion_sync_for_device(fw_cookie, 0, fw_size, DMA_BIDIRECTIONAL);
-
-p_err:
-	probe_info("[RSC] Kernel virtual for internal: %08lx\n", resourcemgr->minfo.kvaddr);
-	probe_info("[RSC] Device virtual for internal: %08lx\n", (ulong)resourcemgr->minfo.dvaddr);
-	resourcemgr->minfo.fw_cookie = fw_cookie;
+	probe_info("[RSC] Internal memory size (aligned) : %08lx\n", minfo->total_size);
 
 	return ret;
 }
 
 static int fimc_is_resourcemgr_initmem(struct fimc_is_resourcemgr *resourcemgr)
 {
+	struct fimc_is_minfo *minfo = NULL;
 	int ret = 0;
-#ifdef ENABLE_FD_SW
-	int num_buf = 0;
-#endif
 	u32 offset;
 
 	dbg_core("fimc_is_init_mem - ION\n");
@@ -312,97 +134,308 @@ static int fimc_is_resourcemgr_initmem(struct fimc_is_resourcemgr *resourcemgr)
 		goto p_err;
 	}
 
-	offset = FIMC_IS_SHARED_REGION_OFFSET;
+	minfo = &resourcemgr->minfo;
+	/* set information */
+	resourcemgr->minfo.dvaddr = CALL_BUFOP(minfo->pb_fw, dvaddr, minfo->pb_fw);
+	resourcemgr->minfo.kvaddr = CALL_BUFOP(minfo->pb_fw, kvaddr, minfo->pb_fw);
+
+	offset = SHARED_OFFSET;
 	resourcemgr->minfo.dvaddr_fshared = resourcemgr->minfo.dvaddr + offset;
 	resourcemgr->minfo.kvaddr_fshared = resourcemgr->minfo.kvaddr + offset;
 
-	offset = FIMC_IS_A5_MEM_SIZE - FIMC_IS_REGION_SIZE;
+	offset = FW_MEM_SIZE - PARAM_REGION_SIZE;
 	resourcemgr->minfo.dvaddr_region = resourcemgr->minfo.dvaddr + offset;
 	resourcemgr->minfo.kvaddr_region = resourcemgr->minfo.kvaddr + offset;
 
-	offset = FIMC_IS_RESERVE_OFFSET + FIMC_IS_GUARD_SIZE;
-#ifdef ENABLE_ODC
-	resourcemgr->minfo.dvaddr_odc = resourcemgr->minfo.dvaddr + offset;
-	resourcemgr->minfo.kvaddr_odc = resourcemgr->minfo.kvaddr + offset;
+	offset = FW_MEM_SIZE;
+#if defined (FW_SUSPEND_RESUME)
+	offset += FW_BACKUP_SIZE;
+#endif
+
+#if defined(ENABLE_ODC) || defined(ENABLE_VDIS) || defined(ENABLE_DNR)
+	resourcemgr->minfo.dvaddr_tpu = resourcemgr->minfo.dvaddr + offset;
+	resourcemgr->minfo.kvaddr_tpu = resourcemgr->minfo.kvaddr + offset;
+#if defined (ENABLE_ODC)
 	offset += (SIZE_ODC_INTERNAL_BUF * NUM_ODC_INTERNAL_BUF);
-#else
-	resourcemgr->minfo.dvaddr_odc = 0;
-	resourcemgr->minfo.kvaddr_odc = 0;
 #endif
-
-#ifdef ENABLE_VDIS
-	resourcemgr->minfo.dvaddr_dis = resourcemgr->minfo.dvaddr + offset;
-	resourcemgr->minfo.kvaddr_dis = resourcemgr->minfo.kvaddr + offset;
+#if defined (ENABLE_VDIS)
 	offset += (SIZE_DIS_INTERNAL_BUF * NUM_DIS_INTERNAL_BUF);
-#else
-	resourcemgr->minfo.dvaddr_dis = 0;
-	resourcemgr->minfo.kvaddr_dis = 0;
 #endif
-
-#ifdef ENABLE_DNR
-	resourcemgr->minfo.dvaddr_3dnr = resourcemgr->minfo.dvaddr + offset;
-	resourcemgr->minfo.kvaddr_3dnr = resourcemgr->minfo.kvaddr + offset;
+#if defined (ENABLE_DNR)
 	offset += (SIZE_DNR_INTERNAL_BUF * NUM_DNR_INTERNAL_BUF);
-#else
-	resourcemgr->minfo.dvaddr_3dnr = 0;
-	resourcemgr->minfo.kvaddr_3dnr = 0;
 #endif
-#if defined(ENABLE_FD_SW) && defined(ENABLE_RESERVED_INTERNAL_DMA)
-	offset = FIMC_IS_LHFD_MAP_OFFSET;
-	for (num_buf = 0; num_buf < NUM_LHFD_INTERNAL_BUF; num_buf++) {
-		resourcemgr->minfo.dvaddr_fd[num_buf] = resourcemgr->minfo.dvaddr + offset;
-		resourcemgr->minfo.kvaddr_fd[num_buf] = resourcemgr->minfo.kvaddr + offset;
-		offset += (SIZE_LHFD_INTERNEL_BUF);
-	}
-#elif defined(ENABLE_VRA) && defined(ENABLE_RESERVED_INTERNAL_DMA)
-	offset = FIMC_IS_VRA_DMA_OFFSET;
-	resourcemgr->minfo.dvaddr_vra = resourcemgr->minfo.dvaddr_vra + offset;
-	resourcemgr->minfo.kvaddr_vra = resourcemgr->minfo.kvaddr_vra + offset;
-	offset += SIZE_VRA_INTERNEL_BUF;
 #else
-	memset(&resourcemgr->minfo.dvaddr_fd, 0, sizeof(resourcemgr->minfo.dvaddr_fd));
-	memset(&resourcemgr->minfo.kvaddr_fd, 0, sizeof(resourcemgr->minfo.dvaddr_fd));
+	resourcemgr->minfo.dvaddr_tpu = 0;
+	resourcemgr->minfo.kvaddr_tpu = 0;
 #endif
 
-	dbg_core("fimc_is_init_mem done\n");
+#if defined(ENABLE_FD_SW)
+	resourcemgr->minfo.dvaddr_lhfd = CALL_BUFOP(minfo->pb_lhfd, dvaddr, minfo->pb_lhfd);
+	resourcemgr->minfo.kvaddr_lhfd = CALL_BUFOP(minfo->pb_lhfd, kvaddr, minfo->pb_lhfd);
+#else
+	resourcemgr->minfo.dvaddr_lhfd = 0;
+	resourcemgr->minfo.kvaddr_lhfd = 0;
+#endif
+	resourcemgr->minfo.kvaddr_debug_cnt =  resourcemgr->minfo.kvaddr +
+					DEBUG_REGION_OFFSET + DEBUG_REGION_SIZE;
+
+	probe_info("[RSC] Kernel virtual for internal: 0x%lx\n", resourcemgr->minfo.kvaddr);
+	probe_info("[RSC] Device virtual for internal: 0x%llx\n", resourcemgr->minfo.dvaddr);
+	probe_info("[RSC] fimc_is_init_mem done\n");
 
 p_err:
 	return ret;
 }
-
-static int __init fimc_is_init_static_mem(char *str)
-{
-	struct fimc_is_static_mem static_mem[] = {
-		{0, FIMC_IS_SDK_LIB_ADDR, FIMC_IS_SDK_LIB_SIZE},
-		{0, FIMC_IS_VRA_LIB_ADDR, FIMC_IS_VRA_LIB_SIZE}};
-	struct map_desc fimc_iodesc[ARRAY_SIZE(static_mem)];
-	u32 i;
-
-	for (i = 0; i < ARRAY_SIZE(static_mem); i++) {
-		static_mem[i].paddr = memblock_alloc(static_mem[i].size, SZ_4K);
-
-		fimc_iodesc[i].virtual = static_mem[i].vaddr;
-		fimc_iodesc[i].pfn = __phys_to_pfn(static_mem[i].paddr);
-		fimc_iodesc[i].length = static_mem[i].size;
-		fimc_iodesc[i].type = MT_MEMORY;
-	}
-	iotable_init_exec(fimc_iodesc, ARRAY_SIZE(static_mem));
-
-	return 0;
-}
-__setup("reserve-fimc=", fimc_is_init_static_mem);
-#endif
 
 #ifndef ENABLE_RESERVED_MEM
 static int fimc_is_resourcemgr_deinitmem(struct fimc_is_resourcemgr *resourcemgr)
 {
+	struct fimc_is_minfo *minfo = &resourcemgr->minfo;
 	int ret = 0;
 
-	vb2_ion_private_free(resourcemgr->minfo.fw_cookie);
-
+	CALL_VOID_BUFOP(minfo->pb_fw, free, minfo->pb_setfile);
+#if defined (ENABLE_FD_SW)
+	CALL_VOID_BUFOP(minfo->pb_lhfd, free, minfo->pb_lhfd);
+#endif
 	return ret;
 }
 #endif
+
+#else /* #ifdef ENABLE_IS_CORE */
+static int fimc_is_resourcemgr_allocmem(struct fimc_is_resourcemgr *resourcemgr)
+{
+	struct fimc_is_mem *mem = &resourcemgr->mem;
+	struct fimc_is_minfo *minfo = &resourcemgr->minfo;
+	size_t tpu_size = 0;
+
+	minfo->total_size = 0;
+	/* setfile */
+	minfo->pb_setfile = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, SETFILE_SIZE, 16);
+	if (IS_ERR(minfo->pb_setfile)) {
+		err("failed to allocate buffer for SETFILE");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_setfile->size;
+
+	/* calibration data for rear lens */
+	minfo->pb_rear_cal = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, REAR_CALDATA_SIZE, 16);
+	if (IS_ERR(minfo->pb_rear_cal)) {
+		err("failed to allocate buffer for REAR_CALDATA");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_rear_cal->size;
+
+	/* calibration data for front lens */
+	minfo->pb_front_cal = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, FRONT_CALDATA_SIZE, 16);
+	if (IS_ERR(minfo->pb_front_cal)) {
+		err("failed to allocate buffer for FRONT_CALDATA");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_front_cal->size;
+
+	/* calibration data for rear2 lens */
+	minfo->pb_rear2_cal = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, REAR_CALDATA_SIZE, 16);
+	if (IS_ERR(minfo->pb_rear2_cal)) {
+		err("failed to allocate buffer for REAR_CALDATA");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_rear2_cal->size;
+
+	/* calibration data for rear3 lens */
+	minfo->pb_rear3_cal = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, REAR_CALDATA_SIZE, 16);
+	if (IS_ERR(minfo->pb_rear3_cal)) {
+		err("failed to allocate buffer for REAR_CALDATA");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_rear3_cal->size;
+
+	/* library logging */
+	minfo->pb_debug = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, DEBUG_REGION_SIZE + 0x10, 16);
+	if (IS_ERR(minfo->pb_debug)) {
+		err("failed to allocate buffer for DEBUG_REGION");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_debug->size;
+
+	/* data region */
+	minfo->pb_dregion = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, DATA_REGION_SIZE, 16);
+	if (IS_ERR(minfo->pb_dregion)) {
+		err("failed to allocate buffer for DATA_REGION");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_dregion->size;
+
+	/* parameter region */
+	minfo->pb_pregion = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx,
+						(FIMC_IS_SENSOR_COUNT*PARAM_REGION_SIZE), 16);
+	if (IS_ERR(minfo->pb_pregion)) {
+		err("failed to allocate buffer for PARAM_REGION");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_pregion->size;
+
+	/* fshared data region */
+	minfo->pb_fshared = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, FSHARED_REGION_SIZE, 16);
+	if (IS_ERR(minfo->pb_fshared)) {
+		err("failed to allocate buffer for FSHARED_REGION");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_fshared->size;
+
+	/* reserved memory for library */
+	minfo->pb_lib = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, RESERVE_LIB_SIZE, 16);
+	if (IS_ERR(minfo->pb_lib)) {
+		err("failed to allocate buffer for library");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_lib->size;
+
+	/* 3aa/isp internal DMA buffer */
+	minfo->pb_taaisp = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, TAAISP_DMA_SIZE, 16);
+	if (IS_ERR(minfo->pb_taaisp)) {
+		err("failed to allocate buffer for TAAISP_DMAE");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_taaisp->size;
+
+#if defined (ENABLE_FD_SW)
+	minfo->pb_lhfd = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, LHFD_MAP_SIZE, 16);
+	if (IS_ERR(minfo->pb_lhfd)) {
+		err("failed to allocate buffer for LHFD_MAP");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_lhfd->size;
+#endif
+
+#if defined (ENABLE_VRA)
+	minfo->pb_vra = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, VRA_DMA_SIZE, 16);
+	if (IS_ERR(minfo->pb_vra)) {
+		err("failed to allocate buffer for VRA");
+		return -ENOMEM;
+	}
+	minfo->total_size += minfo->pb_vra->size;
+#endif
+
+#if defined (ENABLE_ODC)
+	tpu_size += (SIZE_ODC_INTERNAL_BUF * NUM_ODC_INTERNAL_BUF);
+#endif
+#if defined (ENABLE_VDIS)
+	tpu_size += (SIZE_DIS_INTERNAL_BUF * NUM_DIS_INTERNAL_BUF);
+#endif
+#if defined (ENABLE_DNR)
+	tpu_size += (SIZE_DNR_INTERNAL_BUF * NUM_DNR_INTERNAL_BUF);
+#endif
+	if (tpu_size > 0) {
+		minfo->pb_tpu = CALL_PTR_MEMOP(mem, alloc, mem->default_ctx, tpu_size, 16);
+		if (IS_ERR(minfo->pb_tpu)) {
+			err("failed to allocate buffer for TPU");
+			return -ENOMEM;
+		}
+		minfo->total_size += minfo->pb_tpu->size;
+	}
+
+	probe_info("[RSC] Internal memory size (aligned) : %08lx\n", minfo->total_size);
+
+	return 0;
+}
+
+static int fimc_is_resourcemgr_initmem(struct fimc_is_resourcemgr *resourcemgr)
+{
+	struct fimc_is_minfo *minfo = NULL;
+	int ret = 0;
+
+	probe_info("fimc_is_init_mem - ION\n");
+
+	ret = fimc_is_resourcemgr_allocmem(resourcemgr);
+	if (ret) {
+		err("Couldn't alloc for FIMC-IS\n");
+		ret = -ENOMEM;
+		goto p_err;
+	}
+
+	minfo = &resourcemgr->minfo;
+	/* set information */
+	resourcemgr->minfo.dvaddr = 0;
+	resourcemgr->minfo.kvaddr = 0;
+
+	resourcemgr->minfo.dvaddr_lib = CALL_BUFOP(minfo->pb_lib, dvaddr, minfo->pb_lib);
+	resourcemgr->minfo.kvaddr_lib = CALL_BUFOP(minfo->pb_lib, kvaddr, minfo->pb_lib);
+
+	resourcemgr->minfo.dvaddr_debug = CALL_BUFOP(minfo->pb_debug, dvaddr, minfo->pb_debug);
+	resourcemgr->minfo.kvaddr_debug = CALL_BUFOP(minfo->pb_debug, kvaddr, minfo->pb_debug);
+
+	resourcemgr->minfo.dvaddr_fshared = CALL_BUFOP(minfo->pb_fshared, dvaddr, minfo->pb_fshared);
+	resourcemgr->minfo.kvaddr_fshared = CALL_BUFOP(minfo->pb_fshared, kvaddr, minfo->pb_fshared);
+
+	resourcemgr->minfo.dvaddr_region = CALL_BUFOP(minfo->pb_pregion, dvaddr, minfo->pb_pregion);
+	resourcemgr->minfo.kvaddr_region = CALL_BUFOP(minfo->pb_pregion, kvaddr, minfo->pb_pregion);
+
+	resourcemgr->minfo.dvaddr_taaisp = CALL_BUFOP(minfo->pb_taaisp, dvaddr, minfo->pb_taaisp);
+	resourcemgr->minfo.kvaddr_taaisp = CALL_BUFOP(minfo->pb_taaisp, kvaddr, minfo->pb_taaisp);
+#if defined(ENABLE_FD_SW)
+	resourcemgr->minfo.dvaddr_lhfd = CALL_BUFOP(minfo->pb_lhfd, dvaddr, minfo->pb_lhfd);
+	resourcemgr->minfo.kvaddr_lhfd = CALL_BUFOP(minfo->pb_lhfd, kvaddr, minfo->pb_lhfd);
+#else
+	resourcemgr->minfo.dvaddr_lhfd = 0;
+	resourcemgr->minfo.kvaddr_lhfd = 0;
+#endif
+
+#if defined(ENABLE_VRA)
+	resourcemgr->minfo.dvaddr_vra = CALL_BUFOP(minfo->pb_vra, dvaddr, minfo->pb_vra);
+	resourcemgr->minfo.kvaddr_vra = CALL_BUFOP(minfo->pb_vra, kvaddr, minfo->pb_vra);
+#else
+	resourcemgr->minfo.dvaddr_vra = 0;
+	resourcemgr->minfo.kvaddr_vra = 0;
+#endif
+
+#if defined(ENABLE_ODC) || defined(ENABLE_VDIS) || defined(ENABLE_DNR)
+	resourcemgr->minfo.dvaddr_tpu = CALL_BUFOP(minfo->pb_tpu, dvaddr, minfo->pb_tpu);
+	resourcemgr->minfo.kvaddr_tpu = CALL_BUFOP(minfo->pb_tpu, kvaddr, minfo->pb_tpu);
+#else
+	resourcemgr->minfo.dvaddr_tpu = 0;
+	resourcemgr->minfo.kvaddr_tpu = 0;
+#endif
+	resourcemgr->minfo.kvaddr_debug_cnt =  CALL_BUFOP(minfo->pb_debug, kvaddr, minfo->pb_debug)
+						+ DEBUG_REGION_SIZE;
+	resourcemgr->minfo.kvaddr_setfile = CALL_BUFOP(minfo->pb_setfile, kvaddr, minfo->pb_setfile);
+	resourcemgr->minfo.kvaddr_rear_cal = CALL_BUFOP(minfo->pb_rear_cal, kvaddr, minfo->pb_rear_cal);
+	resourcemgr->minfo.kvaddr_front_cal = CALL_BUFOP(minfo->pb_front_cal, kvaddr, minfo->pb_front_cal);
+	resourcemgr->minfo.kvaddr_rear2_cal = CALL_BUFOP(minfo->pb_rear2_cal, kvaddr, minfo->pb_rear2_cal);
+	resourcemgr->minfo.kvaddr_rear3_cal = CALL_BUFOP(minfo->pb_rear3_cal, kvaddr, minfo->pb_rear3_cal);
+
+	probe_info("[RSC] Kernel virtual for library: %08lx\n", resourcemgr->minfo.kvaddr);
+	probe_info("[RSC] Kernel virtual for debug: %08lx\n", resourcemgr->minfo.kvaddr_debug);
+	probe_info("[RSC] fimc_is_init_mem done\n");
+p_err:
+	return ret;
+}
+
+#ifndef ENABLE_RESERVED_MEM
+static int fimc_is_resourcemgr_deinitmem(struct fimc_is_resourcemgr *resourcemgr)
+{
+	struct fimc_is_minfo *minfo = &resourcemgr->minfo;
+	int ret = 0;
+
+	CALL_VOID_BUFOP(minfo->pb_setfile, free, minfo->pb_setfile);
+	CALL_VOID_BUFOP(minfo->pb_rear_cal, free, minfo->pb_rear_cal);
+	CALL_VOID_BUFOP(minfo->pb_front_cal, free, minfo->pb_front_cal);
+	CALL_VOID_BUFOP(minfo->pb_debug, free, minfo->pb_debug);
+	CALL_VOID_BUFOP(minfo->pb_dregion, free, minfo->pb_dregion);
+	CALL_VOID_BUFOP(minfo->pb_pregion, free, minfo->pb_pregion);
+	CALL_VOID_BUFOP(minfo->pb_fshared, free, minfo->pb_fshared);
+#if defined (ENABLE_FD_SW)
+	CALL_VOID_BUFOP(minfo->pb_lhfd, free, minfo->pb_lhfd);
+#endif
+#if defined (ENABLE_VRA)
+	CALL_VOID_BUFOP(minfo->pb_vra, free, minfo->pb_vra);
+#endif
+#if defined (ENABLE_ODC) || defined (ENABLE_VDIS) || defined (ENABLE_DNR)
+	CALL_VOID_BUFOP(minfo->pb_tpu, free, minfo->pb_tpu);
+#endif
+	return ret;
+}
+#endif
+#endif /* #ifdef ENABLE_IS_CORE */
 
 static int fimc_is_tmu_notifier(struct notifier_block *nb,
 	unsigned long state, void *data)
@@ -410,9 +443,7 @@ static int fimc_is_tmu_notifier(struct notifier_block *nb,
 #ifdef CONFIG_EXYNOS_THERMAL
 	int ret = 0;
 	struct fimc_is_resourcemgr *resourcemgr;
-#ifdef CONFIG_EXYNOS_SNAPSHOT_THERMAL
-	char *cooling_device_name = "ISP";
-#endif
+
 	resourcemgr = container_of(nb, struct fimc_is_resourcemgr, tmu_notifier);
 
 	switch (state) {
@@ -453,95 +484,62 @@ static int fimc_is_tmu_notifier(struct notifier_block *nb,
 		break;
 	}
 
-#ifdef CONFIG_EXYNOS_SNAPSHOT_THERMAL
-	exynos_ss_thermal(NULL, 0, cooling_device_name, resourcemgr->limited_fps);
-#endif
 	return ret;
 #else
 	return 0;
 #endif
 }
 
-static int fimc_is_bmu_notifier(struct notifier_block *nb,
+#ifdef CONFIG_EXYNOS_BUSMONITOR
+static int due_to_fimc_is(const char *desc)
+{
+	if (desc && (strstr((char *)desc, "CAM")
+				|| strstr((char *)desc, "ISP")))
+			return 1;
+
+	return 0;
+}
+
+static int fimc_is_bm_notifier(struct notifier_block *nb,
 	unsigned long state, void *data)
 {
-#ifdef CONFIG_EXYNOS_BUSMONITOR
-	int ret = 0;
+	int i;
 	struct fimc_is_core *core;
 	struct fimc_is_resourcemgr *resourcemgr;
 	struct busmon_notifier *busmon;
-	bool found = false;
 
-	resourcemgr = container_of(nb, struct fimc_is_resourcemgr, bmu_notifier);
+	resourcemgr = container_of(nb, struct fimc_is_resourcemgr, bm_notifier);
 	core = container_of(resourcemgr, struct fimc_is_core, resourcemgr);
 	busmon = (struct busmon_notifier *)data;
 
-	if (strstr((char *)busmon->init_desc, "CAM") || strstr((char *)busmon->init_desc, "ISP"))
-		found = true;
-	else if (strstr((char *)busmon->target_desc, "CAM") || strstr((char *)busmon->target_desc, "ISP"))
-		found = true;
-	else if (strstr((char *)busmon->masterip_desc, "CAM") || strstr((char *)busmon->masterip_desc, "ISP"))
-		found = true;
-	else
-		found = false;
+	if (!busmon)
+		return 0;
 
-	if (!found)
-		goto p_err;
+	if (due_to_fimc_is(busmon->init_desc)
+			|| due_to_fimc_is(busmon->target_desc)
+			|| due_to_fimc_is(busmon->masterip_desc)) {
+		info("1. NOC info.\n");
+		info("%s: init description : %s\n", __func__, busmon->init_desc);
+		info("%s: target descrition: %s\n", __func__, busmon->target_desc);
+		info("%s: user description : %s\n", __func__, busmon->masterip_desc);
+		info("%s: user id          : %u\n", __func__, busmon->masterip_idx);
+		info("%s: target address   : %lx\n",__func__, busmon->target_addr);
 
-	info("1. NOC info\n");
-	info("%s: init description : %s\n", __func__, busmon->init_desc);
-	info("%s: target descrition: %s\n", __func__, busmon->target_desc);
-	info("%s: user description : %s\n", __func__, busmon->masterip_desc);
-	info("%s: user id          : %u\n", __func__, busmon->masterip_idx);
-	info("%s: target address   : %lX\n",__func__, busmon->target_addr);
+		for (i = 0; i < FIMC_IS_STREAM_COUNT; ++i) {
+			if (!test_bit(FIMC_IS_ISCHAIN_POWER_ON, &core->ischain[i].state))
+				continue;
 
-	info("2. FW log dump\n");
-	fimc_is_hw_logdump(&core->interface);
+			info("2. FW log dump\n");
+			fimc_is_hw_logdump(&core->interface);
 
-	info("3. clock info\n");
-	CALL_POPS(core, print_clk);
-
-p_err:
-	return ret;
-#else
-	return 0;
-#endif
-}
-
-#ifdef ENABLE_FW_SHARE_DUMP
-static int fimc_is_fw_share_dump(void)
-{
-	int ret = 0;
-	u8 *buf;
-	struct fimc_is_core *core = NULL;
-	struct fimc_is_resourcemgr *resourcemgr;
-
-	core = (struct fimc_is_core *)dev_get_drvdata(fimc_is_dev);
-	if (!core)
-		goto p_err;
-
-	resourcemgr = &core->resourcemgr;
-	buf = (u8 *)resourcemgr->fw_share_dump_buf;
-
-	/* dump share region in fw area */
-	if (IS_ERR_OR_NULL(buf)) {
-		err("%s: fail to alloc", __func__);
-		ret = -ENOMEM;
-		goto p_err;
+			info("3. Clock info.\n");
+			CALL_POPS(core, print_clk);
+		}
 	}
 
-	/* sync with fw for memory */
-	vb2_ion_sync_for_cpu(resourcemgr->minfo.fw_cookie, 0,
-			FIMC_IS_SHARED_OFFSET, DMA_BIDIRECTIONAL);
-
-	memcpy(buf, (u8 *)resourcemgr->minfo.kvaddr_fshared, FIMC_IS_SHARED_SIZE);
-
-	info("%s: dumped ramdump addr(virt/phys/size): (%p/%p/0x%X)", __func__, buf,
-			(void *)virt_to_phys(buf), FIMC_IS_SHARED_SIZE);
-p_err:
-	return ret;
+	return 0;
 }
-#endif
+#endif /* CONFIG_EXYNOS_BUSMONITOR */
 
 int fimc_is_resource_dump(void)
 {
@@ -572,6 +570,8 @@ int fimc_is_resource_dump(void)
 #else
 		/* ddk log dump */
 		fimc_is_lib_logdump();
+		fimc_is_hardware_dump(&core->hardware);
+		fimc_is_hardware_sfr_dump(&core->hardware);
 #endif
 		break;
 	}
@@ -586,13 +586,7 @@ exit:
 static int fimc_is_panic_handler(struct notifier_block *nb, ulong l,
 	void *buf)
 {
-#if !defined(ENABLE_IS_CORE)
 	fimc_is_resource_dump();
-#endif
-#ifdef ENABLE_FW_SHARE_DUMP
-	/* dump share area in fw region */
-	fimc_is_fw_share_dump();
-#endif
 	return 0;
 }
 
@@ -639,18 +633,19 @@ int fimc_is_resourcemgr_probe(struct fimc_is_resourcemgr *resourcemgr,
 	resourcemgr->limited_fps = 0;
 
 	/* bus monitor unit */
-	resourcemgr->bmu_notifier.notifier_call = fimc_is_bmu_notifier;
-	resourcemgr->bmu_notifier.priority = 0;
+
+#ifdef CONFIG_EXYNOS_BUSMONITOR
+	resourcemgr->bm_notifier.notifier_call = fimc_is_bm_notifier;
+	resourcemgr->bm_notifier.priority = 0;
+
+	busmon_notifier_chain_register(&resourcemgr->bm_notifier);
+#endif
 
 	ret = exynos_tmu_isp_add_notifier(&resourcemgr->tmu_notifier);
 	if (ret) {
 		probe_err("exynos_tmu_isp_add_notifier is fail(%d)", ret);
 		goto p_err;
 	}
-
-#ifdef CONFIG_EXYNOS_BUSMONITOR
-	busmon_notifier_chain_register(&resourcemgr->bmu_notifier);
-#endif
 
 #ifdef ENABLE_RESERVED_MEM
 	ret = fimc_is_resourcemgr_initmem(resourcemgr);
@@ -671,11 +666,6 @@ int fimc_is_resourcemgr_probe(struct fimc_is_resourcemgr *resourcemgr,
 
 #ifdef ENABLE_PANIC_HANDLER
 	atomic_notifier_chain_register(&panic_notifier_list, &notify_panic_block);
-#endif
-
-#ifdef ENABLE_FW_SHARE_DUMP
-	/* to dump share region in fw area */
-	resourcemgr->fw_share_dump_buf = (ulong)kzalloc(FIMC_IS_SHARED_SIZE, GFP_KERNEL);
 #endif
 
 p_err:
@@ -911,25 +901,6 @@ int fimc_is_resource_get(struct fimc_is_resourcemgr *resourcemgr, u32 rsc_type)
 			BUG();
 			break;
 		}
-
-#if defined(CONFIG_SECURE_CAMERA_USE)
-		switch (rsc_type) {
-		case RESOURCE_TYPE_SENSOR0:
-		case RESOURCE_TYPE_SENSOR1:
-		case RESOURCE_TYPE_SENSOR2:
-		case RESOURCE_TYPE_SENSOR3:
-		case RESOURCE_TYPE_SENSOR4:
-		case RESOURCE_TYPE_SENSOR5:
-			ret = exynos_smc(MC_SECURE_CAMERA_CFW_ENABLE, 0, 0, 0);
-			if(ret != 0) {
-				probe_err("[SMC] MC_SECURE_CAMERA_CFW_ENABLE fail(%d)\n", ret);
-				ret = 0;
-			} else {
-				probe_info("[SMC] Call MC_SECURE_CAMERA_CFW_ENABLE ret(%d)\n", ret);
-			}
-			break;
-		}
-#endif
 	}
 
 	atomic_inc(&resource->rsccount);

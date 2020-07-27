@@ -27,8 +27,8 @@
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
-#include <exynos-fimc-is-sensor.h>
 
+#include <exynos-fimc-is-sensor.h>
 #include "fimc-is-hw.h"
 #include "fimc-is-core.h"
 #include "fimc-is-param.h"
@@ -82,17 +82,28 @@ int sensor_cis_set_registers(struct v4l2_subdev *subdev, const u32 *regs, const 
 	msleep(3);
 
 	for (i = 0; i < size; i += I2C_WRITE) {
-		if (regs[i + I2C_BYTE] == 0x1) {
+		if (regs[i + I2C_ADDR] == 0xFFFF) {
+			msleep(regs[i + I2C_BYTE]);
+		} else if (regs[i + I2C_BYTE] == I2C_WRITE_ADDR8_DATA8) {
+			ret = fimc_is_sensor_addr8_write8(client, regs[i + I2C_ADDR], regs[i + I2C_DATA]);
+			if (ret < 0) {
+				err("fimc_is_sensor_addr8_write8 fail, ret(%d), addr(%#x), data(%#x)",
+						ret, regs[i + I2C_ADDR], regs[i + I2C_DATA]);
+				break;
+			}
+		} else if (regs[i + I2C_BYTE] == I2C_WRITE_ADDR16_DATA8) {
 			ret = fimc_is_sensor_write8(client, regs[i + I2C_ADDR], regs[i + I2C_DATA]);
 			if (ret < 0) {
 				err("fimc_is_sensor_write8 fail, ret(%d), addr(%#x), data(%#x)",
 						ret, regs[i + I2C_ADDR], regs[i + I2C_DATA]);
+				break;
 			}
-		} else if (regs[i + I2C_BYTE] == 0x2) {
+		} else if (regs[i + I2C_BYTE] == I2C_WRITE_ADDR16_DATA16) {
 			ret = fimc_is_sensor_write16(client, regs[i + I2C_ADDR], regs[i + I2C_DATA]);
 			if (ret < 0) {
-				err("fimc_is_sensor_write8 fail, ret(%d), addr(%#x), data(%#x)",
+				err("fimc_is_sensor_write16 fail, ret(%d), addr(%#x), data(%#x)",
 						ret, regs[i + I2C_ADDR], regs[i + I2C_DATA]);
+				break;
 			}
 		}
 	}
@@ -123,7 +134,11 @@ int sensor_cis_check_rev(struct fimc_is_cis *cis)
 		goto p_err;
 	}
 
-	fimc_is_sensor_read8(client, 0x0002, &rev);
+	ret = fimc_is_sensor_read8(client, 0x0002, &rev);
+	if (ret < 0) {
+		err("fimc_is_sensor_read8 fail, (ret %d)", ret);
+		goto p_err;
+	}
 
 	cis->cis_data->cis_rev = rev;
 
@@ -222,6 +237,7 @@ int sensor_cis_dump_registers(struct v4l2_subdev *subdev, const u32 *regs, const
 	struct fimc_is_cis *cis;
 	struct i2c_client *client;
 	u8 data8 = 0;
+	u16 data16 = 0;
 
 	BUG_ON(!subdev);
 	BUG_ON(!regs);
@@ -241,14 +257,125 @@ int sensor_cis_dump_registers(struct v4l2_subdev *subdev, const u32 *regs, const
 	}
 
 	for (i = 0; i < size; i += I2C_WRITE) {
-		ret = fimc_is_sensor_read8(client, regs[i + I2C_ADDR], &data8);
-		if (ret < 0) {
-			err("fimc_is_sensor_write8 fail, ret(%d), addr(%#x)",
-					ret, regs[i + I2C_ADDR]);
+		if (regs[i + I2C_BYTE] == I2C_WRITE_ADDR8_DATA8) {
+			ret = fimc_is_sensor_addr8_read8(client, regs[i + I2C_ADDR], &data8);
+			if (ret < 0) {
+				err("fimc_is_sensor_addr8_read8 fail, ret(%d), addr(%#x)",
+						ret, regs[i + I2C_ADDR]);
+			} else {
+				pr_err("[SEN:DUMP] [%#x] : %x\n", regs[i + I2C_ADDR], data8);
+			}
+		} else if (regs[i + I2C_BYTE] == I2C_WRITE_ADDR16_DATA8) {
+			ret = fimc_is_sensor_read8(client, regs[i + I2C_ADDR], &data8);
+			if (ret < 0) {
+				err("fimc_is_sensor_read8 fail, ret(%d), addr(%#x)",
+						ret, regs[i + I2C_ADDR]);
+			} else {
+				pr_err("[SEN:DUMP] [%#x] : %x\n", regs[i + I2C_ADDR], data8);
+			}
+		} else if (regs[i + I2C_BYTE] == I2C_WRITE_ADDR16_DATA16) {
+			ret = fimc_is_sensor_read16(client, regs[i + I2C_ADDR], &data16);
+			if (ret < 0) {
+				err("fimc_is_sensor_read16 fail, ret(%d), addr(%#x)",
+						ret, regs[i + I2C_ADDR]);
+			} else {
+				pr_err("[SEN:DUMP] [%#x] : %x\n", regs[i + I2C_ADDR], data16);
+			}
 		}
-		pr_err("[SEN:DUMP] [%#x] : %x\n", regs[i + I2C_ADDR], data8);
 	}
 
 p_err:
 	return ret;
 }
+
+int sensor_cis_wait_streamoff(struct v4l2_subdev *subdev)
+{
+	int ret = 0;
+	struct fimc_is_cis *cis;
+	struct i2c_client *client;
+	cis_shared_data *cis_data;
+	u32 wait_cnt = 0, time_out_cnt = 250;
+	u8 sensor_fcount = 0;
+
+	BUG_ON(!subdev);
+
+	cis = (struct fimc_is_cis *)v4l2_get_subdevdata(subdev);
+	if (unlikely(!cis)) {
+		err("cis is NULL");
+		ret = -EINVAL;
+		goto p_err;
+	}
+
+	cis_data = cis->cis_data;
+	if (unlikely(!cis_data)) {
+		err("cis_data is NULL");
+		ret = -EINVAL;
+		goto p_err;
+	}
+
+	client = cis->client;
+	if (unlikely(!client)) {
+		err("client is NULL");
+		ret = -EINVAL;
+		goto p_err;
+	}
+
+	if (!cis_data->stream_on) {
+		dbg_sensor("[MOD:D:%d] aleady stream off\n", cis->id);
+		goto p_err;
+	}
+
+	ret = fimc_is_sensor_read8(client, 0x0005, &sensor_fcount);
+	if (ret < 0)
+		err("i2c transfer fail addr(%x), val(%x), ret = %d\n", 0x0005, sensor_fcount, ret);
+
+	/*
+	 * Read sensor frame counter (sensor_fcount address = 0x0005)
+	 * stream on (0x00 ~ 0xFE), stream off (0xFF)
+	 */
+	while (sensor_fcount != 0xFF) {
+		ret = fimc_is_sensor_read8(client, 0x0005, &sensor_fcount);
+		if (ret < 0)
+			err("i2c transfer fail addr(%x), val(%x), ret = %d\n", 0x0005, sensor_fcount, ret);
+
+		msleep(CIS_STREAM_OFF_WAIT_TIME);
+		wait_cnt++;
+
+		if (wait_cnt >= time_out_cnt) {
+			err("[MOD:D:%d] %s, time out, wait_limit(%d) > time_out(%d), sensor_fcount(%d)",
+					cis->id, __func__, wait_cnt, time_out_cnt, sensor_fcount);
+			ret = -EINVAL;
+			goto p_err;
+		}
+
+		dbg_sensor("[MOD:D:%d] %s, sensor_fcount(%d), (wait_limit(%d) < time_out(%d))\n",
+				cis->id, __func__, sensor_fcount, wait_cnt, time_out_cnt);
+	}
+
+p_err:
+	return ret;
+}
+
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+int sensor_cis_set_initial_exposure(struct v4l2_subdev *subdev)
+{
+	struct fimc_is_cis *cis;
+
+	cis = (struct fimc_is_cis *)v4l2_get_subdevdata(subdev);
+	if (unlikely(!cis)) {
+		err("cis is NULL");
+		return -EINVAL;
+	}
+
+	if (cis->use_initial_ae) {
+		cis->init_ae_setting = cis->last_ae_setting;
+
+		dbg_sensor(1, "[MOD:D:%d] %s short(exp:%d/again:%d/dgain:%d), long(exp:%d/again:%d/dgain:%d)\n",
+			cis->id, __func__, cis->init_ae_setting.exposure, cis->init_ae_setting.analog_gain,
+			cis->init_ae_setting.digital_gain, cis->init_ae_setting.long_exposure,
+			cis->init_ae_setting.long_analog_gain, cis->init_ae_setting.long_digital_gain);
+	}
+
+	return 0;
+}
+#endif

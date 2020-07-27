@@ -43,9 +43,7 @@ static int gpu_tmu_hot_check_and_work(struct kbase_device *kbdev,
 #ifdef CONFIG_MALI_DVFS
 	struct exynos_context *platform;
 	int lock_clock;
-#ifdef CONFIG_EXYNOS_SNAPSHOT_THERMAL
-	char *cooling_device_name = "GPU";
-#endif
+
 	KBASE_DEBUG_ASSERT(kbdev != NULL);
 
 	platform = (struct exynos_context *)kbdev->platform_context;
@@ -55,7 +53,6 @@ static int gpu_tmu_hot_check_and_work(struct kbase_device *kbdev,
 	switch (event) {
 	case GPU_THROTTLING:
 		lock_clock = platform->tmu_lock_clk[index];
-		exynos_ss_thermal(NULL, 0, cooling_device_name, lock_clock);
 		GPU_LOG(DVFS_INFO, DUMMY, 0u, 0u, "THROTTLING[%lu]\n", index);
 		break;
 	case GPU_TRIPPING:
@@ -268,10 +265,6 @@ static int pm_callback_runtime_on(struct kbase_device *kbdev)
 #endif /* CONFIG_MALI_DVFS */
 		gpu_set_target_clk_vol(platform->cur_clock, false);
 
-#ifdef CONFIG_MALI_DVFS_USER_GOVERNOR
-	gpu_dvfs_notify_poweron();
-#endif
-
 	return 0;
 }
 extern void preload_balance_setup(struct kbase_device *kbdev);
@@ -283,7 +276,7 @@ static void pm_callback_runtime_off(struct kbase_device *kbdev)
 
 	GPU_LOG(DVFS_INFO, LSI_GPU_OFF, 0u, 0u, "runtime off callback\n");
 
-#ifdef CONFIG_MALI_DVFS_USER_GOVERNOR
+#ifdef CONFIG_MALI_DVFS_USER
 	gpu_dvfs_notify_poweroff();
 #endif
 
@@ -369,6 +362,9 @@ int gpu_notifier_init(struct kbase_device *kbdev)
 
 	platform->power_status = true;
 
+#ifdef CONFIG_MALI_DVFS_USER
+	gpu_dvfs_notify_poweron();
+#endif
 	return 0;
 }
 

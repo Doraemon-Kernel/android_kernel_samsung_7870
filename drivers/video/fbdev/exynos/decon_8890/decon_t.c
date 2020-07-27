@@ -41,7 +41,7 @@ int decon_t_set_lcd_info(struct decon_device *decon)
 	decon->lcd_info->vsa = 2;
 	decon->lcd_info->hsa = 20;
 	decon->lcd_info->fps = 60;
-	decon->pdata->out_type = DECON_OUT_WB;
+	decon->out_type = DECON_OUT_WB;
 
 	decon_info("decon_%d output size for writeback %dx%d\n", decon->id,
 			decon->lcd_info->width, decon->lcd_info->height);
@@ -112,16 +112,8 @@ void decon_t_set_clocks(struct decon_device *decon)
 	decon_reg_get_clock_ratio(&clks, p.lcd_info);
 
 	/* ECLK */
-	decon_clk_set_rate(dev, decon->res.eclk,
-			NULL, clks.decon[CLK_ID_ECLK] * MHZ);
 	decon_clk_set_rate(dev, decon->res.eclk_leaf,
 			NULL, clks.decon[CLK_ID_ECLK] * MHZ);
-
-#if defined(CONFIG_EXYNOS8890_BTS_OPTIMIZATION)
-	/* TODO: hard-coded 42 will be changed
-	 * default MIC factor is 3, So default VCLK is 42 for calculating DISP */
-	decon->vclk_factor = 42 * DECON_PIX_PER_CLK;
-#endif
 
 	decon_dbg("%s: pclk %ld eclk %ld Mhz\n",
 		__func__,

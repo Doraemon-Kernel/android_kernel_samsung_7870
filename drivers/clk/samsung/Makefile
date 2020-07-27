@@ -9,9 +9,16 @@ obj-$(CONFIG_SOC_EXYNOS5260)	+= clk-exynos5260.o
 obj-$(CONFIG_SOC_EXYNOS5410)	+= clk-exynos5410.o
 obj-$(CONFIG_SOC_EXYNOS5420)	+= clk-exynos5420.o
 obj-$(CONFIG_SOC_EXYNOS5440)	+= clk-exynos5440.o
+obj-$(CONFIG_SOC_EXYNOS7870)	+= clk-exynos7870.o
 ifeq ($(CONFIG_SOC_EXYNOS8890), y)
-	obj-y				+= composite.o
+ifeq ($(CONFIG_SOC_EXYNOS8890_EVT1), y)
 	obj-y				+= clk-exynos8890.o
+else
+	obj-y				+= clk-exynos8890_evt0.o
+endif
+endif
+ifeq ($(CONFIG_ARM64), y)
+	obj-y				+= composite.o
 else
 	obj-$(CONFIG_COMMON_CLK)	+= clk.o clk-pll.o
 endif

@@ -27,9 +27,6 @@
 #include <mali_kbase_instr.h>
 
 #include <mali_kbase_pm.h>
-#ifdef MALI_SEC_UTILIZATION
-#include <backend/gpu/mali_kbase_pm_internal.h>
-#endif
 
 int kbase_pm_powerup(struct kbase_device *kbdev, unsigned int flags)
 {
@@ -40,6 +37,8 @@ void kbase_pm_halt(struct kbase_device *kbdev)
 {
 	kbase_hwaccess_pm_halt(kbdev);
 }
+extern void kbasep_pm_record_gpu_active(struct kbase_device *kbdev);
+extern void kbasep_pm_record_gpu_idle(struct kbase_device *kbdev);
 
 void kbase_pm_context_active(struct kbase_device *kbdev)
 {
@@ -51,11 +50,7 @@ int kbase_pm_context_active_handle_suspend(struct kbase_device *kbdev, enum kbas
 	struct kbasep_js_device_data *js_devdata = &kbdev->js_data;
 	int c;
 	int old_count;
-#ifdef MALI_SEC_UTILIZATION
 	unsigned long flags;
-	ktime_t now;
-#endif
-
 	KBASE_DEBUG_ASSERT(kbdev != NULL);
 
 	/* Trace timeline information about how long it took to handle the decision
@@ -100,12 +95,9 @@ int kbase_pm_context_active_handle_suspend(struct kbase_device *kbdev, enum kbas
 		/* First context active: Power on the GPU and any cores requested by
 		 * the policy */
 		kbase_hwaccess_pm_gpu_active(kbdev);
-#ifdef MALI_SEC_UTILIZATION
-		now = ktime_get();
-		spin_lock_irqsave(&kbdev->js_data.runpool_irq.lock, flags);
-		kbase_pm_metrics_update(kbdev, &now);
-		spin_unlock_irqrestore(&kbdev->js_data.runpool_irq.lock, flags);
+#ifdef MALI_OLD_UTILIZATION
 		spin_lock_irqsave(&kbdev->pm.backend.metrics.lock, flags);
+		kbasep_pm_record_gpu_idle(kbdev);
 		kbdev->pm.backend.metrics.gpu_active = true;
 		spin_unlock_irqrestore(&kbdev->pm.backend.metrics.lock, flags);
 #endif
@@ -123,10 +115,7 @@ void kbase_pm_context_idle(struct kbase_device *kbdev)
 	struct kbasep_js_device_data *js_devdata = &kbdev->js_data;
 	int c;
 	int old_count;
-#ifdef MALI_SEC_UTILIZATION
 	unsigned long flags;
-	ktime_t now;
-#endif
 
 	KBASE_DEBUG_ASSERT(kbdev != NULL);
 
@@ -154,12 +143,9 @@ void kbase_pm_context_idle(struct kbase_device *kbdev)
 	if (c == 0) {
 		/* Last context has gone idle */
 		kbase_hwaccess_pm_gpu_idle(kbdev);
-#ifdef MALI_SEC_UTILIZATION
-		now = ktime_get();
-		spin_lock_irqsave(&kbdev->js_data.runpool_irq.lock, flags);
-		kbase_pm_metrics_update(kbdev, &now);
-		spin_unlock_irqrestore(&kbdev->js_data.runpool_irq.lock, flags);
+#ifdef MALI_OLD_UTILIZATION
 		spin_lock_irqsave(&kbdev->pm.backend.metrics.lock, flags);
+		kbasep_pm_record_gpu_active(kbdev);
 		kbdev->pm.backend.metrics.gpu_active = false;
 		spin_unlock_irqrestore(&kbdev->pm.backend.metrics.lock, flags);
 #endif

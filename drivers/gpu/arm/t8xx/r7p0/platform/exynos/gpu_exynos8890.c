@@ -37,11 +37,7 @@
 #include <soc/samsung/exynos-pmu.h>
 #endif
 #include <linux/apm-exynos.h>
-#ifdef CONFIG_EXYNOS8890_BTS_OPTIMIZATION
-#include <soc/samsung/bts.h>
-#endif
 #include <linux/clk.h>
-
 
 #include "mali_kbase_platform.h"
 #include "gpu_dvfs_handler.h"
@@ -62,9 +58,10 @@ extern int s2m_get_dvs_is_on(void);
 #endif
 
 #ifdef CONFIG_MALI_DVFS
-#define CPU_MAX PM_QOS_CLUSTER1_FREQ_MAX_DEFAULT_VALUE
+//#define CPU_MAX PM_QOS_CLUSTER1_FREQ_MAX_DEFAULT_VALUE
+#define CPU_MAX 0
 #else
-#define CPU_MAX -1
+#define CPU_MAX 0
 #endif
 
 #ifndef KHZ
@@ -78,14 +75,11 @@ void __iomem *g3d1_outstanding_regs;
 
 /*  clk,vol,abb,min,max,down stay, pm_qos mem, pm_qos int, pm_qos cpu_kfc_min, pm_qos cpu_egl_max */
 static gpu_dvfs_info gpu_dvfs_table_default[] = {
-	{806, 850000, 0, 98, 100, 1, 0, 1794000, 413000, 1586000, CPU_MAX},
-	{754, 850000, 0, 98, 100, 1, 0, 1794000, 413000, 1586000, CPU_MAX},
-	{728, 850000, 0, 98, 100, 1, 0, 1794000, 413000, 1586000, CPU_MAX},
-	{702, 850000, 0, 98, 100, 1, 0, 1794000, 413000, 1586000, CPU_MAX},
-	{650, 800000, 0, 98, 100, 5, 0, 1794000, 413000, 1586000, 1560000},
-	{600, 800000, 0, 78,  99, 9, 0, 1539000, 413000, 1378000, 1456000},
-	{546, 800000, 0, 78,  99, 1, 0, 1144000, 413000, 1170000, 1248000},
-	{419, 800000, 0, 78,  85, 1, 0, 1144000, 267000,  858000, 1144000},
+	{764, 850000, 0, 98, 100, 1, 0, 1539000, 400000, 1500000, 1300000},
+	{683, 800000, 0, 98, 100, 1, 0, 1539000, 400000, 1500000, 1300000},
+	{600, 800000, 0, 78, 100, 1, 0, 1352000, 413000, 1500000, 1300000},
+	{546, 800000, 0, 78,  99, 1, 0, 1144000, 413000, 1500000, 1800000},
+	{419, 800000, 0, 78,  85, 1, 0, 1014000, 267000,  900000, 1800000},
 	{338, 800000, 0, 78,  85, 1, 0,  546000, 200000,       0, CPU_MAX},
 	{260, 800000, 0, 78,  85, 1, 0,  421000, 160000,       0, CPU_MAX},
 };
@@ -99,8 +93,8 @@ static int mif_min_table[] = {
 };
 
 static gpu_attribute gpu_config_attributes[] = {
-	{GPU_MAX_CLOCK, 650},
-	{GPU_MAX_CLOCK_LIMIT, 650},
+	{GPU_MAX_CLOCK, 600},
+	{GPU_MAX_CLOCK_LIMIT, 600},
 	{GPU_MIN_CLOCK, 260},
 	{GPU_DVFS_START_CLOCK, 260},
 	{GPU_DVFS_BL_CONFIG_CLOCK, 260},
@@ -122,13 +116,13 @@ static gpu_attribute gpu_config_attributes[] = {
 	{GPU_GOVERNOR_INTERACTIVE_HIGHSPEED_DELAY, 0},
 	{GPU_DEFAULT_VOLTAGE, 800000},
 	{GPU_COLD_MINIMUM_VOL, 0},
-	{GPU_VOLTAGE_OFFSET_MARGIN, 25000},
+	{GPU_VOLTAGE_OFFSET_MARGIN, 37500},
 	{GPU_TMU_CONTROL, 1},
-	{GPU_TEMP_THROTTLING1, 650},
-	{GPU_TEMP_THROTTLING2, 600},
-	{GPU_TEMP_THROTTLING3, 546},
-	{GPU_TEMP_THROTTLING4, 419},
-	{GPU_TEMP_THROTTLING5, 338},
+	{GPU_TEMP_THROTTLING1, 600},
+	{GPU_TEMP_THROTTLING2, 546},
+	{GPU_TEMP_THROTTLING3, 419},
+	{GPU_TEMP_THROTTLING4, 338},
+	{GPU_TEMP_THROTTLING5, 260},
 	{GPU_TEMP_TRIPPING, 260},
 	{GPU_POWER_COEFF, 625}, /* all core on param */
 	{GPU_DVFS_TIME_INTERVAL, 5},
@@ -140,40 +134,26 @@ static gpu_attribute gpu_config_attributes[] = {
 	{GPU_PERF_GATHERING, 0},
 #ifdef MALI_SEC_HWCNT
 	{GPU_HWCNT_GATHERING, 1},
-	{GPU_HWCNT_POLLING_TIME, 90},
-	{GPU_HWCNT_UP_STEP, 3},
-	{GPU_HWCNT_DOWN_STEP, 2},
 	{GPU_HWCNT_GPR, 1},
 	{GPU_HWCNT_DUMP_PERIOD, 50}, /* ms */
-	{GPU_HWCNT_CHOOSE_JM , 0x56},
+	{GPU_HWCNT_CHOOSE_JM , 0},
 	{GPU_HWCNT_CHOOSE_SHADER , 0x560},
-	{GPU_HWCNT_CHOOSE_TILER , 0x800},
+	{GPU_HWCNT_CHOOSE_TILER , 0},
 	{GPU_HWCNT_CHOOSE_L3_CACHE , 0},
-	{GPU_HWCNT_CHOOSE_MMU_L2 , 0x80},
+	{GPU_HWCNT_CHOOSE_MMU_L2 , 0},
 #endif
 	{GPU_RUNTIME_PM_DELAY_TIME, 50},
 	{GPU_DVFS_POLLING_TIME, 30},
 	{GPU_PMQOS_INT_DISABLE, 1},
-	{GPU_PMQOS_MIF_MAX_CLOCK, 1539000},
-	{GPU_PMQOS_MIF_MAX_CLOCK_BASE, 650},
-	{GPU_CL_DVFS_START_BASE, 419},
+	{GPU_PMQOS_MIF_MAX_CLOCK, 1456000},
+	{GPU_PMQOS_MIF_MAX_CLOCK_BASE, 700},
+	{GPU_CL_DVFS_START_BASE, 700},
 	{GPU_DEBUG_LEVEL, DVFS_WARNING},
 	{GPU_TRACE_LEVEL, TRACE_ALL},
 #ifdef CONFIG_MALI_DVFS_USER
 	{GPU_UDVFS_ENABLE, 1},
 #endif
-	{GPU_MO_MIN_CLOCK, 419},
-	{GPU_SUSTAINABLE_GPU_CLOCK, 419},
-	{GPU_THRESHOLD_MAXLOCK, 10},
-	{GPU_LOW_POWER_CPU_MAX_LOCK, 832000},
 };
-
-#ifdef CONFIG_MALI_DVFS_USER
-unsigned int gpu_get_config_attr_size(void)
-{
-	return sizeof(gpu_config_attributes);
-}
-#endif
 
 int gpu_dvfs_decide_max_clock(struct exynos_context *platform)
 {
@@ -201,7 +181,6 @@ uintptr_t gpu_get_min_freq(void)
 struct clk *vclk_g3d;
 #ifdef CONFIG_REGULATOR
 struct regulator *g3d_regulator;
-struct regulator *g3d_m_regulator;
 #endif /* CONFIG_REGULATOR */
 
 int gpu_is_power_on(void)
@@ -356,9 +335,6 @@ static int gpu_enable_clock(struct exynos_context *platform)
 static int gpu_disable_clock(struct exynos_context *platform)
 {
 	GPU_LOG(DVFS_DEBUG, DUMMY, 0u, 0u, "%s: [vclk_g3d]\n", __func__);
-#ifdef CONFIG_EXYNOS8890_BTS_OPTIMIZATION
-	bts_ext_scenario_set(TYPE_G3D, TYPE_G3D_FREQ, 0);
-#endif
 	clk_disable_unprepare(vclk_g3d);
 	return 0;
 }
@@ -502,6 +478,7 @@ int gpu_enable_dvs(struct exynos_context *platform)
 		exynos_cl_dvfs_stop(ID_G3D, level);
 	}
 #endif /* CONFIG_EXYNOS_CL_DVFS_G3D */
+
 	/* Do not need to enable dvs during suspending */
 	if (!pkbdev->pm.suspending) {
 //		if (s2m_set_dvs_pin(true) != 0) {
@@ -552,13 +529,6 @@ int gpu_regulator_init(struct exynos_context *platform)
 
 	if (gpu_set_voltage(platform, gpu_voltage) != 0) {
 		GPU_LOG(DVFS_ERROR, DUMMY, 0u, 0u, "%s: failed to set voltage [%d]\n", __func__, gpu_voltage);
-		return -1;
-	}
-
-	g3d_m_regulator = regulator_get(NULL, "vdd_extra");
-	if (IS_ERR(g3d_m_regulator)) {
-		GPU_LOG(DVFS_ERROR, DUMMY, 0u, 0u, "%s: failed to get vdd_g3d_m regulator, 0x%p\n", __func__, g3d_m_regulator);
-		g3d_m_regulator = NULL;
 		return -1;
 	}
 

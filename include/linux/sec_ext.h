@@ -37,14 +37,14 @@ extern void sec_bootstat_add(const char * c);
 extern void sec_bootstat_add_initcall(const char *);
 
 extern void sec_bootstat_get_cpuinfo(int *freq, int *online);
-extern void sec_bootstat_get_thermal(int *temp);
+extern void sec_bootstat_get_thermal(int *temp, int size);
 #else
 #define sec_bootstat_mct_start(a)		do { } while(0)
 #define sec_bootstat_add(a)			do { } while(0)
 #define sec_bootstat_add_initcall(a)		do { } while(0)
 
 #define sec_bootstat_get_cpuinfo(a,b)		do { } while(0)	
-#define sec_bootstat_get_thermal(a)		do { } while(0)	
+#define sec_bootstat_get_thermal(a,b)		do { } while(0)	
 #endif /* CONFIG_SEC_BOOT_STAT */
 
 /*
@@ -62,22 +62,17 @@ extern void sec_initcall_debug_add(initcall_t fn, unsigned long long t);
  * Param op.
  */
 #ifdef CONFIG_SEC_PARAM
-#define CM_OFFSET				CONFIG_CM_OFFSET
-#define CM_OFFSET_LIMIT 8
+#define CM_OFFSET				0x700234
+#define CM_OFFSET_LIMIT				1
+#define GSP_OFFSET				0x700238
+#define GSP_OFFSET_LIMIT 			0
 enum
 {
 	PARAM_OFF = '0',
 	PARAM_ON = '1',
 };
-enum
-{
-	PARAM_TEST0 = 0,
-	PARAM_TEST1,
-	PARAM_TEST2,
-	PARAM_TEST3,
-	PARAM_MAX,
-};
-extern int sec_set_param(unsigned long offset, char val);
+
+extern int  sec_set_param(unsigned long offset, char val);
 extern int sec_set_param_str(unsigned long offset, const char *val, int size);
 #else
 #define sec_set_param(a,b)			{-1)

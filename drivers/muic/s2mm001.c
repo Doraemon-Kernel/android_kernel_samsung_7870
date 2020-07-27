@@ -28,6 +28,7 @@
 #include <linux/platform_device.h>
 #include <linux/module.h>
 #include <linux/delay.h>
+#include <soc/samsung/exynos-pmu.h>
 
 #include <linux/muic/muic.h>
 #include <linux/muic/s2mm001.h>
@@ -42,10 +43,16 @@
 
 #define MAX_LOG 25
 #define READ 0
+#ifndef WRITE
 #define WRITE 1
+#endif
 
 #define GPIO_LEVEL_HIGH		1
 #define GPIO_LEVEL_LOW		0
+
+#define PMU_UART_IO_SHARE_CTRL 0x6200
+#define FUNC_ISO_EN_UART (0x1 << 0)
+#define FUNC_ISO_EN_USB (0x0 << 0)
 
 static u8 s2mm001_log_cnt;
 static u8 s2mm001_log[MAX_LOG][3];
@@ -116,30 +123,6 @@ void s2mm001_print_reg_dump(struct s2mm001_muic_data *muic_data)
 }
 #endif
 
-/* don't access this variable directly!! except get_switch_sel_value function.
- * you must get switch_sel value by using get_switch_sel function. */
-static int switch_sel;
-
-/*
- * func : set_switch_sel
- * switch_sel value get from bootloader comand line
- * switch_sel data consist 4 bits
- */
-static int set_switch_sel(char *str)
-{
-	get_option(&str, &switch_sel);
-	switch_sel = switch_sel & 0x0f;
-	pr_info("%s:%s switch_sel: 0x%x\n", MUIC_DEV_NAME, __func__,
-			switch_sel);
-
-	return switch_sel;
-}
-__setup("pmic_info=", set_switch_sel);
-
-static int get_switch_sel(void)
-{
-	return switch_sel;
-}
 static int s2mm001_i2c_read_byte(const struct i2c_client *client, u8 command)
 {
 	int ret;
@@ -594,9 +577,9 @@ static ssize_t s2mm001_muic_set_otg_test(struct device *dev,
 
 	pr_info("%s:%s buf:%s\n", MUIC_DEV_NAME, __func__, buf);
 	if (!strncmp(buf, "0", 1)) {
-		val = 0;
+		/* otg_test = 1 */
 	} else if (!strncmp(buf, "1", 1)) {
-		val = 1;
+		/* otg_test = 0 */
 	} else {
 		pr_warn("%s:%s Wrong command\n", MUIC_DEV_NAME, __func__);
 		return count;
@@ -606,10 +589,6 @@ static ssize_t s2mm001_muic_set_otg_test(struct device *dev,
 	val = s2mm001_i2c_write_byte(muic_data->i2c,
 			S2MM001_MUIC_REG_INTMASK2, val|INT_CHG_DET_MASK);
 	mutex_unlock(&muic_data->muic_mutex);
-	if (val < 0) {
-		pr_err("%s:%s err writing INTMASK reg(%d)\n",
-					MUIC_DEV_NAME, __func__, val);
-	}
 
 	val = 0;
 	val = s2mm001_i2c_read_byte(muic_data->i2c, S2MM001_MUIC_REG_INTMASK2);
@@ -1077,6 +1056,8 @@ static int attach_usb(struct s2mm001_muic_data *muic_data,
 
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
 
+	exynos_pmu_update(PMU_UART_IO_SHARE_CTRL, 0x1 << 0, FUNC_ISO_EN_USB);
+
 	ret = attach_usb_util(muic_data, new_dev);
 	if (ret)
 		return ret;
@@ -1095,6 +1076,8 @@ static int attach_otg_usb(struct s2mm001_muic_data *muic_data,
 	}
 
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
+
+	exynos_pmu_update(PMU_UART_IO_SHARE_CTRL, 0x1 << 0, FUNC_ISO_EN_USB);
 
 #ifdef CONFIG_MUIC_S2MM001_SUPPORT_LANHUB
 	/* LANHUB doesn't work under AUTO switch mode, so turn it off */
@@ -1328,11 +1311,18 @@ static int attach_jig_uart_boot_off(struct s2mm001_muic_data *muic_data,
 	if (ret)
 		return ret;
 
-	if (pdata->uart_path == MUIC_PATH_UART_AP)
+	if (pdata->uart_path == MUIC_PATH_UART_AP) {
 		ret = switch_to_ap_uart(muic_data);
-	else
+		if (ret < 0)
+			pr_err("%s:%s err switch_to_ap/cp_uart (%d)\n",
+					MUIC_DEV_NAME, __func__, ret);
+	}
+	else {
 		ret = switch_to_cp_uart(muic_data);
-
+		if (ret < 0)
+			pr_err("%s:%s err switch_to_ap/cp_uart (%d)\n",
+					MUIC_DEV_NAME, __func__, ret);
+	}
 	/* if VBUS is enabled, call host_notify_cb to check if it is OTGTEST*/
 	if (vbvolt) {
 		/* JIG_UART_OFF_VB */
@@ -1342,6 +1332,8 @@ static int attach_jig_uart_boot_off(struct s2mm001_muic_data *muic_data,
 		new_dev = ATTACHED_DEV_JIG_UART_OFF_MUIC;
 		ret = attach_charger(muic_data, new_dev);
 	}
+
+	exynos_pmu_update(PMU_UART_IO_SHARE_CTRL, 0x1 << 0, FUNC_ISO_EN_UART);
 
 	return ret;
 }
@@ -1409,7 +1401,7 @@ static void s2mm001_muic_handle_attach(struct s2mm001_muic_data *muic_data,
 			muic_attached_dev_t new_dev, int adc, u8 vbvolt)
 {
 	int ret = 0;
-	bool noti = true;
+	bool noti = (new_dev != muic_data->attached_dev) ? true : false;
 
 	switch (muic_data->attached_dev) {
 	case ATTACHED_DEV_USB_MUIC:
@@ -1470,7 +1462,6 @@ static void s2mm001_muic_handle_attach(struct s2mm001_muic_data *muic_data,
 		}
 		break;
 	default:
-		noti = false;
 		break;
 	}
 
@@ -1478,8 +1469,6 @@ static void s2mm001_muic_handle_attach(struct s2mm001_muic_data *muic_data,
 	if (noti)
 		muic_notifier_detach_attached_dev(muic_data->attached_dev);
 #endif /* CONFIG_MUIC_NOTIFIER */
-
-	noti = true;
 
 	switch (new_dev) {
 	case ATTACHED_DEV_USB_MUIC:
@@ -1645,9 +1634,7 @@ static void s2mm001_muic_detect_dev(struct s2mm001_muic_data *muic_data)
 		pr_info("%s : DEDICATED CHARGER DETECTED\n", MUIC_DEV_NAME);
 		break;
 	case DEV_TYPE1_USB_OTG:
-#ifdef CONFIG_MUIC_S2MM001_SUPPORT_OTG
 		intr = MUIC_INTR_ATTACH;
-#endif
 		new_dev = ATTACHED_DEV_OTG_MUIC;
 		pr_info("%s : USB_OTG DETECTED\n", MUIC_DEV_NAME);
 		break;
@@ -1768,12 +1755,10 @@ static void s2mm001_muic_detect_dev(struct s2mm001_muic_data *muic_data)
 			/* sometimes muic fails to
 				catch JIG_UART_OFF detaching */
 			/* double check with ADC */
-			if (new_dev == ATTACHED_DEV_JIG_UART_OFF_MUIC) {
-				new_dev = ATTACHED_DEV_UNKNOWN_MUIC;
-				intr = MUIC_INTR_DETACH;
-				pr_info("%s : ADC OPEN DETECTED\n",
+			new_dev = ATTACHED_DEV_UNKNOWN_MUIC;
+			intr = MUIC_INTR_DETACH;
+			pr_info("%s : ADC OPEN DETECTED\n",
 							MUIC_DEV_NAME);
-			}
 			break;
 		default:
 			pr_warn("%s:%s unsupported ADC(0x%02x)\n",
@@ -1801,10 +1786,19 @@ static int s2mm001_muic_reg_init(struct s2mm001_muic_data *muic_data)
 	struct i2c_client *i2c = muic_data->i2c;
 	int ret;
 	int ctrl = CTRL_MASK;
-	u8 chg_en;
+	u8 chg_en, man_sw = 0;
 	int val1, val2, val3, adc;
+	int vbvolt = 0;
 
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
+
+	ret = s2mm001_i2c_read_byte(i2c, 0x24);
+	ret |= 0x01 << 4;
+	s2mm001_i2c_write_byte(i2c, 0x24, ret);
+
+	ret = s2mm001_i2c_read_byte(i2c, 0x2b);
+	ret &= ~(0x01 << 2);
+	s2mm001_i2c_write_byte(i2c, 0x2b, ret);
 
 	ret = s2mm001_i2c_write_byte(i2c, S2MM001_MUIC_REG_INTMASK1,
 			REG_INTMASK1_VALUE);
@@ -1817,20 +1811,6 @@ static int s2mm001_muic_reg_init(struct s2mm001_muic_data *muic_data)
 			REG_INTMASK2_VALUE);
 	if (ret < 0)
 		pr_err("%s: err mask interrupt2(%d)\n", __func__, ret);
-
-#ifdef CONFIG_MUIC_S2MM001_ENABLE_AUTOSW
-	/* set AUTO SW mode */
-	/* enable AUTO Switch for devices with internal battery */
-#ifdef CONFIG_MACH_DEGAS
-	/* System rev less than 0.1 cannot use Auto switch mode in DEGAS */
-	if (system_rev >= 0x1)
-#endif
-		ctrl |= CTRL_MANUAL_SW_MASK;
-#endif
-
-	ret = s2mm001_i2c_guaranteed_wbyte(i2c, S2MM001_MUIC_REG_CTRL, ctrl);
-	if (ret < 0)
-		pr_err("%s: err write ctrl(%d)\n", __func__, ret);
 
 	ret = s2mm001_i2c_write_byte(i2c, S2MM001_MUIC_REG_TIMING1,
 						REG_TIMING1_VALUE);
@@ -1850,7 +1830,7 @@ static int s2mm001_muic_reg_init(struct s2mm001_muic_data *muic_data)
 		pr_err("%s:%s err %d\n", MUIC_DEV_NAME, __func__, val3);
 
 	adc = s2mm001_i2c_read_byte(i2c, S2MM001_MUIC_REG_ADC);
-	if (val3 < 0)
+	if (adc < 0)
 		pr_err("%s:%s err %d\n", MUIC_DEV_NAME, __func__, adc);
 
 	pr_info("%s:%s dev[1:0x%x, 2:0x%x, 3:0x%x], adc:0x%x\n",
@@ -1861,7 +1841,47 @@ static int s2mm001_muic_reg_init(struct s2mm001_muic_data *muic_data)
 		pr_info("init, chg_en : 0x%x\n", chg_en);
 		chg_en &= ~(0x01 << 1);
 		s2mm001_i2c_write_byte(i2c, S2MM001_MUIC_REG_MANSW1, chg_en);
+	} else if ((val1 & DEV_TYPE1_USB_TYPES) ||
+			(val2 & DEV_TYPE2_JIG_USB_TYPES) ||
+			(val3 & DEV_TYPE3_NO_STD_CHG)) {
+		ret = s2mm001_i2c_write_byte(i2c,
+			S2MM001_MUIC_REG_MANSW1, 0x26);
+		if (ret < 0)
+			pr_err("%s:%s usb type detect err %d\n",
+				   MUIC_DEV_NAME, __func__, ret);
+	} else if (val2 & DEV_TYPE2_JIG_UART_TYPES) {
+		ret = s2mm001_i2c_write_byte(i2c,
+			S2MM001_MUIC_REG_MANSW1, 0x6e);
+		if (ret < 0)
+			pr_err("%s:%s uart type detect err %d\n",
+				    MUIC_DEV_NAME, __func__, ret);
 	}
+	vbvolt = val3 & RSVD1_VBUS;
+	if (vbvolt) {
+		man_sw = s2mm001_i2c_read_byte(i2c, S2MM001_MUIC_REG_MANSW1);
+		man_sw |= MANUAL_SW1_V_CHARGER;
+		ret = s2mm001_i2c_write_byte(i2c, S2MM001_MUIC_REG_MANSW1,
+						man_sw);
+		if (ret < 0)
+			pr_err("%s: err write MANSW1(%d)\n", __func__, ret);
+	}
+
+	mdelay(100);
+
+#ifdef CONFIG_MUIC_S2MM001_ENABLE_AUTOSW
+	/* set AUTO SW mode */
+	/* enable AUTO Switch for devices with internal battery */
+#ifdef CONFIG_MACH_DEGAS
+	/* System rev less than 0.1 cannot use Auto switch mode in DEGAS */
+	if (system_rev >= 0x1)
+#endif
+		ctrl |= CTRL_MANUAL_SW_MASK;
+#endif
+	ctrl &= ~CTRL_RAW_DATA_MASK;
+
+	ret = s2mm001_i2c_guaranteed_wbyte(i2c, S2MM001_MUIC_REG_CTRL, ctrl);
+	if (ret < 0)
+		pr_err("%s: err write ctrl(%d)\n", __func__, ret);
 
 	/* enable ChargePump */
 	ret = s2mm001_i2c_write_byte(i2c, S2MM001_MUIC_REG_CTRL2,
@@ -1957,17 +1977,12 @@ static int s2mm001_init_rev_info(struct s2mm001_muic_data *muic_data)
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
 
 	dev_id = s2mm001_i2c_read_byte(muic_data->i2c, S2MM001_MUIC_REG_DEVID);
-	if (dev_id < 0) {
-		pr_err("%s:%s i2c io error(%d)\n", MUIC_DEV_NAME, __func__,
-				ret);
-		ret = -ENODEV;
-	} else {
-		muic_data->muic_vendor = (dev_id & 0x7);
-		muic_data->muic_version = ((dev_id & 0xF8) >> 3);
-		pr_info("%s:%s device found: vendor=0x%x, ver=0x%x\n",
-				MUIC_DEV_NAME, __func__, muic_data->muic_vendor,
-				muic_data->muic_version);
-	}
+
+	muic_data->muic_vendor = (dev_id & 0x7);
+	muic_data->muic_version = ((dev_id & 0xF8) >> 3);
+	pr_info("%s:%s device found: vendor=0x%x, ver=0x%x\n",
+			MUIC_DEV_NAME, __func__, muic_data->muic_vendor,
+			muic_data->muic_version);
 
 	return ret;
 }
@@ -2238,7 +2253,7 @@ static struct i2c_driver s2mm001_muic_driver = {
 #endif /* CONFIG_OF */
 	},
 	.probe		= s2mm001_muic_probe,
-	.remove		= __devexit_p(s2mm001_muic_remove),
+	.remove		= s2mm001_muic_remove,
 	.shutdown	= s2mm001_muic_shutdown,
 	.id_table	= s2mm001_i2c_id,
 };

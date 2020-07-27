@@ -14,14 +14,4 @@
 
 #include <linux/i2c.h>
 
-/* I2C PIN MODE */
-enum {
-	I2C_PIN_STATE_DEFAULT = 0,
-	I2C_PIN_STATE_ON,
-	I2C_PIN_STATE_OFF,
-	I2C_PIN_STATE_HOST,
-	I2C_PIN_STATE_FW,
-};
-
-int fimc_is_i2c_s_pin(struct i2c_client *client, int state);
 #endif

@@ -345,7 +345,7 @@ static int pppopns_connect(struct socket *sock, struct sockaddr *useraddr,
 	po->chan.mtu = PPP_MRU - 80;
 	po->proto.pns.local = addr->local;
 	po->proto.pns.remote = addr->remote;
-	po->proto.pns.data_ready = sk_raw->sk_data_ready;
+	po->proto.pns.data_ready = (void *)sk_raw->sk_data_ready;
 	po->proto.pns.backlog_rcv = sk_raw->sk_backlog_rcv;
 
 	error = ppp_register_channel(&po->chan);
@@ -354,7 +354,7 @@ static int pppopns_connect(struct socket *sock, struct sockaddr *useraddr,
 
 	sk->sk_state = PPPOX_CONNECTED;
 	lock_sock(sk_raw);
-	sk_raw->sk_data_ready = pppopns_recv;
+	sk_raw->sk_data_ready = (void *)pppopns_recv;
 	sk_raw->sk_backlog_rcv = pppopns_recv_core;
 	sk_raw->sk_user_data = sk;
 	release_sock(sk_raw);
@@ -395,7 +395,7 @@ static int pppopns_release(struct socket *sock)
 		lock_sock(sk_raw);
 		skb_queue_purge(&sk->sk_receive_queue);
 		pppox_unbind_sock(sk);
-		sk_raw->sk_data_ready = pppox_sk(sk)->proto.pns.data_ready;
+		sk_raw->sk_data_ready = (void *)pppox_sk(sk)->proto.pns.data_ready;
 		sk_raw->sk_backlog_rcv = pppox_sk(sk)->proto.pns.backlog_rcv;
 		sk_raw->sk_user_data = NULL;
 		release_sock(sk_raw);

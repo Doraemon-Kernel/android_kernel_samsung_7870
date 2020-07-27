@@ -15,7 +15,6 @@
 
 #define MAX_TIMEOUT		2000
 #define ID_MASK			0xffff
-#define TPUT_THRESHOLD		150
 #define MAX_RC_NUM		2
 
 #if defined(CONFIG_SOC_EXYNOS8890)
@@ -67,7 +66,6 @@ struct exynos_pcie {
 	struct pci_dev		*pci_dev;
 	struct pci_saved_state	*pci_saved_configs;
 	struct notifier_block	lpa_nb;
-	struct notifier_block	ss_dma_mon_nb;
 	struct delayed_work	work;
 	struct exynos_pcie_register_event *event_reg;
 #ifdef CONFIG_PCI_EXYNOS_TEST
@@ -77,11 +75,6 @@ struct exynos_pcie {
 #ifdef CONFIG_PM_DEVFREQ
 	unsigned int		int_min_lock;
 #endif
-	int			l1ss_ctrl_id_state;
-	struct workqueue_struct *pcie_wq_l1ss;
-	struct delayed_work     work_l1ss;
-	int			boot_cnt;
-	int			work_l1ss_cnt;
 };
 
 /* PCIe ELBI registers */
@@ -116,7 +109,6 @@ struct exynos_pcie {
 #define PCIE_APP_REQ_EXIT_L1_MODE	0xF4
 #define APP_REQ_EXIT_L1_MODE		0x1
 #define L1_REQ_NAK_CONTROL		(0x3 << 4)
-#define L1_REQ_NAK_CONTROL_MASTER	(0x1 << 4)
 #define PCIE_HISTORY_REG(x)		(0x138 + ((x) * 0x4))
 #define LTSSM_STATE(x)			(((x) >> 16) & 0x3f)
 #define PM_DSTATE(x)			(((x) >> 8) & 0x7)

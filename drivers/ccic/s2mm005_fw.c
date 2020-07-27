@@ -4,12 +4,8 @@
 #include <linux/ccic/s2mm005_ext.h>
 #include <linux/ccic/s2mm005_fw.h>
 #include <linux/ccic/ccic_sysfs.h>
-#include <linux/ccic/BOOT_FLASH_FW.h>
-#include <linux/ccic/BOOT_FLASH_FW_BOOT3.h>
-#include <linux/ccic/BOOT_FLASH_FW_BOOT4.h>
-#include <linux/ccic/BOOT_FLASH_FW_BOOT5_NODPDM.h>
-#include <linux/ccic/BOOT_FLASH_FW_BOOT5.h>
-#include <linux/ccic/BOOT_FLASH_FW_BOOT6.h>
+#include <linux/ccic/BOOT_FLASH_FW_0x0A_BOOT7.h>
+#include <linux/ccic/BOOT_FLASH_FW_0x01_BOOT7.h>
 #include <linux/ccic/BOOT_SRAM_FW.h>
 
 #define	S2MM005_FIRMWARE_PATH	"usbpd/s2mm005.bin"
@@ -324,11 +320,11 @@ int s2mm005_flash(struct s2mm005_data *usbpd_data, unsigned int input)
 			dev_info(&i2c->dev, "%s IRQ0:%02d\n", __func__, irq_gpio_status);
 			if(!irq_gpio_status) {
 				s2mm005_int_clear(usbpd_data);	// interrupt clear
-				usleep_range(10 * 1000, 10 * 1000);
+				usleep_range(10 * 1000, 10 * 1000);	
 			}
 			s2mm005_read_byte_flash(i2c, FLASH_STATUS_0x24, &val, 1);
-			pr_err("%s %s retry %d\n", __func__, flashmode_to_string(val), retry);
-			usleep_range(50*1000, 50*1000);
+			pr_err("flash mode : %s retry %d\n", flashmode_to_string(val), retry);	
+			usleep_range(50 * 1000, 50 * 1000);
 
 			s2mm005_read_byte(i2c, 0x24, Flash_DATA.BYTE, 4);
 			dev_info(&i2c->dev, "Flash_State:0x%02X   Reserved:0x%06X\n",
@@ -340,6 +336,7 @@ int s2mm005_flash(struct s2mm005_data *usbpd_data, unsigned int input)
 					/* RESET */
 					s2mm005_reset(usbpd_data);
 					msleep(3000);
+					
 					/* FLASH_READY */
 					s2mm005_flash_ready(usbpd_data);
 				} else if (retry == 20) {
@@ -358,28 +355,16 @@ int s2mm005_flash(struct s2mm005_data *usbpd_data, unsigned int input)
 		pr_err("flash mode : %s\n", flashmode_to_string(val));
 		break;
 	}
-	case FLASH_WRITE: { /* write flash & verify */
-		ret = s2mm005_flash_write(usbpd_data, (unsigned char*)&BOOT_FLASH_FW[0]);
-		break;
-	}
-	case FLASH_WRITE3: { /* write flash & verify */
-		ret = s2mm005_flash_write(usbpd_data, (unsigned char*)&BOOT_FLASH_FW_BOOT3[0]);
-		break;
-	}
-	case FLASH_WRITE4: { /* write flash & verify */
-		ret = s2mm005_flash_write(usbpd_data, (unsigned char*)&BOOT_FLASH_FW_BOOT4[0]);
-		break;
-	}
-	case FLASH_WRITE5: { /* write flash & verify */
-		ret = s2mm005_flash_write(usbpd_data, (unsigned char*)&BOOT_FLASH_FW_BOOT5[0]);
-		break;
-	}
-	case FLASH_WRITE5_NODPDM: { /* write flash & verify */
-		ret = s2mm005_flash_write(usbpd_data, (unsigned char*)&BOOT_FLASH_FW_BOOT5_NODPDM[0]);
-		break;
-	}
-	case FLASH_WRITE6: { /* write flash & verify */
-		ret = s2mm005_flash_write(usbpd_data, (unsigned char*)&BOOT_FLASH_FW_BOOT6[0]);
+	case FLASH_WRITE7: { /* write flash & verify */
+		switch (usbpd_data->s2mm005_fw_product_id) {
+			case PRODUCT_NUM_GREAT:
+				ret = s2mm005_flash_write(usbpd_data, (unsigned char*)&BOOT_FLASH_FW_0x0A_BOOT7[0]);
+				break;
+			case PRODUCT_NUM_DREAM:
+			default:
+				ret = s2mm005_flash_write(usbpd_data, (unsigned char*)&BOOT_FLASH_FW_0x01_BOOT7[0]);
+				break;
+		}
 		break;
 	}
 	case FLASH_WRITE_UMS: {
@@ -444,23 +429,17 @@ void s2mm005_get_fw_version(int product_id,
 {
 	struct s2mm005_fw *fw_hd;
 	switch (boot_version) {
-	case 3:
-		fw_hd = (struct s2mm005_fw*) BOOT_FLASH_FW_BOOT3;
-		break;
-	case 4:
-		if (hw_rev >= 9)
-			fw_hd = (struct s2mm005_fw*) BOOT_FLASH_FW;
-		else
-			fw_hd = (struct s2mm005_fw*) BOOT_FLASH_FW_BOOT4;
-		break;
-	case 5:
-			fw_hd = (struct s2mm005_fw*) BOOT_FLASH_FW_BOOT5;
-		break;
-	case 6:
-			fw_hd = (struct s2mm005_fw*) BOOT_FLASH_FW_BOOT6;
-		break;
+	case 7:
 	default:
-		fw_hd = (struct s2mm005_fw*) BOOT_FLASH_FW_BOOT5;
+		switch (product_id) {
+			case PRODUCT_NUM_GREAT:
+				fw_hd = (struct s2mm005_fw*) BOOT_FLASH_FW_0x0A_BOOT7;
+				break;
+			case PRODUCT_NUM_DREAM:
+			default:
+				fw_hd = (struct s2mm005_fw*) BOOT_FLASH_FW_0x01_BOOT7;
+				break;
+		}
 		break;
 	}
 	version->boot = fw_hd->boot;
@@ -476,6 +455,7 @@ void s2mm005_get_chip_hwversion(struct s2mm005_data *usbpd_data,
 
 	s2mm005_read_byte_flash(i2c, 0x0, (u8 *)&version->boot, 1);
 	s2mm005_read_byte_flash(i2c, 0x1, (u8 *)&version->main, 3);
+	s2mm005_read_byte_flash(i2c, 0x4, (u8 *)&version->ver2, 4);
 }
 
 void s2mm005_get_chip_swversion(struct s2mm005_data *usbpd_data,
@@ -494,6 +474,8 @@ void s2mm005_get_chip_swversion(struct s2mm005_data *usbpd_data,
 		if(VALID_FW_MAIN_VERSION(version->main))
 			break;
 	}
+	for (i = 0; i < FW_CHECK_RETRY; i++)
+		s2mm005_read_byte_flash(i2c, 0xc, (u8 *)&version->ver2, 4);
 }
 
 int s2mm005_check_version(struct s2mm005_version *version1,
@@ -514,13 +496,17 @@ int s2mm005_flash_fw(struct s2mm005_data *usbpd_data, unsigned int input)
 	int ret = 0;
 	u8 val = 0;
 
+	if( usbpd_data->fw_product_id != usbpd_data->s2mm005_fw_product_id)
+	{
+		pr_err("FW_UPDATE fail, product number is different (%d)(%d) \n",  usbpd_data->fw_product_id,usbpd_data->s2mm005_fw_product_id);
+		return 0;
+	}
+	
 	pr_err("FW_UPDATE %d\n", input);
 	switch (input) {
-	case FLASH_WRITE3:
-	case FLASH_WRITE4:
 	case FLASH_WRITE5:
-	case FLASH_WRITE5_NODPDM:
 	case FLASH_WRITE6:
+	case FLASH_WRITE7:	
 	case FLASH_WRITE: {
 		s2mm005_flash(usbpd_data, FLASH_MODE_ENTER);
 		usleep_range(10 * 1000, 10 * 1000);
@@ -528,7 +514,7 @@ int s2mm005_flash_fw(struct s2mm005_data *usbpd_data, unsigned int input)
 		msleep(200);
 		ret = s2mm005_flash(usbpd_data, input);
 		if (ret < 0)
-			panic("infinite write fail!\n");
+			return ret;	
 		usleep_range(10 * 1000, 10 * 1000);
 		s2mm005_flash(usbpd_data, FLASH_MODE_EXIT);
 		usleep_range(10 * 1000, 10 * 1000);

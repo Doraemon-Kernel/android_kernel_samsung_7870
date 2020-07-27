@@ -172,7 +172,8 @@ void dwc3_core_config(struct dwc3 *dwc)
 		reg &= ~DWC3_GUCTL_REFCLKPER_MASK;
 		reg |= DWC3_GUCTL_REFCLKPER(0x29);
 	}
-	reg |= DWC3_GUCTL_SPRSCTRLTRANSEN;
+	if (dwc->sparse_transfer_control)
+		reg |= DWC3_GUCTL_SPRSCTRLTRANSEN;
 	dwc3_writel(dwc->regs, DWC3_GUCTL, reg);
 	if (dwc->revision >= DWC3_REVISION_190A &&
 		dwc->revision <= DWC3_REVISION_210A) {
@@ -357,7 +358,7 @@ int dwc3_event_buffers_setup(struct dwc3 *dwc)
 
 	for (n = 0; n < dwc->num_event_buffers; n++) {
 		evt = dwc->ev_buffs[n];
-		dev_info(dwc->dev, "Event buf %p dma %08llx length %d\n",
+		dev_dbg(dwc->dev, "Event buf %p dma %08llx length %d\n",
 				evt->buf, (unsigned long long) evt->dma,
 				evt->length);
 
@@ -626,7 +627,7 @@ int dwc3_core_init(struct dwc3 *dwc)
 	dwc3_core_config(dwc);
 
 	reg = dwc3_readl(dwc->regs, DWC3_GUSB2PHYCFG(0));
-	reg |= DWC3_GUSB2PHYCFG_SUSPHY;
+	reg &= ~DWC3_GUSB2PHYCFG_SUSPHY;
 	if (dwc->adj_sof_accuracy)
 		reg &= ~DWC3_GUSB2PHYCFG_U2_FREECLK_EXISTS;
 	dwc3_writel(dwc->regs, DWC3_GUSB2PHYCFG(0), reg);
@@ -906,14 +907,24 @@ static int dwc3_probe(struct platform_device *pdev)
 		dwc->needs_fifo_resize = of_property_read_bool(node, "tx-fifo-resize");
 		dwc->adj_sof_accuracy = of_property_read_bool(node, "adj-sof-accuracy");
 		dwc->is_not_vbus_pad = of_property_read_bool(node, "is_not_vbus_pad");
+		dwc->sparse_transfer_control = of_property_read_bool(node, "enable_sprs_transfer");
 		dwc->dr_mode = of_usb_get_dr_mode(node);
 		dwc->suspend_clk_freq = of_usb_get_suspend_clk_freq(node);
+#ifdef CONFIG_ARGOS
+		/*
+		 * read irq affinity cpu mask from DT
+		 * default value is 1 (cpu1)
+		 */
+		if (of_property_read_u32(node, "irq_affinity_cpu", &dwc->irq_affinity_cpu_mask))
+			dwc->irq_affinity_cpu_mask = 1;
+#endif
 	} else if (pdata) {
 		dwc->maximum_speed = pdata->maximum_speed;
 
 		dwc->needs_fifo_resize = pdata->tx_fifo_resize;
 		dwc->adj_sof_accuracy = pdata->adj_sof_accuracy;
 		dwc->is_not_vbus_pad = pdata->is_not_vbus_pad;
+		dwc->sparse_transfer_control = pdata->sparse_transfer_control;
 		dwc->dr_mode = pdata->dr_mode;
 	}
 

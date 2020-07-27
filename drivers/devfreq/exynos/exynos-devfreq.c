@@ -22,7 +22,6 @@
 #include <linux/of.h>
 #include <linux/slab.h>
 #include <linux/reboot.h>
-#include <linux/suspend.h>
 #include <linux/exynos-ss.h>
 
 #include <soc/samsung/exynos-devfreq.h>
@@ -30,9 +29,6 @@
 #include <soc/samsung/ect_parser.h>
 
 #include "../governor.h"
-#if defined(CONFIG_KFAULT_AUTO_SUMMARY)
-#include <linux/sec_debug.h>
-#endif
 
 static int exynos_devfreq_tmu_notifier(struct notifier_block *nb,
 					unsigned long event, void *v);
@@ -45,14 +41,6 @@ struct exynos_devfreq_init_func {
 
 static struct exynos_devfreq_init_func exynos_devfreq_init[DEVFREQ_TYPE_END];
 static struct exynos_devfreq_data *devfreq_data[DEVFREQ_TYPE_END];
-
-#if defined(CONFIG_KFAULT_AUTO_SUMMARY)
-static struct sec_debug_auto_comm_freq_info* auto_comm_devfreq_info;
-void sec_debug_set_auto_comm_last_devfreq_buf(struct sec_debug_auto_comm_freq_info* freq_info)
-{
-	auto_comm_devfreq_info = freq_info;;
-}
-#endif
 
 #ifdef CONFIG_ARM_EXYNOS_DEVFREQ_DEBUG
 static ssize_t show_exynos_devfreq_info(struct device *dev,
@@ -1045,40 +1033,6 @@ static int exynos_devfreq_reboot_notifier(struct notifier_block *nb,
 	return NOTIFY_OK;
 }
 
-static int exynos_devfreq_pm_notifier(struct notifier_block *nb,
-					unsigned long pm_event, void *v)
-{
-	struct exynos_devfreq_data *data = container_of(nb, struct exynos_devfreq_data,
-								pm_notifier);
-	int ret;
-
-	switch (pm_event) {
-	case PM_SUSPEND_PREPARE:
-		if (data->ops.pm_suspend_prepare) {
-			ret = data->ops.pm_suspend_prepare(data->dev, data);
-			if (ret) {
-				dev_err(data->dev, "failed pm_suspend_prepare\n");
-				goto err;
-			}
-		}
-		break;
-	case PM_POST_SUSPEND:
-		if (data->ops.pm_post_suspend) {
-			ret = data->ops.pm_post_suspend(data->dev, data);
-			if (ret) {
-				dev_err(data->dev, "failed pm_post_suspend\n");
-				goto err;
-			}
-		}
-		break;
-	}
-
-	return NOTIFY_OK;
-
-err:
-	return NOTIFY_BAD;
-}
-
 static int exynos_devfreq_notifier(struct notifier_block *nb,
 					unsigned long val, void *v)
 {
@@ -1485,6 +1439,8 @@ static int exynos_devfreq_probe(struct platform_device *pdev)
 {
 	int ret = 0;
 	struct exynos_devfreq_data *data;
+	struct dev_pm_opp *init_opp;
+	unsigned long init_freq = 0;
 
 	data = kzalloc(sizeof(struct exynos_devfreq_data), GFP_KERNEL);
 	if (data == NULL) {
@@ -1535,6 +1491,14 @@ static int exynos_devfreq_probe(struct platform_device *pdev)
 		}
 	}
 
+	if (data->ops.init) {
+		ret = data->ops.init(data->dev, data);
+		if (ret) {
+			dev_err(data->dev, "failed devfreq init\n");
+			goto err_devfreq_init;
+		}
+	}
+
 	data->devfreq_profile.freq_table = kzalloc(sizeof(int) * data->max_state, GFP_KERNEL);
 	if (data->devfreq_profile.freq_table == NULL) {
 		dev_err(data->dev, "failed to allocate for freq_table\n");
@@ -1581,7 +1545,20 @@ static int exynos_devfreq_probe(struct platform_device *pdev)
 		goto err_old_idx;
 	}
 
-	data->new_volt = regulator_get_voltage(data->vdd);
+	rcu_read_lock();
+	init_freq = (unsigned long)data->old_freq;
+	init_opp = devfreq_recommended_opp(data->dev, &init_freq, 0);
+	if (IS_ERR(init_opp)) {
+		rcu_read_unlock();
+		dev_err(data->dev, "not found valid OPP table for sync\n");
+		ret = PTR_ERR(init_opp);
+		goto err_get_opp;
+	}
+	data->new_volt = dev_pm_opp_get_voltage(init_opp);
+	rcu_read_unlock();
+
+	dev_info(data->dev, "Initial Frequency: %ld, Initial Voltage: %d\n", init_freq, data->new_volt);
+
 	ret = exynos_devfreq_set_voltage(data->dev, &data->new_volt, data);
 	if (ret) {
 		dev_err(data->dev, "failed set voltage in probe (%ukhz:%uuV)\n",
@@ -1611,36 +1588,26 @@ static int exynos_devfreq_probe(struct platform_device *pdev)
 								data->max_freq);
 	pm_qos_add_request(&data->default_pm_qos, (int)data->pm_qos_class, data->default_qos);
 	pm_qos_add_request(&data->boot_pm_qos, (int)data->pm_qos_class, data->default_qos);
-	pm_qos_update_request_timeout(&data->boot_pm_qos, data->devfreq_profile.initial_freq,
-					data->boot_qos_timeout * USEC_PER_SEC);
 
-	if (data->ops.init) {
-		ret = data->ops.init(data->dev, data);
-		if (ret) {
-			dev_err(data->dev, "failed devfreq init\n");
-			goto err_devfreq_init;
-		}
-	}
-
-	/* if polling_ms is 0, update_devfreq function is called by ppmu */
-	if (data->devfreq_profile.polling_ms == 0) {
-		data->ppmu_nb = kzalloc(sizeof(struct devfreq_notifier_block), GFP_KERNEL);
-		if (data->ppmu_nb == NULL) {
-			dev_err(data->dev, "failed to allocate notifier block\n");
-			ret = -ENOMEM;
-			goto err_ppmu_nb;
-		}
-
-		data->ppmu_nb->df = data->devfreq;
-		data->ppmu_nb->nb.notifier_call = exynos_devfreq_notifier;
-		data->last_monitor_jiffies = get_jiffies_64();
-	}
-
-	/*
-	 * The PPMU data should be register.
-	 * And if polling_ms is 0, ppmu notifier should be register in callback.
-	 */
 	if (data->use_ppmu) {
+		/* if polling_ms is 0, update_devfreq function is called by ppmu */
+		if (data->devfreq_profile.polling_ms == 0) {
+			data->ppmu_nb = kzalloc(sizeof(struct devfreq_notifier_block), GFP_KERNEL);
+			if (data->ppmu_nb == NULL) {
+				dev_err(data->dev, "failed to allocate notifier block\n");
+				ret = -ENOMEM;
+				goto err_ppmu_nb;
+			}
+
+			data->ppmu_nb->df = data->devfreq;
+			data->ppmu_nb->nb.notifier_call = exynos_devfreq_notifier;
+			data->last_monitor_jiffies = get_jiffies_64();
+		}
+
+		/*
+		 * The PPMU data should be register.
+		 * And if polling_ms is 0, ppmu notifier should be register in callback.
+		 */
 		if (data->ops.ppmu_register) {
 			ret = data->ops.ppmu_register(data->dev, data);
 			if (ret) {
@@ -1672,13 +1639,6 @@ static int exynos_devfreq_probe(struct platform_device *pdev)
 		goto err_reboot_noti;
 	}
 
-	data->pm_notifier.notifier_call = exynos_devfreq_pm_notifier;
-	ret = register_pm_notifier(&data->pm_notifier);
-	if (ret) {
-		dev_err(data->dev, "failed register pm notifier\n");
-		goto err_pm_noti;
-	}
-
 #ifdef CONFIG_ARM_EXYNOS_DEVFREQ_DEBUG
 	ret = sysfs_create_group(&data->devfreq->dev.kobj,
 				&exynos_devfreq_attr_group);
@@ -1688,22 +1648,13 @@ static int exynos_devfreq_probe(struct platform_device *pdev)
 
 	data->devfreq_disabled = false;
 
-	dev_info(data->dev, "devfreq is initialized!!\n");
+	pm_qos_update_request_timeout(&data->boot_pm_qos, data->devfreq_profile.initial_freq,
+					data->boot_qos_timeout * USEC_PER_SEC);
 
-#if defined(CONFIG_KFAULT_AUTO_SUMMARY)
-	if(auto_comm_devfreq_info) {
-		int offset = offsetof(struct exynos_devfreq_data, new_freq);
-		if(data->devfreq_type == DEVFREQ_INT)
-			auto_comm_devfreq_info[FREQ_INFO_INT].last_freq_info = virt_to_phys(data) + offset;
-		else if(data->devfreq_type == DEVFREQ_MIF)
-			auto_comm_devfreq_info[FREQ_INFO_MIF].last_freq_info = virt_to_phys(data) + offset;
-	}
-#endif
+	dev_info(data->dev, "devfreq is initialized!!\n");
 
 	return 0;
 
-err_pm_noti:
-	unregister_reboot_notifier(&data->reboot_notifier);
 err_reboot_noti:
 err_tmu_noti:
 	devfreq_unregister_opp_notifier(data->dev, data->devfreq);
@@ -1727,6 +1678,7 @@ err_devfreq_init:
 	devfreq_remove_device(data->devfreq);
 err_devfreq:
 err_set_voltage:
+err_get_opp:
 err_old_idx:
 	if (data->use_regulator_dummy) {
 		if (data->vdd_dummy)
@@ -1758,20 +1710,10 @@ static int exynos_devfreq_remove(struct platform_device *pdev)
 {
 	struct exynos_devfreq_data *data = platform_get_drvdata(pdev);
 
-#if defined(CONFIG_KFAULT_AUTO_SUMMARY)
-	if(auto_comm_devfreq_info) {
-		if(data->devfreq_type == DEVFREQ_INT)
-			auto_comm_devfreq_info[FREQ_INFO_INT].last_freq_info = 0;
-		else if(data->devfreq_type == DEVFREQ_MIF)
-			auto_comm_devfreq_info[FREQ_INFO_MIF].last_freq_info = 0;
-	}
-#endif
-
 #ifdef CONFIG_ARM_EXYNOS_DEVFREQ_DEBUG
 	sysfs_remove_group(&data->devfreq->dev.kobj,
 				&exynos_devfreq_attr_group);
 #endif
-	unregister_pm_notifier(&data->pm_notifier);
 	unregister_reboot_notifier(&data->reboot_notifier);
 	devfreq_unregister_opp_notifier(data->dev, data->devfreq);
 
@@ -1833,6 +1775,7 @@ static const struct dev_pm_ops exynos_devfreq_pm_ops = {
 };
 
 static struct platform_driver exynos_devfreq_driver = {
+	.probe		= exynos_devfreq_probe,
 	.remove		= exynos_devfreq_remove,
 	.id_table	= exynos_devfreq_driver_ids,
 	.driver = {
@@ -1843,7 +1786,7 @@ static struct platform_driver exynos_devfreq_driver = {
 	},
 };
 
-module_platform_driver_probe(exynos_devfreq_driver, exynos_devfreq_probe);
+module_platform_driver(exynos_devfreq_driver);
 
 MODULE_AUTHOR("Taekki Kim <taekki.kim@samsung.com>");
 MODULE_DESCRIPTION("Samsung EXYNOS Soc series devfreq common driver");

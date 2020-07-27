@@ -273,7 +273,7 @@ static int usbhid_restart_ctrl_queue(struct usbhid_device *usbhid)
 static void hid_irq_in(struct urb *urb)
 {
 	struct hid_device	*hid = urb->context;
-	struct usbhid_device 	*usbhid = hid->driver_data;
+	struct usbhid_device	*usbhid = hid->driver_data;
 	int			status;
 
 	switch (urb->status) {
@@ -282,10 +282,10 @@ static void hid_irq_in(struct urb *urb)
 		usbhid->retry_delay = 0;
 		if ((hid->quirks & HID_QUIRK_ALWAYS_POLL) && !hid->open)
 			break;
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
 		status = hid_input_report(urb->context, HID_INPUT_REPORT,
 				 urb->transfer_buffer,
 				 urb->actual_length, 1);
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
 		if (status == 0) {
 			if (usbhid->in_err_isr) {
 				usbhid->in_err_isr = 0;
@@ -300,6 +300,10 @@ static void hid_irq_in(struct urb *urb)
 				__func__, status, usbhid->in_err_isr
 					,urb->actual_length);
 		}
+#else
+		hid_input_report(urb->context, HID_INPUT_REPORT,
+				 urb->transfer_buffer,
+				 urb->actual_length, 1);
 #endif
 		/*
 		 * autosuspend refused while keys are pressed
@@ -997,8 +1001,8 @@ static int usbhid_parse(struct hid_device *hid)
 	unsigned int rsize = 0;
 	char *rdesc;
 	int ret, n;
-	int num_descriptors;
-	size_t offset = offsetof(struct hid_descriptor, desc);
+	int num_descriptors;  
+	size_t offset = offsetof(struct hid_descriptor, desc);  
 
 	quirks = usbhid_lookup_quirk(le16_to_cpu(dev->descriptor.idVendor),
 			le16_to_cpu(dev->descriptor.idProduct));
@@ -1021,18 +1025,17 @@ static int usbhid_parse(struct hid_device *hid)
 		return -ENODEV;
 	}
 
-	if (hdesc->bLength < sizeof(struct hid_descriptor)) {
-		dbg_hid("hid descriptor is too short\n");
-		return -EINVAL;
-	}
-
+	if (hdesc->bLength < sizeof(struct hid_descriptor)) {  
+		dbg_hid("hid descriptor is too short\n");  
+		return -EINVAL;  
+	}  
 	hid->version = le16_to_cpu(hdesc->bcdHID);
 	hid->country = hdesc->bCountryCode;
 
-	num_descriptors = min_t(int, hdesc->bNumDescriptors,
-	       (hdesc->bLength - offset) / sizeof(struct hid_class_descriptor));
-
-	for (n = 0; n < num_descriptors; n++)
+	num_descriptors = min_t(int, hdesc->bNumDescriptors,  
+	       (hdesc->bLength - offset) / sizeof(struct hid_class_descriptor));  
+  
+	for (n = 0; n < num_descriptors; n++)  
 		if (hdesc->desc[n].bDescriptorType == HID_DT_REPORT)
 			rsize = le16_to_cpu(hdesc->desc[n].wDescriptorLength);
 

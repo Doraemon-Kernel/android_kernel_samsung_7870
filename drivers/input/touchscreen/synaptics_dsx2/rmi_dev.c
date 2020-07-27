@@ -18,16 +18,19 @@
  */
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <asm/unaligned.h>
-//#include <mach/cpufreq.h>
 #include <linux/slab.h>
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
 #include <linux/input.h>
+#include <linux/signal.h>
+#include <linux/sched.h>
 #include <linux/gpio.h>
 #include <linux/uaccess.h>
+#include <linux/cdev.h>
+#include <linux/platform_device.h>
 #include "synaptics_i2c_rmi.h"
+#include <linux/device.h>
 
 #define CHAR_DEVICE_NAME "rmi"
 #define DEVICE_CLASS_NAME "rmidev"
@@ -62,8 +65,8 @@ static struct bin_attribute attr_data = {
 	.write = rmidev_sysfs_data_store,
 };
 
-RMI_KOBJ_ATTR(open, S_IWUSR | S_IWGRP, synaptics_rmi4_show_error, rmidev_sysfs_open_store);
-RMI_KOBJ_ATTR(release, S_IWUSR | S_IWGRP, synaptics_rmi4_show_error, rmidev_sysfs_release_store);
+RMI_KOBJ_ATTR(open, S_IWUSR, synaptics_rmi4_show_error, rmidev_sysfs_open_store);
+RMI_KOBJ_ATTR(release, S_IWUSR, synaptics_rmi4_show_error, rmidev_sysfs_release_store);
 RMI_KOBJ_ATTR(attn_state, S_IRUGO, rmidev_sysfs_attn_state_show, synaptics_rmi4_store_error);
 
 static struct attribute *attrs[] = {
@@ -212,7 +215,7 @@ static ssize_t rmidev_sysfs_open_store(struct kobject *kobj,
 	if (input != 1)
 		return -EINVAL;
 
-	rmi4_data->irq_enable(rmi4_data, false);
+	rmi4_data->irq_enable(rmi4_data, false, false);
 	rmidev_sysfs_irq_enable(rmi4_data, true);
 
 	dev_dbg(&rmi4_data->i2c_client->dev,
@@ -235,7 +238,7 @@ static ssize_t rmidev_sysfs_release_store(struct kobject *kobj,
 		return -EINVAL;
 
 	rmidev_sysfs_irq_enable(rmi4_data, false);
-	rmi4_data->irq_enable(rmi4_data, true);
+	rmi4_data->irq_enable(rmi4_data, true, false);
 
 	dev_dbg(&rmi4_data->i2c_client->dev,
 			"%s: Attention interrupt enabled\n",
@@ -329,7 +332,7 @@ static ssize_t rmidev_read(struct file *filp, char __user *buf,
 		size_t count, loff_t *f_pos)
 {
 	ssize_t retval;
-	unsigned char tmpbuf[count + 1];
+	unsigned char *tmpbuf;
 	struct rmidev_data *dev_data = filp->private_data;
 	struct rmidev_handle *rmidev = NULL;
 	struct synaptics_rmi4_data *rmi4_data = NULL;
@@ -347,6 +350,10 @@ static ssize_t rmidev_read(struct file *filp, char __user *buf,
 
 	if (count > (REG_ADDR_LIMIT - *f_pos))
 		count = REG_ADDR_LIMIT - *f_pos;
+
+	tmpbuf = kzalloc(count + 1, GFP_KERNEL);
+	if (!tmpbuf)
+		return -ENOMEM;
 
 	mutex_lock(&(dev_data->file_mutex));
 
@@ -365,6 +372,7 @@ static ssize_t rmidev_read(struct file *filp, char __user *buf,
 clean_up:
 	mutex_unlock(&(dev_data->file_mutex));
 
+	kfree(tmpbuf);
 	return retval;
 }
 
@@ -380,7 +388,7 @@ static ssize_t rmidev_write(struct file *filp, const char __user *buf,
 		size_t count, loff_t *f_pos)
 {
 	ssize_t retval;
-	unsigned char tmpbuf[count + 1];
+	unsigned char *tmpbuf;
 	struct rmidev_data *dev_data = filp->private_data;
 	struct rmidev_handle *rmidev = NULL;
 	struct synaptics_rmi4_data *rmi4_data = NULL;
@@ -399,8 +407,14 @@ static ssize_t rmidev_write(struct file *filp, const char __user *buf,
 	if (count > (REG_ADDR_LIMIT - *f_pos))
 		count = REG_ADDR_LIMIT - *f_pos;
 
-	if (copy_from_user(tmpbuf, buf, count))
-		return -EFAULT;
+	tmpbuf = kzalloc(count + 1, GFP_KERNEL);
+	if (!tmpbuf)
+		return -ENOMEM;
+
+	if (copy_from_user(tmpbuf, buf, count)) {
+		kfree(tmpbuf);
+ 		return -EFAULT;
+	}
 
 	mutex_lock(&(dev_data->file_mutex));
 
@@ -413,6 +427,7 @@ static ssize_t rmidev_write(struct file *filp, const char __user *buf,
 
 	mutex_unlock(&(dev_data->file_mutex));
 
+	kfree(tmpbuf);
 	return retval;
 }
 
@@ -438,7 +453,7 @@ static int rmidev_open(struct inode *inp, struct file *filp)
 
 	mutex_lock(&(dev_data->file_mutex));
 
-	rmi4_data->irq_enable(rmi4_data, false);
+	rmi4_data->irq_enable(rmi4_data, false, false);
 	dev_dbg(&rmi4_data->i2c_client->dev,
 			"%s: Attention interrupt disabled\n",
 			__func__);
@@ -477,7 +492,7 @@ static int rmidev_release(struct inode *inp, struct file *filp)
 	if (dev_data->ref_count < 0)
 		dev_data->ref_count = 0;
 
-	rmi4_data->irq_enable(rmi4_data, true);
+	rmi4_data->irq_enable(rmi4_data, true, false);
 	dev_dbg(&rmi4_data->i2c_client->dev,
 			"%s: Attention interrupt enabled\n",
 			__func__);
@@ -521,7 +536,7 @@ static void rmidev_device_cleanup(struct rmidev_data *dev_data)
 	return;
 }
 
-static char *rmi_char_devnode(struct device *dev, umode_t *mode)
+/*static char *rmi_char_devnode(struct device *dev, mode_t *mode)
 {
 	if (!mode)
 		return NULL;
@@ -529,7 +544,7 @@ static char *rmi_char_devnode(struct device *dev, umode_t *mode)
 	*mode = (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
 
 	return kasprintf(GFP_KERNEL, "rmi/%s", dev_name(dev));
-}
+}�*/
 
 static int rmidev_create_device_class(struct synaptics_rmi4_data *rmi4_data)
 {
@@ -543,7 +558,7 @@ static int rmidev_create_device_class(struct synaptics_rmi4_data *rmi4_data)
 			return -ENODEV;
 		}
 
-		rmidev_device_class->devnode = rmi_char_devnode;
+//		rmidev_device_class->devnode = rmi_char_devnode;
 	}
 
 	return 0;
@@ -556,6 +571,13 @@ static int rmidev_init_device(struct synaptics_rmi4_data *rmi4_data)
 	struct device *device_ptr;
 	struct rmidev_handle *rmidev = NULL;
 
+	if (rmidev) {
+		dev_dbg(&rmi4_data->i2c_client->dev,
+				"%s: Handle already exists\n",
+				__func__);
+		return 0;
+	}
+
 	rmidev = kzalloc(sizeof(struct rmidev_handle), GFP_KERNEL);
 	if (!rmidev) {
 		dev_err(&rmi4_data->i2c_client->dev,
@@ -567,6 +589,14 @@ static int rmidev_init_device(struct synaptics_rmi4_data *rmi4_data)
 
 	rmi4_data->rmidev = rmidev;
 	rmidev->rmi4_data = rmi4_data;
+
+	memset(&rmi4_data->rmidev->interrupt_signal, 0, sizeof(rmi4_data->rmidev->interrupt_signal));
+	rmi4_data->rmidev->interrupt_signal.si_signo = SIGIO;
+	rmi4_data->rmidev->interrupt_signal.si_code = SI_USER;
+
+	memset(&rmi4_data->rmidev->terminate_signal, 0, sizeof(rmi4_data->rmidev->terminate_signal));
+	rmi4_data->rmidev->terminate_signal.si_signo = SIGTERM;
+	rmi4_data->rmidev->terminate_signal.si_code = SI_USER;
 
 	retval = rmidev_create_device_class(rmi4_data);
 	if (retval < 0) {
@@ -720,6 +750,19 @@ static void rmidev_remove_device(struct synaptics_rmi4_data *rmi4_data)
 exit:
 	return;
 }
+static void rmidev_attn(struct synaptics_rmi4_data *rmi4_data,
+		unsigned char intr_mask)
+{
+	struct rmidev_handle *rmidev = rmi4_data->rmidev;
+
+	if (!rmidev)
+		return;
+
+	if (rmidev->pid && (rmidev->intr_mask & intr_mask))
+		send_sig_info(SIGIO, &rmidev->interrupt_signal, rmidev->task);
+
+	return;
+}
 
 int rmidev_module_register(struct synaptics_rmi4_data *rmi4_data)
 {
@@ -730,7 +773,7 @@ int rmidev_module_register(struct synaptics_rmi4_data *rmi4_data)
 			rmidev_init_device,
 			NULL,
 			rmidev_remove_device,
-			NULL);
+			rmidev_attn);
 
 	return retval;
 }

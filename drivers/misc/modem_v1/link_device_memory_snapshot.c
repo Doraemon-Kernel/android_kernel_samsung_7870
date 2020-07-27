@@ -240,3 +240,4 @@ struct mst_buff *mem_take_snapshot(struct mem_link_device *mld,
 }
 
 #endif
+

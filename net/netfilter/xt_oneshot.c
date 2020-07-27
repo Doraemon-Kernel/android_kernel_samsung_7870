@@ -408,7 +408,7 @@ module_exit(oneshot_mt_fini);
 
 MODULE_AUTHOR("jongeon.park <jongeon.park@samsung.com>");
 MODULE_AUTHOR("dongha7.kang <dongha7.kang@samsung.com>");
-MODULE_AUTHOR("ssyy.lee <ssyy.lee@samsung.com>");
+MODULE_AUTHOR("ssyy.lee	 	<ssyy.lee@samsung.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("ontshot: uid onetime match solution");
 

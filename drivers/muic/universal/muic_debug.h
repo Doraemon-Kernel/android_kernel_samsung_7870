@@ -1,9 +1,7 @@
 #ifndef _MUIC_DEBUG_
 #define _MUIC_DEBUG_
 
-#ifndef CONFIG_MUIC_A8 /* disable DEBUG log */
 #define DEBUG_MUIC
-#endif
 #define MUIC_READ 0
 #define MUIC_WRITE 1
 

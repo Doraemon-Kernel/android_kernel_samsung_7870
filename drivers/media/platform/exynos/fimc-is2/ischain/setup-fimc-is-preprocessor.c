@@ -156,6 +156,42 @@ int exynos7870_fimc_is_preproc_mclk_off(struct device *dev,
 {
 	return 0;
 }
+
+#elif defined(CONFIG_SOC_EXYNOS7880)
+int exynos7880_fimc_is_preproc_iclk_cfg(struct device *dev,
+	u32 scenario,
+	u32 channel)
+{
+	return 0;
+}
+
+int exynos7880_fimc_is_preproc_iclk_on(struct device *dev,
+	u32 scenario,
+	u32 channel)
+{
+	return 0;
+}
+
+int exynos7880_fimc_is_preproc_iclk_off(struct device *dev,
+	u32 scenario,
+	u32 channel)
+{
+	return 0;
+}
+
+int exynos7880_fimc_is_preproc_mclk_on(struct device *dev,
+	u32 scenario,
+	u32 channel)
+{
+	return 0;
+}
+
+int exynos7880_fimc_is_preproc_mclk_off(struct device *dev,
+	u32 scenario,
+	u32 channel)
+{
+	return 0;
+}
 #endif
 
 /* Wrapper functions */
@@ -167,6 +203,8 @@ int exynos_fimc_is_preproc_iclk_cfg(struct device *dev,
 	exynos8890_fimc_is_preproc_iclk_cfg(dev, scenario, channel);
 #elif defined(CONFIG_SOC_EXYNOS7870)
 	exynos7870_fimc_is_preproc_iclk_cfg(dev, scenario, channel);
+#elif defined(CONFIG_SOC_EXYNOS7880)
+	exynos7880_fimc_is_preproc_iclk_cfg(dev, scenario, channel);
 #else
 #error exynos_fimc_is_preproc_iclk_cfg is not implemented
 #endif
@@ -181,6 +219,8 @@ int exynos_fimc_is_preproc_iclk_on(struct device *dev,
 	exynos8890_fimc_is_preproc_iclk_on(dev, scenario, channel);
 #elif defined(CONFIG_SOC_EXYNOS7870)
 	exynos7870_fimc_is_preproc_iclk_on(dev, scenario, channel);
+#elif defined(CONFIG_SOC_EXYNOS7880)
+	exynos7880_fimc_is_preproc_iclk_on(dev, scenario, channel);
 #else
 #error exynos_fimc_is_preproc_iclk_on is not implemented
 #endif
@@ -195,6 +235,8 @@ int exynos_fimc_is_preproc_iclk_off(struct device *dev,
 	exynos8890_fimc_is_preproc_iclk_off(dev, scenario, channel);
 #elif defined(CONFIG_SOC_EXYNOS7870)
 	exynos7870_fimc_is_preproc_iclk_off(dev, scenario, channel);
+#elif defined(CONFIG_SOC_EXYNOS7880)
+	exynos7880_fimc_is_preproc_iclk_off(dev, scenario, channel);
 #else
 #error exynos_fimc_is_preproc_iclk_off is not implemented
 #endif
@@ -209,6 +251,8 @@ int exynos_fimc_is_preproc_mclk_on(struct device *dev,
 	exynos8890_fimc_is_preproc_mclk_on(dev, scenario, channel);
 #elif defined(CONFIG_SOC_EXYNOS7870)
 	exynos7870_fimc_is_preproc_mclk_on(dev, scenario, channel);
+#elif defined(CONFIG_SOC_EXYNOS7880)
+	exynos7880_fimc_is_preproc_mclk_on(dev, scenario, channel);
 #else
 #error exynos_fimc_is_preproc_mclk_on is not implemented
 #endif
@@ -223,6 +267,8 @@ int exynos_fimc_is_preproc_mclk_off(struct device *dev,
 	exynos8890_fimc_is_preproc_mclk_off(dev, scenario, channel);
 #elif defined(CONFIG_SOC_EXYNOS7870)
 	exynos7870_fimc_is_preproc_mclk_off(dev, scenario, channel);
+#elif defined(CONFIG_SOC_EXYNOS7880)
+	exynos7880_fimc_is_preproc_mclk_off(dev, scenario, channel);
 #else
 #error exynos_fimc_is_preproc_mclk_off is not implemented
 #endif

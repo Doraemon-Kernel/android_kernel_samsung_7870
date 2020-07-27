@@ -39,8 +39,6 @@
 #define MODULE_MASK			0x000000FF
 
 #define FIMC_IS_SETFILE_MASK		0x0000FFFF
-#define FIMC_IS_SCENARIO_MASK		0xFFFF0000
-#define FIMC_IS_SCENARIO_SHIFT		16
 #define FIMC_IS_ISP_CRANGE_MASK		0x0F000000
 #define FIMC_IS_ISP_CRANGE_SHIFT	24
 #define FIMC_IS_SCC_CRANGE_MASK		0x00F00000
@@ -69,59 +67,6 @@ enum fimc_is_camera_device {
 	CAMERA_SINGLE_FRONT,
 };
 
-struct fimc_is_ishcain_mem {
-	/* buffer base */
-	dma_addr_t		base;
-	/* total length */
-	size_t			size;
-	/* buffer base */
-	dma_addr_t		vaddr_base;
-	/* current addr */
-	dma_addr_t		vaddr_curr;
-	void			*fw_cookie;
-
-	/* fw memory base */
-	u32			dvaddr;
-	ulong			kvaddr;
-	/* debug part of fw memory */
-	u32			dvaddr_debug;
-	ulong			kvaddr_debug;
-	/* is region part of fw memory */
-	u32			offset_region;
-	u32			dvaddr_region;
-	ulong			kvaddr_region;
-	/* shared part of is region */
-	u32			offset_shared;
-	u32			dvaddr_shared;
-	ulong			kvaddr_shared;
-	/* internal memory for ODC */
-	u32			dvaddr_odc;
-	ulong			kvaddr_odc;
-	/* internal memory for DIS */
-	u32			dvaddr_dis;
-	u32			kvaddr_dis;
-	/* internal memory for 3DNR */
-	u32			dvaddr_3dnr;
-	ulong			kvaddr_3dnr;
-#ifdef ENABLE_FD_SW
-	/* f/w shared part */
-	u32			dvaddr_fshared;	/* FD ymap using */
-	ulong			kvaddr_fshared;	/* 1.5KB: 0 ~ 0x600 */
-	/* internal memory for FD */
-	u32			*dvaddr_fd;
-	ulong			*kvaddr_fd;
-#endif
-	/* internal memory for VRA */
-	u32			dvaddr_vra;
-	ulong			kvaddr_vra;
-
-	struct is_region	*is_region;
-};
-
-struct fast_control_mgr {
-	u32 fast_capture_count;
-};
-
 struct fimc_is_device_ischain {
 	struct platform_device			*pdev;
 	struct exynos_platform_fimc_is		*pdata;
@@ -137,10 +82,12 @@ struct fimc_is_device_ischain {
 	u32					instance;
 	u32					instance_sensor;
 	u32					module;
-	struct fimc_is_ishcain_mem		imemory;
+	struct fimc_is_minfo			*minfo;
 	struct fimc_is_path_info		path;
 
 	struct is_region			*is_region;
+	ulong					kvaddr_shared;
+	dma_addr_t				dvaddr_shared;
 
 	unsigned long				state;
 	atomic_t				group_open_cnt;
@@ -192,9 +139,6 @@ struct fimc_is_device_ischain {
 	u32					private_data;
 	struct fimc_is_device_sensor		*sensor;
 	struct pm_qos_request			user_qos;
-
-	/* Async metadata control to reduce frame delay */
-	struct fast_control_mgr			fastctlmgr;
 };
 
 /*global function*/

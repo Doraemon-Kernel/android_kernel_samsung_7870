@@ -17,7 +17,7 @@ int fimc_is_sensor_data_read16(struct i2c_client *client,
 {
 	int ret = 0;
 	struct i2c_msg msg[1];
-	u8 wbuf[2];
+	u8 wbuf[2] = {0, 0};
 
 	if (!client->adapter) {
 		pr_err("Could not find adapter!\n");

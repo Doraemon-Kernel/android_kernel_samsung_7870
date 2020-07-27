@@ -33,6 +33,9 @@
 #include <linux/regulator/consumer.h>
 #include <linux/workqueue.h>
 #include <linux/of_gpio.h>
+#if defined(CONFIG_TYPEC)
+#include <linux/usb/typec.h>
+#endif
 
 #include <linux/io.h>
 #include <linux/pinctrl/consumer.h>
@@ -53,6 +56,8 @@ static const char *dwc3_exynos8890_clk_names[] = {"aclk", "sclk",
 static const char *dwc2_exynos8890_clk_names[] = {"aclk", "sclk",
 				"phyclock", "phy_ref", NULL};
 
+static const char *dwc2_exynos7870_clk_names[] = {"usbdrd20", NULL};
+
 /**
  * Structures for Samsung Exynos DWC3 glue layer
  */
@@ -67,6 +72,16 @@ struct dwc3_exynos_drvdata {
 	int cpu_type;
 	int ip_type;
 };
+
+#if defined(CONFIG_TYPEC)
+struct intf_typec {
+	/* struct mutex lock; */ /* device lock */
+	struct device *dev;
+	struct typec_port *port;
+	struct typec_capability cap;
+	struct typec_partner *partner;
+};
+#endif
 
 struct dwc3_exynos {
 	struct platform_device	*usb2_phy;
@@ -112,6 +127,11 @@ static struct dwc3_exynos_drvdata dwc2_exynos8890 = {
 	.ip_type	= TYPE_USB2HOST,
 };
 
+
+static struct dwc3_exynos_drvdata dwc2_exynos7870 = {
+	.cpu_type	= TYPE_EXYNOS7870,
+};
+
 static const struct of_device_id exynos_dwc3_match[] = {
 	{
 		.compatible = "samsung,exynos5250-dwusb3",
@@ -125,6 +145,9 @@ static const struct of_device_id exynos_dwc3_match[] = {
 	}, {
 		.compatible = "samsung,exynos8890-dwusb2",
 		.data = &dwc2_exynos8890,
+	}, {
+		.compatible = "samsung,exynos7870-dwusb2",
+		.data = &dwc2_exynos7870,
 	},
 	{},
 };
@@ -259,7 +282,7 @@ int dwc3_exynos_vbus_event(struct device *dev, bool vbus_active)
 	struct dwc3_exynos_rsw	*rsw;
 	struct otg_fsm		*fsm;
 
-	dev_info(dev, "EVENT: VBUS: %sactive\n", vbus_active ? "" : "in");
+	dev_dbg(dev, "EVENT: VBUS: %sactive\n", vbus_active ? "" : "in");
 
 	exynos = dev_get_drvdata(dev);
 	if (!exynos)
@@ -623,6 +646,10 @@ static int dwc3_exynos_clk_get(struct dwc3_exynos *exynos)
 		clk_ids = dwc3_exynos5_clk_names;
 		clk_count = ARRAY_SIZE(dwc3_exynos5_clk_names);
 		break;
+	case TYPE_EXYNOS7870:
+               clk_ids = dwc2_exynos7870_clk_names;
+               clk_count = ARRAY_SIZE(dwc2_exynos7870_clk_names);
+               break;
 	default:
 		dev_err(exynos->dev, "couldn't get clock : unknown cpu type\n");
 		return -EINVAL;
@@ -654,6 +681,9 @@ static int dwc3_exynos_probe(struct platform_device *pdev)
 	struct device		*dev = &pdev->dev;
 	struct device_node	*node = dev->of_node;
 	int			ret;
+#if defined(CONFIG_TYPEC)
+	struct intf_typec	*typec;
+#endif
 
 	exynos = devm_kzalloc(dev, sizeof(*exynos), GFP_KERNEL);
 	if (!exynos)
@@ -664,7 +694,7 @@ static int dwc3_exynos_probe(struct platform_device *pdev)
 	 * Since shared usb code relies on it, set it here for now.
 	 * Once we move to full device tree support this will vanish off.
 	 */
-	ret = dma_coerce_mask_and_coherent(dev, DMA_BIT_MASK(36));
+	ret = dma_coerce_mask_and_coherent(dev, DMA_BIT_MASK(32));
 	if (ret)
 		return ret;
 
@@ -681,10 +711,8 @@ static int dwc3_exynos_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	if (exynos->drv_data->cpu_type == TYPE_EXYNOS8890) {
-		exynos->idle_ip_index = exynos_get_idle_ip_index(dev_name(dev));
-		exynos_update_ip_idle_status(exynos->idle_ip_index, 0);
-	}
+	exynos->idle_ip_index = exynos_get_idle_ip_index(dev_name(dev));
+	exynos_update_ip_idle_status(exynos->idle_ip_index, 0);
 
 #ifdef CONFIG_PM_DEVFREQ
 	if (of_property_read_u32(node, "usb-pm-qos-int", &exynos->int_min_lock))
@@ -749,6 +777,27 @@ static int dwc3_exynos_probe(struct platform_device *pdev)
 		goto err5;
 	}
 
+#if defined(CONFIG_TYPEC)
+		typec = devm_kzalloc(dev, sizeof(*typec), GFP_KERNEL);
+		if (!typec)
+			return -ENOMEM;
+
+		/* mutex_init(&md05->lock); */
+		typec->dev = dev;
+
+		typec->cap.type = TYPEC_PORT_DRP;
+		typec->cap.revision = USB_TYPEC_REV_1_1;
+		typec->cap.prefer_role = TYPEC_NO_PREFERRED_ROLE;
+
+		typec->port = typec_register_port(dev, &typec->cap);
+		if (!typec->port)
+			return -ENODEV;
+
+		typec_set_data_role(typec->port, TYPEC_DEVICE);
+		typec_set_pwr_role(typec->port, TYPEC_SINK);
+		typec_set_pwr_opmode(typec->port, TYPEC_PWR_MODE_USB);
+		exynos->typec = typec;
+#endif
 	return 0;
 
 err5:
@@ -788,6 +837,11 @@ static int dwc3_exynos_remove(struct platform_device *pdev)
 	}
 	dwc3_exynos_clk_unprepare(exynos);
 
+#if defined(CONFIG_TYPEC)
+	typec_unregister_partner(exynos->typec->partner);
+	typec_unregister_port(exynos->typec->port);
+#endif
+
 	return 0;
 }
 
@@ -795,18 +849,15 @@ static int dwc3_exynos_remove(struct platform_device *pdev)
 static int dwc3_exynos_runtime_suspend(struct device *dev)
 {
 	struct dwc3_exynos *exynos = dev_get_drvdata(dev);
-
 #ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		dev_info(dev, "%s\n", __func__);
+	dev_info(dev, "%s\n", __func__);
 #else
-		dev_dbg(dev, "%s\n", __func__);
+	dev_dbg(dev, "%s\n", __func__);
 #endif
-
 	dwc3_exynos_clk_disable(exynos);
 
 	/* inform what USB state is idle to IDLE_IP */
-	if (exynos->drv_data->cpu_type == TYPE_EXYNOS8890)
-		exynos_update_ip_idle_status(exynos->idle_ip_index, 1);
+	exynos_update_ip_idle_status(exynos->idle_ip_index, 1);
 
 #ifdef CONFIG_PM_DEVFREQ
 	if (exynos->int_min_lock)
@@ -819,11 +870,10 @@ static int dwc3_exynos_runtime_resume(struct device *dev)
 {
 	struct dwc3_exynos *exynos = dev_get_drvdata(dev);
 	int ret = 0;
-
 #ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		dev_info(dev, "%s\n", __func__);
+	dev_info(dev, "%s\n", __func__);
 #else
-		dev_dbg(dev, "%s\n", __func__);
+	dev_dbg(dev, "%s\n", __func__);
 #endif
 
 #ifdef CONFIG_PM_DEVFREQ
@@ -832,8 +882,7 @@ static int dwc3_exynos_runtime_resume(struct device *dev)
 					exynos->int_min_lock);
 #endif
 	/* inform what USB state is not idle to IDLE_IP */
-	if (exynos->drv_data->cpu_type == TYPE_EXYNOS8890)
-		exynos_update_ip_idle_status(exynos->idle_ip_index, 0);
+	exynos_update_ip_idle_status(exynos->idle_ip_index, 0);
 
 	ret = dwc3_exynos_clk_enable(exynos);
 	if (ret) {
@@ -861,11 +910,6 @@ static int dwc3_exynos_suspend(struct device *dev)
 		regulator_disable(exynos->vdd33);
 	if (exynos->vdd10)
 		regulator_disable(exynos->vdd10);
-
-#ifdef CONFIG_PM_DEVFREQ
-	if (exynos->int_min_lock)
-		pm_qos_update_request(&exynos_usb_int_qos, 0);
-#endif
 
 	return 0;
 }

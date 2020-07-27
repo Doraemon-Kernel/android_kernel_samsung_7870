@@ -22,6 +22,10 @@
  *
  */
 
+#if defined(CONFIG_IFPMIC_SUPPORT)
+#include <linux/ifpmic/muic/muic.h>
+#endif
+
 #ifndef __MUIC_H__
 #define __MUIC_H__
 
@@ -46,8 +50,6 @@ enum {
 	MUIC_DOCK_SMARTDOCK	= 102,
 	MUIC_DOCK_HMT		= 105,
 	MUIC_DOCK_ABNORMAL	= 106,
-	MUIC_DOCK_GAMEPAD	= 107,
-	MUIC_DOCK_GAMEPAD_WITH_EARJACK	= 108,
 };
 
 /* MUIC Path */
@@ -91,11 +93,11 @@ typedef enum {
 	ADC_SMARTDOCK		= 0x10, /* 0x10000 40.2K ohm */
 	ADC_RDU_TA		= 0x10, /* 0x10000 40.2K ohm */
 	ADC_HMT			= 0x11, /* 0x10001 49.9K ohm */
+	ADC_POGO		= 0x11, /* 0x10001 49.9K ohm */
 	ADC_AUDIODOCK		= 0x12, /* 0x10010 64.9K ohm */
 	ADC_USB_LANHUB		= 0x13, /* 0x10011 80.07K ohm */
 	ADC_CHARGING_CABLE	= 0x14,	/* 0x10100 102K ohm */
 	ADC_UNIVERSAL_MMDOCK	= 0x15, /* 0x10101 121K ohm */
-	ADC_GAMEPAD		= 0x15, /* 0x10101 121K ohm */
 	ADC_UART_CABLE		= 0x16, /* 0x10110 150K ohm */
 	ADC_CEA936ATYPE1_CHG	= 0x17,	/* 0x10111 200K ohm */
 	ADC_JIG_USB_OFF		= 0x18, /* 0x11000 255K ohm */
@@ -158,13 +160,10 @@ typedef enum {
 	ATTACHED_DEV_AFC_CHARGER_5V_MUIC,
 	ATTACHED_DEV_AFC_CHARGER_5V_DUPLI_MUIC,
 	ATTACHED_DEV_AFC_CHARGER_9V_MUIC,
-	ATTACHED_DEV_AFC_CHARGER_9V_DUPLI_MUIC,
-	ATTACHED_DEV_AFC_CHARGER_12V_MUIC,
-	ATTACHED_DEV_AFC_CHARGER_12V_DUPLI_MUIC,
-
 	ATTACHED_DEV_AFC_CHARGER_ERR_V_MUIC,
 	ATTACHED_DEV_AFC_CHARGER_ERR_V_DUPLI_MUIC,
 	ATTACHED_DEV_QC_CHARGER_PREPARE_MUIC,
+
 	ATTACHED_DEV_QC_CHARGER_5V_MUIC,
 	ATTACHED_DEV_QC_CHARGER_ERR_V_MUIC,
 	ATTACHED_DEV_QC_CHARGER_9V_MUIC,
@@ -172,23 +171,34 @@ typedef enum {
 	ATTACHED_DEV_HV_ID_ERR_UNSUPPORTED_MUIC,
 	ATTACHED_DEV_HV_ID_ERR_SUPPORTED_MUIC,
 	ATTACHED_DEV_HMT_MUIC,
-
 	ATTACHED_DEV_VZW_ACC_MUIC,
 	ATTACHED_DEV_VZW_INCOMPATIBLE_MUIC,
 	ATTACHED_DEV_USB_LANHUB_MUIC,
-	ATTACHED_DEV_TYPE1_CHG_MUIC,
+
 	ATTACHED_DEV_TYPE2_CHG_MUIC,
+	ATTACHED_DEV_TYPE3_MUIC,
+	ATTACHED_DEV_TYPE3_MUIC_TA,
+	ATTACHED_DEV_TYPE3_ADAPTER_MUIC,
+	ATTACHED_DEV_TYPE3_CHARGER_MUIC,
+	ATTACHED_DEV_NONE_TYPE3_MUIC,
 	ATTACHED_DEV_UNSUPPORTED_ID_MUIC,
 	ATTACHED_DEV_UNSUPPORTED_ID_VB_MUIC,
-	ATTACHED_DEV_UNDEFINED_RANGE_MUIC,
-	ATTACHED_DEV_RDU_TA_MUIC,
-	ATTACHED_DEV_GAMEPAD_MUIC,
-
 	ATTACHED_DEV_TIMEOUT_OPEN_MUIC,
-	ATTACHED_DEV_POGO_DOCK_MUIC,
-	ATTACHED_DEV_POGO_DOCK_5V_MUIC,
-	ATTACHED_DEV_POGO_DOCK_9V_MUIC,
-	ATTACHED_DEV_HICCUP_MUIC,
+	ATTACHED_DEV_WIRELESS_PAD_MUIC,
+
+	ATTACHED_DEV_POWERPACK_MUIC,
+	ATTACHED_DEV_UNDEFINED_RANGE_MUIC,
+	ATTACHED_DEV_WATER_MUIC,
+	ATTACHED_DEV_CHK_WATER_REQ,
+	ATTACHED_DEV_CHK_WATER_DRY_REQ,
+	ATTACHED_DEV_RDU_TA_MUIC,
+#if defined(CONFIG_SEC_FACTORY)
+	ATTACHED_DEV_CARKIT_MUIC,
+#endif
+	ATTACHED_DEV_POGO_MUIC,
+	ATTACHED_DEV_CHARGING_POGO_VB_MUIC,
+	ATTACHED_DEV_CHECK_OCP,
+	ATTACHED_DEV_FACTORY_UART_MUIC,
 	ATTACHED_DEV_UNKNOWN_MUIC,
 	ATTACHED_DEV_NUM,
 } muic_attached_dev_t;
@@ -220,11 +230,14 @@ struct muic_platform_data {
 
 	bool rustproof_on;
 	bool afc_disable;
+	bool is_new_factory;
 
 #ifdef CONFIG_MUIC_HV_FORCE_LIMIT
 	int hv_sel;
 	int silent_chg_change_state;
 #endif
+
+	bool is_factory_uart;
 
 	/* muic switch dev register function for DockObserver */
 	void (*init_switch_dev_cb) (void);
@@ -232,6 +245,7 @@ struct muic_platform_data {
 
 	/* muic GPIO control function */
 	int (*init_gpio_cb) (int switch_sel);
+	void (*jig_uart_cb)(int jig_state);
 	int (*set_gpio_usb_sel) (int usb_path);
 	int (*set_gpio_uart_sel) (int uart_path);
 	int (*set_safeout) (int safeout_path);
@@ -241,10 +255,11 @@ struct muic_platform_data {
 	void (*set_path_switch_resume) (struct device *dev);
 };
 
-int get_switch_sel(void);
-int get_afc_mode(void);
-void muic_set_hmt_status(int status);
+extern int get_switch_sel(void);
+extern int get_afc_mode(void);
+extern void muic_disable_otg_detect(void);
+extern struct device *switch_device;
 #ifdef CONFIG_SEC_FACTORY
 extern void muic_send_attached_muic_cable_intent(int type);
-#endif /* CONFIG_SEC_FACTORY */
+#endif
 #endif /* __MUIC_H__ */

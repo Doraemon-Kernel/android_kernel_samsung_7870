@@ -212,11 +212,10 @@ static int fimc_is_vra_video_querycap(struct file *file, void *fh,
 	strncpy(cap->driver, core->pdev->name, sizeof(cap->driver) - 1);
 
 	strncpy(cap->card, core->pdev->name, sizeof(cap->card) - 1);
-	cap->bus_info[0] = 0;
-	cap->version = KERNEL_VERSION(1, 0, 0);
-	cap->capabilities = V4L2_CAP_STREAMING
-				| V4L2_CAP_VIDEO_CAPTURE
-				| V4L2_CAP_VIDEO_CAPTURE_MPLANE;
+	cap->capabilities |= V4L2_CAP_STREAMING
+				| V4L2_CAP_VIDEO_OUTPUT
+				| V4L2_CAP_VIDEO_OUTPUT_MPLANE;
+	cap->device_caps |= cap->capabilities;
 
 	return 0;
 }
@@ -291,14 +290,14 @@ static int fimc_is_vra_video_qbuf(struct file *file, void *priv,
 {
 	int ret = 0;
 	struct fimc_is_video_ctx *vctx = file->private_data;
+	struct fimc_is_device_ischain *device;
 	struct fimc_is_queue *queue;
-
-	BUG_ON(!vctx);
 
 #ifdef DBG_STREAMING
 	mdbgv_vra("%s\n", vctx, __func__);
 #endif
 
+	device = GET_DEVICE(vctx);
 	queue = GET_QUEUE(vctx);
 
 	if (!test_bit(FIMC_IS_QUEUE_STREAM_ON, &queue->state)) {

@@ -51,8 +51,6 @@
 #include <linux/battery/charger/max77843_charger.h>
 #elif defined(CONFIG_CHARGER_MAX77888)
 #include <linux/battery/charger/max77888_charger.h>
-#elif defined(CONFIG_CHARGER_MAX77854)
-#include <linux/battery/charger/max77854_charger.h>
 #elif defined(CONFIG_CHARGER_MAX77693)
 #include <linux/battery/charger/max77693_charger.h>
 #elif defined(CONFIG_CHARGER_NCP1851)
@@ -61,7 +59,6 @@
 
 enum {
 	CHIP_ID = 0,
-	DATA,
 };
 
 struct sec_charger_info {
@@ -75,8 +72,8 @@ struct sec_charger_info {
 	bool is_charging;
 
 	/* charging current : + charging, - OTG */
-	unsigned input_current;
 	int charging_current;
+	unsigned charging_current_max;
 
 	/* register programming */
 	int reg_addr;

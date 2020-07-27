@@ -22,18 +22,15 @@ enum fimc_is_csi_state {
 	CSIS_DUMMY,
 	/* WDMA flag */
 	CSIS_DMA_ENABLE,
-	CSIS_START_STREAM,
-	/* runtime buffer done state for error */
-	CSIS_BUF_ERR_VC0,
-	CSIS_BUF_ERR_VC1,
-	CSIS_BUF_ERR_VC2,
-	CSIS_BUF_ERR_VC3,
+	CSIS_START_STREAM
 };
 
 struct fimc_is_device_csi {
 	/* channel information */
 	u32				instance;
 	u32 __iomem			*base_reg;
+	resource_size_t			regs_start;
+	resource_size_t			regs_end;
 	int				irq;
 
 	/* for settle time */
@@ -60,7 +57,6 @@ struct fimc_is_device_csi {
 	struct tasklet_struct		tasklet_csis_str;
 	struct tasklet_struct		tasklet_csis_end;
 	struct tasklet_struct		tasklet_csis_dma[CSI_VIRTUAL_CH_MAX];
-	int				pre_dma_enable[CSI_VIRTUAL_CH_MAX];
 
 	/* subdev slots for dma */
 	struct fimc_is_subdev		*dma_subdev[ENTRY_SEN_END];
@@ -69,7 +65,6 @@ struct fimc_is_device_csi {
 	struct v4l2_subdev		**subdev;
 	struct phy			*phy;
 
-	u32				dbg_fcount;
 #ifndef ENABLE_IS_CORE
 	atomic_t                        vblank_count; /* Increase at CSI frame end */
 

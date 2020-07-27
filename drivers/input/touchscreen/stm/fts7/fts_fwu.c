@@ -67,11 +67,16 @@ bool get_PureAutotune_status(struct fts_ts_info *info)
 	unsigned char regAdd[3];
 	unsigned char buf[5];
 	bool retVal = false;
+	int DOFFSET = 1;
+
+	if (info->digital_rev == FTS_DIGITAL_REV_1)
+		DOFFSET = 0;
 
 	regAdd[0] = 0xd0;
 	regAdd[1] = 0x00;
 	regAdd[2] = 0x58;
-	if (info->stm_ver == STM_VER7)
+
+	if (info->stm_format_ver == STM_FORMAT_VER6)
 	{
 		regAdd[2] = 0x4E;
 	}
@@ -91,42 +96,47 @@ bool get_PureAutotune_status(struct fts_ts_info *info)
 	rc = info->fts_read_reg(info, regAdd, 3, buf, 4);
 	if (!rc)
 	{
-		tsp_debug_info(true, info->dev, "%s: PureAutotune Information Read Fail!! [Data : %2X%2X]\n", __func__, buf[1], buf[2]);
+		tsp_debug_info(true, info->dev, "%s: PureAutotune Information Read Fail!! [Data : %2X%2X]\n", __func__, buf[0 + DOFFSET], buf[1 + DOFFSET]);
 	}
 	else
 	{
-		if((buf[1] == 0xA5) && (buf[2] == 0x96)) retVal = 1;
-		tsp_debug_info(true, info->dev, "%s: PureAutotune Information !! [Data : %2X%2X]\n", __func__, buf[1], buf[2]);
+		if((buf[0 + DOFFSET] == 0xA5) && (buf[1 + DOFFSET] == 0x96)) retVal = 1;
+		tsp_debug_info(true, info->dev, "%s: PureAutotune Information !! [Data : %2X%2X]\n", __func__, buf[0 + DOFFSET], buf[1 + DOFFSET]);
 	}
 	return retVal;
 }
 EXPORT_SYMBOL(get_PureAutotune_status);
 
-static bool get_AFE_status(struct fts_ts_info *info)
+bool get_AFE_status(struct fts_ts_info *info)
 {
 	int rc;
 	unsigned char regAdd[3];
 	unsigned char buf[5];
 	bool retVal = false;
+	int DOFFSET = 1;
+
+	if (info->digital_rev == FTS_DIGITAL_REV_1)
+		DOFFSET = 0;
 
 	regAdd[0] = 0xd0;
 	regAdd[1] = 0x00;
 	regAdd[2] = 0x5A;
-	if (info->stm_ver == STM_VER7)
+
+	if (info->stm_format_ver == STM_FORMAT_VER6)
 	{
 		regAdd[2] = 0x52;
 	}
 
-	rc = info->fts_read_reg(info, regAdd, 3, buf, 3);
+	rc = info->fts_read_reg(info, regAdd, 3, buf, 4);
 	if (!rc)
 	{
-		tsp_debug_info(true, info->dev, "%s: Read Fail - Final AFE [Data : %2X] AFE Ver [Data : %2X] \n", __func__, buf[1], buf[2]);
+		tsp_debug_info(true, info->dev, "%s: Read Fail - Final AFE [Data : %2X] AFE Ver [Data : %2X] \n", __func__, buf[0 + DOFFSET], buf[1 + DOFFSET]);
 		return rc;
 	}
 
-	if( buf[1] )
+	if( buf[0 + DOFFSET] )
 		retVal = true;
-	tsp_debug_info(true, info->dev, "%s: Final AFE [Data : %2X] AFE Ver [Data : %2X] \n", __func__, buf[1], buf[2]);
+	tsp_debug_info(true, info->dev, "%s: Final AFE [Data : %2X] AFE Ver [Data : %2X] \n", __func__, buf[0 + DOFFSET], buf[1 + DOFFSET]);
 	return retVal;
 }
 #endif 
@@ -364,6 +374,7 @@ static int fts_fw_burn_stm7(struct fts_ts_info *info, unsigned char *fw_data)
 	return 0;
 }
 
+#ifdef FTS_SUPPORT_SYSTEM_STATUS
 static int fts_get_system_status(struct fts_ts_info *info, unsigned char *val1, unsigned char *val2)
 {
 	bool rc = -1;
@@ -422,6 +433,7 @@ static int fts_get_system_status(struct fts_ts_info *info, unsigned char *val1, 
 	}
 	return rc;
 }
+#endif
 
 int fts_fw_wait_for_event(struct fts_ts_info *info, unsigned char eid)
 {
@@ -434,14 +446,14 @@ int fts_fw_wait_for_event(struct fts_ts_info *info, unsigned char eid)
 
 	regAdd = READ_ONE_EVENT;
 	rc = -1;
-	if(info->stm_ver == STM_VER7 ){
+	if (info->stm_format_ver == STM_FORMAT_VER6)	{
 		while (info->fts_read_reg
 		       (info, &regAdd, 1, (unsigned char *)data, FTS_EVENT_SIZE)) {
 			if (data[0] == EVENTID_STATUS_EVENT || data[0] == EVENTID_ERROR) {
 				if ((data[0] == EVENTID_STATUS_EVENT) && (data[1] == eid)) {
-				rc = 0;
-				break;
-			}
+					rc = 0;
+					break;
+				}
 				else
 				{
 					tsp_debug_info(true, info->dev, "%s: %2X,%2X,%2X,%2X \n", __func__, data[0],data[1],data[2],data[3]);
@@ -546,14 +558,18 @@ int fts_fw_wait_for_specific_event(struct fts_ts_info *info, unsigned char eid0,
 
 void fts_execute_autotune(struct fts_ts_info *info)
 {
+	bool NeedSaveTune = false;
 #ifdef FTS_SUPPORT_PARTIAL_DOWNLOAD
 	int ret = 0;
 	unsigned char regData[4]; // {0xC1, 0x0E};
 	bool bFinalAFE = false;
 	bool NoNeedAutoTune = false; // default for factory
-
 	bFinalAFE = get_AFE_status(info);
+
+	#if !defined (CONFIG_SEC_FACTORY)
 	 NoNeedAutoTune = get_PureAutotune_status(info);  // Check flag and decide cx_tune
+	#endif
+
 	tsp_debug_info(true, info->dev, "%s: AFE(%d), NoNeedAutoTune(%d)\n", __func__,bFinalAFE, NoNeedAutoTune);
 
     if ((!NoNeedAutoTune) || (info->o_afe_ver!=info->afe_ver)){
@@ -581,13 +597,20 @@ void fts_execute_autotune(struct fts_ts_info *info)
 			#ifdef FTS_SUPPORT_SELF_MODE
 				info->fts_command(info, SELF_AUTO_TUNE);
 				msleep(300);
-				fts_fw_wait_for_event(info, STATUS_EVENT_SELF_AUTOTUNE_DONE);
+				if (info->stm_format_ver == STM_FORMAT_VER6)
+					fts_fw_wait_for_event(info, STATUS_EVENT_SELF_AUTOTUNE_DONE_D3);
+				else
+					fts_fw_wait_for_event(info, STATUS_EVENT_SELF_AUTOTUNE_DONE);
 			#endif
 		}
+		NeedSaveTune = true;
 #ifdef FTS_SUPPORT_PARTIAL_DOWNLOAD
     }
 
 	if (bFinalAFE) {
+#ifdef CONFIG_SEC_FACTORY
+		//Do not set pat flag 
+#else
 		if (NoNeedAutoTune && (info->o_afe_ver!=info->afe_ver))
 		{
 			tsp_debug_info(true, info->dev, "%s: AFE_status(%d) write ( C2 0E )\n", __func__,bFinalAFE);
@@ -597,7 +620,12 @@ void fts_execute_autotune(struct fts_ts_info *info)
 			if (ret < 0)
 				tsp_debug_info(true, info->dev, "%s: Flash Back up PureAutotune Fail(Clear)\n", __func__);
 
+			msleep(20);
+			if(info->stm_format_ver != STM_FORMAT_VER6)
+				fts_fw_wait_for_event(info, STATUS_EVENT_PURE_AUTOTUNE_FLAG_ERASE_FINISH);
+			NeedSaveTune = true;
 		}
+#endif
 	} else {
 		tsp_debug_info(true, info->dev, "%s: AFE_status(%d) write ( C2 0E )\n", __func__,bFinalAFE);
 	    regData[0] = 0xC2;
@@ -606,12 +634,19 @@ void fts_execute_autotune(struct fts_ts_info *info)
 		if (ret < 0)
 			tsp_debug_info(true, info->dev, "%s: Flash Back up PureAutotune Fail(Clear)\n", __func__);
 
+		msleep(20);
+		if(info->stm_format_ver != STM_FORMAT_VER6)
+			fts_fw_wait_for_event(info, STATUS_EVENT_PURE_AUTOTUNE_FLAG_ERASE_FINISH);
+		NeedSaveTune = true;
 	}
 #endif
 
-	info->fts_command(info, FTS_CMD_SAVE_CX_TUNING);
-	msleep(230);
-	fts_fw_wait_for_event(info, STATUS_EVENT_FLASH_WRITE_CXTUNE_VALUE);
+	if (NeedSaveTune)
+	{
+		info->fts_command(info, FTS_CMD_SAVE_CX_TUNING);
+		msleep(230);
+		fts_fw_wait_for_event(info, STATUS_EVENT_FLASH_WRITE_CXTUNE_VALUE);
+	}
 
 	// CHECK LATER
 	if( info->stm_ver == STM_VER7)
@@ -637,8 +672,11 @@ void fts_fw_init(struct fts_ts_info *info)
 
 	if( info->stm_ver != STM_VER7)
 	{
-		info->fts_command(info, SLEEPOUT);
-		msleep(50);
+		if (info->stm_format_ver != STM_FORMAT_VER6)
+		{
+			info->fts_command(info, SLEEPOUT);
+			msleep(50);
+		}
 
 		if (info->digital_rev == FTS_DIGITAL_REV_2)
 		{
@@ -662,16 +700,17 @@ void fts_fw_init(struct fts_ts_info *info)
 //#ifndef FTS_SUPPORT_PARTIAL_DOWNLOAD
 	fts_execute_autotune(info);
 //#endif
-	if( info->stm_ver != STM_VER7){
-	info->fts_command(info, SLEEPOUT);
-	msleep(50);
+	if (info->stm_format_ver != STM_FORMAT_VER6)
+	{
+		info->fts_command(info, SLEEPOUT);
+		msleep(50);
 	}
 	info->fts_command(info, SENSEON);
 
 #ifdef FTS_SUPPORT_WATER_MODE
 	fts_fw_wait_for_event(info, STATUS_EVENT_WATER_SELF_DONE);
 #else
-	if( info->stm_ver == STM_VER7)
+	if (info->stm_format_ver == STM_FORMAT_VER6)
 	{
 		fts_fw_wait_for_event (info, STATUS_EVENT_FORCE_CAL_DONE_D3);
 	}
@@ -685,7 +724,7 @@ void fts_fw_init(struct fts_ts_info *info)
 	if (info->board->support_mskey)
 		info->fts_command(info, FTS_CMD_KEY_SENSE_ON);
 #endif
-	if( info->stm_ver == STM_VER7){
+	if (info->stm_format_ver == STM_FORMAT_VER6)	{
 		fts_interrupt_set(info, INT_ENABLE);
 		msleep(20);
 	}
@@ -760,7 +799,10 @@ EXPORT_SYMBOL(fts_fw_updater);
 #define FW_IMAGE_NAME_D2_Z1			"tsp_stm/stm_z1.fw"
 #define FW_IMAGE_NAME_HERO2ILSIN		"tsp_stm/hero2i.fw"
 #define FW_IMAGE_NAME_HERO2ALPS			"tsp_stm/hero2a.fw"
-#define FW_IMAGE_NAME_HEROEDGE			"tsp_stm/hero_e.fw"
+#define FW_IMAGE_NAME_MATISSE			"tsp_stm/matisse.fw"
+#define FW_IMAGE_NAME_GTAXL			"tsp_stm/stm_gtaxl.fw"
+#define FW_IMAGE_NAME_GTAXL_REV03			"tsp_stm/fts1a096_gtaxl_rev03.fw"
+#define FW_IMAGE_NAME_GTAXL_NOTE			"tsp_stm/fts1a096_gtaxl_note.fw"
 
 #define CONFIG_ID_D1_S				0x2C
 #define CONFIG_ID_D2_TR				0x2E
@@ -815,8 +857,11 @@ int fts_fw_update_on_probe(struct fts_ts_info *info)
 	unsigned char *fw_data = NULL;
 	char fw_path[FTS_MAX_FW_PATH];
 	const struct fts64_header *header;
-	unsigned char SYS_STAT[2] = {0, };
 	int tspid2 = 0;
+	bool fpat = false;
+#ifdef FTS_SUPPORT_SYSTEM_STATUS
+	unsigned char SYS_STAT[2] = {0, };
+#endif
 
 /*
 	if (info->board->firmware_name){
@@ -827,23 +872,12 @@ int fts_fw_update_on_probe(struct fts_ts_info *info)
 
 				}
 */
-	/* for Valley Devices */
-	if((strncmp(info->board->project_name, "valley", 6) == 0)){
-		if (info->board->firmware_name){
-			tsp_debug_err(true, info->dev,"%s: V model, firmware name in dts\n", __func__);
-			info->firmware_name = info->board->firmware_name;
-		} else {
-			tsp_debug_err(true, info->dev,"%s: V model, firmware name is not in dts & skip!\n", __func__);
-			goto exit_fwload;
-		}
-	} else if (strncmp(info->board->project_name, "PS-LTE", 6) == 0) {
-		tsp_debug_err(true, info->dev,"%s:FTS7: PS-LTE\n", __func__);
-		info->firmware_name = info->board->firmware_name;
-	} else if((lcdtype & LCD_ID2_MODEL_MASK) == MODEL_HEROPLUS){
+
+	if((lcdtype & LCD_ID2_MODEL_MASK) == MODEL_HEROPLUS){
 		tsp_debug_err(true, info->dev,"%s:FTS7AD56 - HEROPLUS\n", __func__);
 		tspid2 = gpio_get_value(info->board->tspid2);
 		if (tspid2)
-			info->firmware_name = FW_IMAGE_NAME_HERO2ALPS;
+			info->firmware_name = FW_IMAGE_NAME_HERO2ILSIN;
 		else
 			info->firmware_name = FW_IMAGE_NAME_HERO2ALPS;
 
@@ -851,18 +885,42 @@ int fts_fw_update_on_probe(struct fts_ts_info *info)
 			tsp_debug_err(true, info->dev,"%s:firmware name exgist in dts\n", __func__);
 			info->firmware_name = info->board->firmware_name;
 		}
-	} else if((lcdtype & LCD_ID2_MODEL_MASK) == MODEL_HEROEDGE){
-		tsp_debug_err(true, info->dev,"%s:FTS7AD56 - HEROEDGE\n", __func__);
-		info->firmware_name = FW_IMAGE_NAME_HEROEDGE;
-	} else {
-		tsp_debug_err(true, info->dev,"%s:FTS4 - ZERO\n", __func__);
+	}
+	else if((strncmp(info->board->project_name, "matisse", 7) == 0)){
+		tsp_debug_err(true, info->dev,"%s:FTS7AD56 - MATISSE\n", __func__);
+		info->firmware_name = FW_IMAGE_NAME_MATISSE;
+		if (info->board->firmware_name){
+			tsp_debug_err(true, info->dev,"%s:firmware name exgist in dts\n", __func__);
+			info->firmware_name = info->board->firmware_name;
+		}
+	}else if((strncmp(info->board->project_name, "gtaxl_note", 10) == 0)){
+		tsp_debug_err(true, info->dev,"%s:FTS1A096 - GTAXL NOTE\n", __func__);
+		info->firmware_name = FW_IMAGE_NAME_GTAXL_NOTE;
+		if (info->board->firmware_name){
+			tsp_debug_err(true, info->dev,"%s:firmware name exgist in dts\n", __func__);
+			info->firmware_name = info->board->firmware_name;
+		}
+	}else if((strncmp(info->board->project_name, "gtaxl_rev03", 11) == 0)){
+		tsp_debug_err(true, info->dev,"%s:FTS1A096 - GTAXL rev03\n", __func__);
+		info->firmware_name = FW_IMAGE_NAME_GTAXL_REV03;
+		if (info->board->firmware_name){
+			tsp_debug_err(true, info->dev,"%s:firmware name exgist in dts\n", __func__);
+			info->firmware_name = info->board->firmware_name;
+		}
+	}else if((strncmp(info->board->project_name, "gtaxl", 5) == 0)){
+		tsp_debug_err(true, info->dev,"%s:FTS1A096 - GTAXL\n", __func__);
+		info->firmware_name = FW_IMAGE_NAME_GTAXL;
+		if (info->board->firmware_name){
+			tsp_debug_err(true, info->dev,"%s:firmware name exgist in dts\n", __func__);
+			info->firmware_name = info->board->firmware_name;
+		}
+	}else {
+		tsp_debug_err(true, info->dev,"%s: unknown device\n", __func__);
 		goto exit_fwload;
-		info->firmware_name = FW_IMAGE_NAME_D2_Z2A;
 	}
 	snprintf(fw_path, FTS_MAX_FW_PATH, "%s", info->firmware_name);
 	tsp_debug_info(true, info->dev, "%s: Load firmware : %s, Digital_rev : %d, TSP_ID2 : %d\n", __func__,
 		  fw_path, info->digital_rev, tspid2);
-
 	retval = request_firmware(&fw_entry, fw_path, info->dev);
 	if (retval) {
 		tsp_debug_err(true, info->dev,
@@ -923,8 +981,20 @@ int fts_fw_update_on_probe(struct fts_ts_info *info)
 	else
 		retval = FTS_NOT_ERROR;
 
+#ifdef FTS_SUPPORT_SYSTEM_STATUS
 	if (fts_get_system_status(info, &SYS_STAT[0], &SYS_STAT[1]) >= 0) {
 		if (SYS_STAT[0] != SYS_STAT[1]) {
+			info->fts_systemreset(info);
+			msleep(20);
+			info->fts_wait_for_ready(info);
+			fts_fw_init(info);
+		}
+	}
+#endif
+
+	if(info->stm_format_ver == STM_FORMAT_VER6) {
+		fpat = get_PureAutotune_status(info);
+		if(!fpat) {
 			info->fts_systemreset(info);
 			msleep(20);
 			info->fts_wait_for_ready(info);

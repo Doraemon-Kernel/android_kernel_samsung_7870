@@ -39,9 +39,7 @@ struct fimc_is_cis {
 	struct fimc_is_sensor_ctl	sensor_ctls[CAM2P0_UCTL_LIST_SIZE];
 
 	/* store current ctrl */
-	camera2_lens_uctl_t		cur_lens_uctrl;
 	camera2_sensor_uctl_t		cur_sensor_uctrl;
-	camera2_flash_uctl_t		cur_flash_uctrl;
 
 	/* settings for mode change */
 	bool				need_mode_change;
@@ -59,6 +57,21 @@ struct fimc_is_cis {
 
 	/* For sensor status dump */
 	struct work_struct		cis_status_dump_work;
+
+	/* one more check_rev in mode_change */
+	bool				rev_flag;
+
+	/* get a min, max fps to HAL */
+	u32				min_fps;
+	u32				max_fps;
+	struct mutex			control_lock;
+
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+	/* settings for initial AE */
+	bool				use_initial_ae;
+	ae_setting			init_ae_setting;
+	ae_setting			last_ae_setting;
+#endif
 };
 
 struct fimc_is_actuator_data {
@@ -90,9 +103,9 @@ struct fimc_is_actuator {
 
 	/* WinAf value for M2M AF */
 	u32					left_x;
-	u32					left_y;
-	u32					right_x;
-	u32					right_y;
+	u32 					left_y;
+	u32 					right_x;
+	u32 					right_y;
 
 	int					actuator_index;
 
@@ -128,6 +141,22 @@ struct fimc_is_flash {
 	struct fimc_is_flash_expo_gain  flash_ae;
 };
 
+/*
+struct fimc_is_preprocessor_data {
+
+};
+*/
+struct fimc_is_preprocessor {
+	u32				id;
+	struct v4l2_subdev		*subdev; /* connected module subdevice */
+	u32				device; /* connected sensor device */
+	struct i2c_client		*client;
+
+	u32					position;
+	u32					max_position;
+	struct fimc_is_preprocessor_ops	*preprocessor_ops;
+};
+
 struct fimc_is_device_sensor_peri {
 	struct fimc_is_module_enum			*module;
 
@@ -140,21 +169,35 @@ struct fimc_is_device_sensor_peri {
 	struct fimc_is_flash				flash;
 	struct v4l2_subdev				*subdev_flash;
 
+	struct fimc_is_preprocessor			preprocessor;
+	struct v4l2_subdev				*subdev_preprocessor;
+
 	unsigned long					peri_state;
 
-	/* Thread for M2M sensor setting */
-	u32				work_index;
-	spinlock_t			work_lock;
-	struct task_struct		*task;
-	struct kthread_worker		worker;
-	struct kthread_work		work;
+	/* Thread for sensor and high spped recording setting */
+	u32				sensor_work_index;
+	spinlock_t			sensor_work_lock;
+	struct task_struct		*sensor_task;
+	struct kthread_worker		sensor_worker;
+	struct kthread_work		sensor_work;
+
+	/* Thread for sensor register setting */
+	struct task_struct		*mode_change_task;
+	struct kthread_worker		mode_change_worker;
+	struct kthread_work		mode_change_work;
+
+	/* sensor mode setting flag */
+        u32                             mode_change_flag;
 
 	struct fimc_is_sensor_interface			sensor_interface;
 };
 
 void fimc_is_sensor_work_fn(struct kthread_work *work);
-int fimc_is_sensor_init_m2m_thread(struct fimc_is_device_sensor_peri *sensor_peri);
-void fimc_is_sensor_deinit_m2m_thread(struct fimc_is_device_sensor_peri *sensor_peri);
+void fimc_is_sensor_mode_change_work_fn(struct kthread_work *work);
+int fimc_is_sensor_init_sensor_thread(struct fimc_is_device_sensor_peri *sensor_peri);
+void fimc_is_sensor_deinit_sensor_thread(struct fimc_is_device_sensor_peri *sensor_peri);
+int fimc_is_sensor_init_mode_change_thread(struct fimc_is_device_sensor_peri *sensor_peri);
+void fimc_is_sensor_deinit_mode_change_thread(struct fimc_is_device_sensor_peri *sensor_peri);
 
 struct fimc_is_device_sensor_peri *find_peri_by_cis_id(struct fimc_is_device_sensor *device,
 							u32 cis);
@@ -162,6 +205,8 @@ struct fimc_is_device_sensor_peri *find_peri_by_act_id(struct fimc_is_device_sen
 							u32 actuator);
 struct fimc_is_device_sensor_peri *find_peri_by_flash_id(struct fimc_is_device_sensor *device,
 							u32 flash);
+struct fimc_is_device_sensor_peri *find_peri_by_preprocessor_id(struct fimc_is_device_sensor *device,
+							u32 preprocessor);
 
 void fimc_is_sensor_set_cis_uctrl_list(struct fimc_is_device_sensor_peri *sensor_peri,
 		u32 long_exp, u32 short_exp,
@@ -213,6 +258,9 @@ int fimc_is_sensor_flash_fire(struct fimc_is_device_sensor_peri *device,
 
 void fimc_is_sensor_actuator_soft_move(struct work_struct *data);
 
+int fimc_is_sensor_mode_change(struct fimc_is_cis *cis, u32 mode);
+
 #define CALL_CISOPS(s, op, args...) (((s)->cis_ops->op) ? ((s)->cis_ops->op(args)) : 0)
+#define CALL_PREPROPOPS(s, op, args...) (((s)->preprocessor_ops->op) ? ((s)->preprocessor_ops->op(args)) : 0)
 
 #endif

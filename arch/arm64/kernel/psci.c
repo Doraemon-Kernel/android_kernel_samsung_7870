@@ -32,9 +32,6 @@
 #include <asm/suspend.h>
 #include <asm/system_misc.h>
 
-#ifdef CONFIG_RKP_CFP_FIX_SMC_BUG
-#include <linux/rkp_cfp.h>
-#endif
 #define PSCI_POWER_STATE_TYPE_STANDBY		0
 #define PSCI_POWER_STATE_TYPE_POWER_DOWN	1
 
@@ -450,8 +447,7 @@ static void cpu_psci_cpu_die(unsigned int cpu)
 
 static int cpu_psci_cpu_kill(unsigned int cpu)
 {
-	int err;
-	unsigned long start, end;
+	int err, i;
 
 	if (!psci_ops.affinity_info)
 		return 1;
@@ -461,18 +457,16 @@ static int cpu_psci_cpu_kill(unsigned int cpu)
 	 * while it is dying. So, try again a few times.
 	 */
 
-	start = jiffies;
-	end = start + msecs_to_jiffies(100);
-	do {
+	for (i = 0; i < 10; i++) {
 		err = psci_ops.affinity_info(cpu_logical_map(cpu), 0);
 		if (err == PSCI_0_2_AFFINITY_LEVEL_OFF) {
-			pr_info("CPU%d killed (polled %d ms)\n", cpu,
-				jiffies_to_msecs(jiffies - start));
+			pr_info("CPU%d killed.\n", cpu);
 			return 1;
 		}
 
-		usleep_range(100, 1000);
-	} while (time_before(jiffies, end));
+		msleep(10);
+		pr_info("Retrying again to check for CPU kill\n");
+	}
 
 	pr_warn("CPU%d may not have shut down cleanly (AFFINITY_INFO reports %d)\n",
 			cpu, err);
@@ -509,15 +503,15 @@ static int psci_suspend_customized_finisher(unsigned long index)
 	case PSCI_SYSTEM_IDLE:
 		state.id = 1;
 		break;
-	case PSCI_SYSTEM_IDLE_AUDIO:
-		state.id = 2;
-		break;
 	case PSCI_SYSTEM_IDLE_CLUSTER_SLEEP:
 		state.id = 1;
 		state.affinity_level = 1;
 		break;
 	case PSCI_SYSTEM_SLEEP:
 		state.affinity_level = 3;
+		break;
+	case PSCI_SYSTEM_CP_CALL:
+		state.affinity_level = 1;
 		break;
 	default:
 		panic("Unsupported psci state, index = %ld\n", index);
@@ -554,6 +548,8 @@ const struct cpu_operations cpu_psci_ops = {
 	.name		= "psci",
 #ifdef CONFIG_CPU_IDLE
 	.cpu_init_idle	= cpu_psci_cpu_init_idle,
+#endif
+#ifdef CONFIG_ARM64_CPU_SUSPEND
 	.cpu_suspend	= cpu_psci_cpu_suspend,
 #endif
 	.cpu_init	= cpu_psci_cpu_init,

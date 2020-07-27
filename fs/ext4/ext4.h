@@ -32,7 +32,6 @@
 #include <linux/ratelimit.h>
 #include <crypto/hash.h>
 #include <linux/falloc.h>
-#include <linux/android_aid.h>
 #ifdef __KERNEL__
 #include <linux/compat.h>
 #endif
@@ -1027,7 +1026,6 @@ struct ext4_inode_info {
 #define EXT4_MOUNT_POSIX_ACL		0x08000	/* POSIX Access Control Lists */
 #define EXT4_MOUNT_NO_AUTO_DA_ALLOC	0x10000	/* No auto delalloc mapping */
 #define EXT4_MOUNT_BARRIER		0x20000 /* Use block barriers */
-#define EXT4_MOUNT_DEBUG_BDINFO		0x40000 /* Debug backing device info. */
 #define EXT4_MOUNT_QUOTA		0x80000 /* Some quota option set */
 #define EXT4_MOUNT_USRQUOTA		0x100000 /* "old" user quota */
 #define EXT4_MOUNT_GRPQUOTA		0x200000 /* "old" group quota */
@@ -1214,9 +1212,9 @@ struct ext4_super_block {
 	__u8	s_encrypt_algos[4];	/* Encryption algorithms in use  */
 	__u8	s_encrypt_pw_salt[16];	/* Salt used for string2key algorithm */
 	__le32	s_lpf_ino;		/* Location of the lost+found inode */
-	__le32	s_reserved[94];		/* Padding to the end of the block */
+	__le32	s_reserved[100];	/* Padding to the end of the block */
 	__le32	s_sec_magic;		/* flag for reserved inodes */
-	__le32	s_reserved2[5];
+	__le32	s_reserved2[5];		/* Padding to the end of the block */
 	__le32	s_checksum;		/* crc32c(superblock) */
 };
 
@@ -2395,7 +2393,7 @@ extern int ext4_search_dir(struct buffer_head *bh,
 			   const struct qstr *d_name,
 			   unsigned int offset,
 			   struct ext4_dir_entry_2 **res_dir,
-			   char *ci_name_buf);
+               char *ci_name_buf);
 extern int ext4_generic_delete_entry(handle_t *handle,
 				     struct inode *dir,
 				     struct ext4_dir_entry_2 *de_del,
@@ -3098,20 +3096,12 @@ static inline bool ext4_android_claim_sec_r_blocks(unsigned int flags) {
 }
 
 static inline bool ext4_android_claim_r_blocks(struct ext4_sb_info *sbi) {
-#if ANDROID_VERSION < 90000
+	/* for O upgrade without factory reset */
 	if (in_group_p(AID_USE_ROOT_RESERVED))
 		return true;
-#else
-	/* for P upgrade without factory reset */
-	if (in_group_p(AID_RESERVED_DISK))
-		return true;
-#endif
 	return false;
 }
 
 #endif	/* __KERNEL__ */
-
-#define EFSBADCRC	EBADMSG		/* Bad CRC detected */
-#define EFSCORRUPTED	EUCLEAN		/* Filesystem is corrupted */
 
 #endif	/* _EXT4_H */

@@ -43,10 +43,7 @@
 #define NAD_ACAT_FLAG           5001
 
 #define NAD_RETRY_COUNT         30
-
-/* MAGIC CODE for NAD API Success */
 #define MAGIC_NAD_API_SUCCESS	6057
-
 #if defined(CONFIG_SEC_NAD_API)
 static char nad_api_result_string[20*30] = {0,}; 
 

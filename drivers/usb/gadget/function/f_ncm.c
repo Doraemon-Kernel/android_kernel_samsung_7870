@@ -1096,9 +1096,7 @@ static struct sk_buff *ncm_wrap_ntb(struct gether *port,
 	unsigned	max_size = ncm->port.fixed_in_len;
 	const struct ndp_parser_opts *opts = ncm->parser_opts;
 	unsigned	crc_len = ncm->is_crc ? sizeof(uint32_t) : 0;
-#ifdef CONFIG_USB_NCM_SUPPORT_MTU_CHANGE
-	int		force_shortpkt = 0;
-#endif
+
 	div = le16_to_cpu(ntb_parameters.wNdpInDivisor);
 	rem = le16_to_cpu(ntb_parameters.wNdpInPayloadRemainder);
 	ndp_align = le16_to_cpu(ntb_parameters.wNdpInAlignment);
@@ -1113,28 +1111,19 @@ static struct sk_buff *ncm_wrap_ntb(struct gether *port,
 	ncb_len += pad;
 
 	if (ncb_len + skb->len + crc_len > max_size) {
+		printk(KERN_ERR"usb: %s Dropped skb skblen (%d) \n",__func__,skb->len);
 		dev_kfree_skb_any(skb);
 		return NULL;
 	}
 #ifdef CONFIG_USB_NCM_SUPPORT_MTU_CHANGE
-	if ((ncb_len + skb->len + crc_len < max_size) && (((ncb_len + skb->len + crc_len) %
-		le16_to_cpu(ncm->port.in_ep->desc->wMaxPacketSize)) == 0)) {
-		/* force short packet */
-		printk(KERN_ERR "usb: force short packet %d  \n",ncm->port.in_ep->desc->wMaxPacketSize);
-		force_shortpkt = 1;
-	}
-#endif
-	skb2 = skb_copy_expand(skb, ncb_len,
-#ifdef CONFIG_USB_NCM_SUPPORT_MTU_CHANGE
-			       force_shortpkt,
+	skb2 = skb_realloc_headroom(skb, ncb_len);
 #else
-			       max_size - skb->len - ncb_len - crc_len,
+	skb2 = skb_copy_expand(skb, ncb_len, max_size - skb->len - ncb_len - crc_len, GFP_ATOMIC);
 #endif
-			       GFP_ATOMIC);
 	dev_kfree_skb_any(skb);
 #ifdef CONFIG_USB_NCM_SUPPORT_MTU_CHANGE
 	if (!skb2) {
-		printk(KERN_ERR"Dropped skb \n");
+		printk(KERN_ERR"usb: %s Dropped skb skblen realloc failed (%d) \n",__func__,skb->len);
 		return NULL;
 	}
 #else
@@ -1151,11 +1140,7 @@ static struct sk_buff *ncm_wrap_ntb(struct gether *port,
 	/* wHeaderLength */
 	put_unaligned_le16(opts->nth_size, tmp++);
 	tmp++; /* skip wSequence */
-#ifdef CONFIG_USB_NCM_SUPPORT_MTU_CHANGE
-	put_ncm(&tmp, opts->block_length, skb->len + force_shortpkt); /* (d)wBlockLength */
-#else
 	put_ncm(&tmp, opts->block_length, skb->len); /* (d)wBlockLength */
-#endif
 	/* (d)wFpIndex */
 	/* the first pointer is right after the NTH + align */
 	put_ncm(&tmp, opts->fp_index, opts->nth_size + ndp_pad);
@@ -1196,12 +1181,6 @@ static struct sk_buff *ncm_wrap_ntb(struct gether *port,
 		memset(skb_put(skb, max_size - skb->len),
 		       0, max_size - skb->len);
 		printk(KERN_DEBUG"usb:%s Expanding the buffer %d \n",__func__,skb->len);
-	}
-#else
-	if (force_shortpkt) {
-		memset(skb_put(skb, force_shortpkt),
-		       0, force_shortpkt);
-		printk(KERN_ERR"usb:%s final Expanding the buffer %d \n",__func__,skb->len);
 	}
 #endif
 	return skb;
@@ -1337,6 +1316,7 @@ static int ncm_unwrap_ntb(struct gether *port,
 	     "Parsed NTB with %d frames\n", dgram_counter);
 	return 0;
 err:
+	printk(KERN_DEBUG"usb:%s Dropped %d \n",__func__,skb->len);
 	skb_queue_purge(list);
 	dev_kfree_skb_any(skb);
 	return ret;
@@ -1605,3 +1585,4 @@ int ncm_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
 		kfree(ncm);
 	return status;
 }
+

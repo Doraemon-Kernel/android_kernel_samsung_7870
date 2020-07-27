@@ -61,7 +61,7 @@ static void dlp_dump_list(void) {
 			printk("DLP : extensions : (empty)\n");
 		}
 	}
-	mutex_unlock(&dlp_info.list_mutex);	
+	mutex_unlock(&dlp_info.list_mutex);
 }
 #endif
 
@@ -88,9 +88,9 @@ static struct dlp_struct *dlp_find_list(int user_id) {
 bool dlp_is_locked(int user_id) {
 	struct dlp_struct *tmp;
 	tmp = dlp_find_list(user_id);
-	if(tmp){
+	if(tmp){		
 		return tmp->lock;
-	}
+	} 
 	else {
 		return false;
 	}
@@ -215,7 +215,7 @@ static long dlp_ioctl(struct file *file, unsigned cmd,
 		pr_err("DLP : Invalid IOCTL: %d\n", cmd);
 		return -EINVAL;
 	}
-
+	
 #if DLP_DUMP_LIST	
 	dlp_dump_list(); 
 #endif

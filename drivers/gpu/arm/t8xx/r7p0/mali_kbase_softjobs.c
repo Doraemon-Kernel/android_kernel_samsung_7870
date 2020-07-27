@@ -145,7 +145,7 @@ static void complete_soft_job(struct kbase_jd_atom *katom)
 		list_del(&katom->dep_item[0]);
 
 	kbase_finish_soft_job(katom);
-	if (jd_done_nolock(katom, NULL))
+	if (jd_done_nolock(katom))
 		kbase_js_sched_all(kctx->kbdev);
 	mutex_unlock(&kctx->jctx.lock);
 }
@@ -278,7 +278,7 @@ static void kbase_fence_cancel_wait(struct kbase_jd_atom *katom)
 
 	kbase_finish_soft_job(katom);
 
-	if (jd_done_nolock(katom, NULL))
+	if (jd_done_nolock(katom))
 		kbase_js_sched_all(katom->kctx->kbdev);
 }
 #endif /* CONFIG_SYNC */
@@ -296,7 +296,6 @@ int kbase_process_soft_job(struct kbase_jd_atom *katom)
 		katom->event_code = kbase_fence_trigger(katom, katom->event_code == BASE_JD_EVENT_DONE ? 0 : -EFAULT);
 		/* Release the reference as we don't need it any more */
 		sync_fence_put(katom->fence);
-/* MALI_SEC_INTEGRATION */
 		spin_lock_irqsave(&katom->fence_lock, flags);
 		katom->fence = NULL;
 		spin_unlock_irqrestore(&katom->fence_lock, flags);
@@ -507,7 +506,7 @@ void kbase_resume_suspended_soft_jobs(struct kbase_device *kbdev)
 
 		if (kbase_process_soft_job(katom_iter) == 0) {
 			kbase_finish_soft_job(katom_iter);
-			resched |= jd_done_nolock(katom_iter, NULL);
+			resched |= jd_done_nolock(katom_iter);
 		} else {
 			/* The job has not completed */
 			KBASE_DEBUG_ASSERT((katom_iter->core_req &

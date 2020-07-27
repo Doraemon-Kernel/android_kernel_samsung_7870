@@ -607,6 +607,16 @@ enum scaler_output_yuv_range {
 	SCALER_OUTPUT_YUV_RANGE_NARROW = 1,
 };
 
+/* --------------------------  MCSCALER  ----------------------------------- */
+enum mcsc_output_index {
+	MCSC_OUTPUT0				= 0,
+	MCSC_OUTPUT1				= 1,
+	MCSC_OUTPUT2				= 2,
+	MCSC_OUTPUT3				= 3,
+	MCSC_OUTPUT4				= 4,
+	MCSC_OUTPUT_MAX
+};
+
 /* --------------------------  3DNR  ----------------------------------- */
 enum tdnr_1st_frame_command {
 	TDNR_1ST_FRAME_COMMAND_NOPROCESSING	= 0,
@@ -1113,11 +1123,7 @@ struct param_mcs_output {
 struct mcs_param {
 	struct param_control			control;
 	struct param_mcs_input			input;
-	struct param_mcs_output			output0;
-	struct param_mcs_output			output1;
-	struct param_mcs_output			output2;
-	struct param_mcs_output			output3;
-	struct param_mcs_output			output4;
+	struct param_mcs_output			output[MCSC_OUTPUT_MAX];
 };
 
 struct scp_param {
@@ -1288,23 +1294,12 @@ struct is_debug_region {
 	u32	reserved[PARAMETER_MAX_MEMBER-1];
 };
 
-struct fast_ctl_capture {
-	u32 ready;
-	u32 capture_intent;
-	u32 capture_count;
-	u32 capture_exposureTime;
-};
-
-struct is_fast_control {
-	struct fast_ctl_capture		fast_capture;
-};
-
 #define MAX_FRAME_COUNT		8
 #define MAX_FRAME_COUNT_PREVIEW	4
 #define MAX_FRAME_COUNT_CAPTURE	1
 #define MAX_FACE_COUNT		16
 
-#define MAX_SHARED_COUNT	400
+#define MAX_SHARED_COUNT	500
 
 struct is_region {
 	struct is_param_region	parameter;
@@ -1312,8 +1307,6 @@ struct is_region {
 	struct is_frame_header	header[MAX_FRAME_COUNT];
 	struct is_face_marker	face[MAX_FACE_COUNT];
 	struct is_debug_region	debug;
-	struct is_fast_control	fast_ctl;
-	u32			reserved[96];
 	u32			shared[MAX_SHARED_COUNT];
 };
 

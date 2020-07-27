@@ -42,61 +42,221 @@
 #include <plat/iovmm.h>
 #endif
 
-static void *fimc_is_ion_init(struct platform_device *pdev)
+#if defined(CONFIG_VIDEOBUF2_ION)
+/* fimc-is vb2 buffer operations */
+static inline ulong fimc_is_vb2_ion_plane_kvaddr(
+		struct fimc_is_vb2_buf *vbuf, u32 plane)
+
 {
-	return vb2_ion_create_context(&pdev->dev, SZ_4K,
-					VB2ION_CTX_IOMMU |
-					VB2ION_CTX_VMCONTIG);
+	return (ulong)vb2_plane_vaddr(&vbuf->vb, plane);
 }
 
-static ulong plane_dvaddr(ulong cookie, u32 plane_no)
+static inline ulong fimc_is_vb2_ion_plane_cookie(
+		struct fimc_is_vb2_buf *vbuf, u32 plane)
+{
+	return (ulong)vb2_plane_cookie(&vbuf->vb, plane);
+}
+
+static dma_addr_t fimc_is_vb2_ion_plane_dvaddr(
+		struct fimc_is_vb2_buf *vbuf, u32 plane)
+
 {
 	dma_addr_t dva = 0;
 
-	WARN_ON(vb2_ion_dma_address((void *)cookie, &dva) != 0);
+	WARN_ON(vb2_ion_dma_address(vb2_plane_cookie(&vbuf->vb, plane), &dva) != 0);
 
 	return (ulong)dva;
 }
 
-static ulong plane_kvaddr(struct vb2_buffer *vb, u32 plane_no)
+static void fimc_is_vb2_ion_plane_prepare(struct fimc_is_vb2_buf *vbuf,
+		u32 plane, bool exact)
 {
-	void *kvaddr = vb2_plane_vaddr(vb, plane_no);
+	struct vb2_buffer *vb = &vbuf->vb;
+	enum dma_data_direction dir;
+	unsigned long size;
 
-	return (ulong)kvaddr;
+	dir = V4L2_TYPE_IS_OUTPUT(vb->v4l2_buf.type) ?
+		DMA_TO_DEVICE : DMA_FROM_DEVICE;
+
+	size = exact ?
+		vb2_get_plane_payload(vb, plane) : vb2_plane_size(vb, plane);
+
+	vb2_ion_sync_for_device((void *)vb2_plane_cookie(vb, plane), 0,
+			size, dir);
 }
 
-static ulong plane_cookie(struct vb2_buffer *vb, u32 plane_no)
+static void fimc_is_vb2_ion_plane_finish(struct fimc_is_vb2_buf *vbuf,
+		u32 plane, bool exact)
 {
-	void *cookie = vb2_plane_cookie(vb, plane_no);
+	struct vb2_buffer *vb = &vbuf->vb;
+	enum dma_data_direction dir;
+	unsigned long size;
 
-	return (ulong)cookie;
+	dir = V4L2_TYPE_IS_OUTPUT(vb->v4l2_buf.type) ?
+		DMA_TO_DEVICE : DMA_FROM_DEVICE;
+
+	size = exact ?
+		vb2_get_plane_payload(vb, plane) : vb2_plane_size(vb, plane);
+
+	vb2_ion_sync_for_cpu((void *)vb2_plane_cookie(vb, plane), 0,
+			size, dir);
 }
 
-const struct fimc_is_vb2 fimc_is_vb2_ion = {
-	.ops		= &vb2_ion_memops,
-	.init		= fimc_is_ion_init,
-	.cleanup	= vb2_ion_destroy_context,
-	.plane_dvaddr	= plane_dvaddr,
-	.plane_kvaddr	= plane_kvaddr,
-	.plane_cookie	= plane_cookie,
-	.resume		= vb2_ion_attach_iommu,
-	.suspend	= vb2_ion_detach_iommu,
-	.set_cacheable	= vb2_ion_set_cached,
+static void fimc_is_vb2_ion_buf_prepare(struct fimc_is_vb2_buf *vbuf, bool exact)
+{
+	vb2_ion_buf_prepare(&vbuf->vb);
+}
+
+static void fimc_is_vb2_ion_buf_finish(struct fimc_is_vb2_buf *vbuf, bool exact)
+{
+	vb2_ion_buf_finish(&vbuf->vb);
+}
+
+const struct fimc_is_vb2_buf_ops fimc_is_vb2_buf_ops_ion = {
+	.plane_kvaddr	= fimc_is_vb2_ion_plane_kvaddr,
+	.plane_cookie	= fimc_is_vb2_ion_plane_cookie,
+	.plane_dvaddr	= fimc_is_vb2_ion_plane_dvaddr,
+	.plane_prepare	= fimc_is_vb2_ion_plane_prepare,
+	.plane_finish	= fimc_is_vb2_ion_plane_finish,
+	.buf_prepare	= fimc_is_vb2_ion_buf_prepare,
+	.buf_finish		= fimc_is_vb2_ion_buf_finish,
 };
 
-int fimc_is_mem_probe(struct fimc_is_mem *this,
-	struct platform_device *pdev)
+/* fimc-is private buffer operations */
+static void fimc_is_vb2_ion_free(struct fimc_is_priv_buf *pbuf)
 {
-	u32 ret = 0;
+	vb2_ion_private_free(pbuf->cookie);
+	kfree(pbuf);
+}
 
-	this->vb2 = &fimc_is_vb2_ion;
+static ulong fimc_is_vb2_ion_kvaddr(struct fimc_is_priv_buf *pbuf)
+{
+	void *kva;
 
-	this->alloc_ctx = this->vb2->init(pdev);
-	if (IS_ERR(this->alloc_ctx)) {
-		ret = PTR_ERR(this->alloc_ctx);
-		goto p_err;
+	if (!pbuf)
+		return 0;
+
+	kva = vb2_ion_private_vaddr(pbuf->cookie);
+	if (IS_ERR_OR_NULL(kva)) {
+		err("could not get kernel addr for @%p: %ld",
+			pbuf->cookie, PTR_ERR(kva));
+		return 0;
 	}
 
-p_err:
-	return ret;
+	return (ulong)kva;
+}
+
+static dma_addr_t fimc_is_vb2_ion_dvaddr(struct fimc_is_priv_buf *pbuf)
+{
+	dma_addr_t dva = 0;
+
+	if (!pbuf)
+		return 0;
+
+	if (vb2_ion_dma_address((void *)pbuf->cookie, &dva))
+		err("could not get device addr for @%p", pbuf->cookie);
+
+	return (ulong)dva;
+}
+
+static void fimc_is_vb2_ion_sync_for_device(struct fimc_is_priv_buf *pbuf,
+		off_t offset, size_t size, enum dma_data_direction dir)
+{
+	vb2_ion_sync_for_device(pbuf->cookie, offset, size, dir);
+}
+
+static void fimc_is_vb2_ion_sync_for_cpu(struct fimc_is_priv_buf *pbuf,
+		off_t offset, size_t size, enum dma_data_direction dir)
+{
+	vb2_ion_sync_for_cpu(pbuf->cookie, offset, size, dir);
+}
+
+const struct fimc_is_priv_buf_ops fimc_is_priv_buf_ops_ion = {
+	.free				= fimc_is_vb2_ion_free,
+	.kvaddr				= fimc_is_vb2_ion_kvaddr,
+	.dvaddr				= fimc_is_vb2_ion_dvaddr,
+	.sync_for_device	= fimc_is_vb2_ion_sync_for_device,
+	.sync_for_cpu		= fimc_is_vb2_ion_sync_for_cpu,
+};
+
+/* fimc-is memory operations */
+static void *fimc_is_vb2_ion_init(struct platform_device *pdev)
+{
+	return vb2_ion_create_context(&pdev->dev, SZ_4K,
+			VB2ION_CTX_IOMMU |
+			VB2ION_CTX_VMCONTIG);
+}
+
+static struct fimc_is_priv_buf *fimc_is_vb2_ion_alloc(void *ctx,
+		size_t size, size_t align)
+{
+	struct fimc_is_priv_buf *buf;
+	int ret = 0;
+
+	buf = kzalloc(sizeof(*buf), GFP_KERNEL);
+	if (!buf)
+		return ERR_PTR(-ENOMEM);
+
+	buf->cookie = vb2_ion_private_alloc(ctx, size);
+	if (IS_ERR(buf->cookie)) {
+		err("failed to allocate a private buffer, size: %zd", size);
+		ret = PTR_ERR(buf->cookie);
+		goto err_priv_alloc;
+	}
+
+	buf->size = size;
+	buf->align = align;
+	buf->ctx = ctx;
+	buf->ops = &fimc_is_priv_buf_ops_ion;
+
+	return buf;
+
+err_priv_alloc:
+	kfree(buf);
+
+	return ERR_PTR(ret);
+}
+
+static int fimc_is_vb2_ion_resume(void *ctx)
+{
+	if (ctx)
+		return vb2_ion_attach_iommu(ctx);
+
+	return -ENOENT;
+}
+
+static void fimc_is_vb2_ion_suspend(void *ctx)
+{
+	if (ctx)
+		vb2_ion_detach_iommu(ctx);
+}
+
+const struct fimc_is_mem_ops fimc_is_mem_ops_ion = {
+	.init			= fimc_is_vb2_ion_init,
+	.cleanup		= vb2_ion_destroy_context,
+	.resume			= fimc_is_vb2_ion_resume,
+	.suspend		= fimc_is_vb2_ion_suspend,
+	.set_cached		= vb2_ion_set_cached,
+	.set_alignment	= vb2_ion_set_alignment,
+	.alloc			= fimc_is_vb2_ion_alloc,
+};
+#endif
+
+int fimc_is_mem_init(struct fimc_is_mem *mem, struct platform_device *pdev)
+{
+#if defined(CONFIG_VIDEOBUF2_ION)
+	mem->fimc_is_mem_ops = &fimc_is_mem_ops_ion;
+	mem->vb2_mem_ops = &vb2_ion_memops;
+	mem->fimc_is_vb2_buf_ops = &fimc_is_vb2_buf_ops_ion;
+#endif
+
+	mem->default_ctx = CALL_PTR_MEMOP(mem, init, pdev);
+	if (IS_ERR_OR_NULL(mem->default_ctx)) {
+		if (IS_ERR(mem->default_ctx))
+			return PTR_ERR(mem->default_ctx);
+		else
+			return -EINVAL;
+	}
+
+	return 0;
 }

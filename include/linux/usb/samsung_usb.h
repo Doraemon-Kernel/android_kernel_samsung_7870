@@ -23,6 +23,7 @@ enum samsung_cpu_type {
 	TYPE_EXYNOS5,
 	TYPE_EXYNOS7,
 	TYPE_EXYNOS8890,
+	TYPE_EXYNOS7870,
 };
 
 enum samsung_usb_ip_type {

@@ -22,11 +22,12 @@
 
 struct shm_plat_data {
 	unsigned long p_addr;
-	void __iomem *v_boot;
-	void __iomem *v_ipc;
 	unsigned t_size;
 	unsigned ipc_off;
 	unsigned ipc_size;
+
+	unsigned long p_sysram_addr;
+	unsigned t_sysram_size;
 } pdata;
 
 unsigned long shm_get_phys_base(void)
@@ -37,6 +38,16 @@ unsigned long shm_get_phys_base(void)
 unsigned shm_get_phys_size(void)
 {
 	return pdata.t_size;
+}
+
+unsigned long shm_get_sysram_base(void)
+{
+	return pdata.p_sysram_addr;
+}
+
+unsigned shm_get_sysram_size(void)
+{
+	return pdata.t_sysram_size;
 }
 
 unsigned shm_get_boot_size(void)
@@ -127,43 +138,45 @@ void __iomem *shm_request_region(unsigned long sh_addr, unsigned size)
 
 void __iomem *shm_get_boot_region(void)
 {
-	if (!pdata.v_boot)
-		pdata.v_boot = shm_request_region(pdata.p_addr, pdata.ipc_off);
-
-	return pdata.v_boot;
+	return shm_request_region(pdata.p_addr, pdata.ipc_off);
 }
 
 void __iomem *shm_get_ipc_region(void)
 {
-	if (!pdata.v_ipc)
-		pdata.v_ipc = shm_request_region(pdata.p_addr + pdata.ipc_off,
-				pdata.t_size - pdata.ipc_off);
-
-	return pdata.v_ipc;
+	return shm_request_region(pdata.p_addr + pdata.ipc_off,
+			pdata.t_size - pdata.ipc_off);
 }
 
-void shm_release_region(void)
+void shm_release_region(void *v_addr)
 {
-	if (pdata.v_boot)
-		vunmap(pdata.v_boot);
-
-	if (pdata.v_ipc)
-		vunmap(pdata.v_ipc);
+	vunmap(v_addr);
 }
 
 #ifdef CONFIG_OF_RESERVED_MEM
 static int __init modem_if_reserved_mem_setup(struct reserved_mem *remem)
 {
-	pdata.p_addr = remem->base;
-	pdata.t_size = remem->size;
+   pdata.p_addr = remem->base;
+   pdata.t_size = remem->size;
 
-	pr_err("%s: memory reserved: paddr=%lu, t_size=%u\n",
-		__func__, pdata.p_addr, pdata.t_size);
+   pr_err("%s: memory reserved: paddr=%lu, t_size=%u\n",
+        __func__, pdata.p_addr, pdata.t_size);
 
-	return 0;
+   return 0;
 }
-RESERVEDMEM_OF_DECLARE(modem_if, "exynos,modem_if", modem_if_reserved_mem_setup);
-#endif /* CONFIG_OF_RESERVED_MEM */
+RESERVEDMEM_OF_DECLARE(modem_if, "exynos7870,modem_if", modem_if_reserved_mem_setup);
+
+static int __init deliver_cp_reserved_mem_setup(struct reserved_mem *remem)
+{
+   pdata.p_sysram_addr = remem->base;
+   pdata.t_sysram_size = remem->size;
+
+   pr_err("%s: memory reserved: paddr=%u, t_size=%u\n",
+        __func__, (u32)remem->base, (u32)remem->size);
+
+   return 0;
+}
+RESERVEDMEM_OF_DECLARE(deliver_cp, "exynos7870,deliver_cp", deliver_cp_reserved_mem_setup);
+#endif
 
 static int shm_probe(struct platform_device *pdev)
 {
@@ -190,24 +203,8 @@ static int shm_probe(struct platform_device *pdev)
 		/* To do: In case of non-DT */
 	}
 
-#ifndef CONFIG_OF_RESERVED_MEM
-	{
-		struct resource *res = NULL;
-		/* resource for mcu_ipc SFR region */
-		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-		if (!res) {
-			dev_err(dev, "no memory resource defined\n");
-			return -ENOENT;
-		}
-
-		pdata.p_addr = res->start;
-		pdata.t_size = resource_size(res);
-	}
-#endif /* !CONFIG_OF_RESERVED_MEM */
-
 	dev_err(dev, "paddr=%lu, t_size=%u, ipc_off=%u, ipc_size=%u\n",
-		pdata.p_addr, pdata.t_size,
-		pdata.ipc_off, pdata.ipc_size);
+		pdata.p_addr, pdata.t_size, pdata.ipc_off, pdata.ipc_size);
 
 	return 0;
 }
@@ -220,6 +217,7 @@ static int shm_remove(struct platform_device *pdev)
 static const struct of_device_id exynos_shm_dt_match[] = {
 		{ .compatible = "samsung,exynos7580-shm_ipc", },
 		{ .compatible = "samsung,exynos8890-shm_ipc", },
+		{ .compatible = "samsung,exynos7870-shm_ipc", },
 		{},
 };
 MODULE_DEVICE_TABLE(of, exynos_shm_dt_match);

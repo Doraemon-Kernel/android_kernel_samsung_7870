@@ -42,23 +42,19 @@
 #include "mm.h"
 
 #include <linux/vmalloc.h>
-#ifdef CONFIG_SENTINEL
-#include <linux/sentinel.h>
-#endif
-
-#ifdef CONFIG_TIMA_RKP
-#include <linux/rkp_entry.h> 
-#endif //CONFIG_TIMA_RKP
 
 u64 idmap_t0sz = TCR_T0SZ(VA_BITS);
 static int iotable_on;
-
+#ifdef CONFIG_KNOX_KAP
+extern int boot_mode_security;
+#endif
 /*
  * Empty_zero_page is a special page that is used for zero-initialized data
  * and COW.
  */
 #ifdef CONFIG_TIMA_RKP
-unsigned long *empty_zero_page;
+__attribute__((section(".empty_zero_page"))) unsigned long __ezr[PAGE_SIZE / sizeof(unsigned long)] = { 0 };
+unsigned long *empty_zero_page = __ezr;
 #else
 unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)] __page_aligned_bss;
 #endif
@@ -184,21 +180,16 @@ static void alloc_init_pte(pmd_t *pmd, unsigned long addr,
 {
 	pte_t *pte;
 
-#if defined(CONFIG_TIMA_RKP) && !defined(CONFIG_SENTINEL)
-	if(pmd_block(*pmd))
-		return block_to_pages(pmd, addr, end, pfn);
-#endif
-	if (pmd_none(*pmd) || pmd_bad(*pmd)) {
-#ifdef CONFIG_SENTINEL
-		pte = sentinel_early_alloc(PTRS_PER_PTE * sizeof(pte_t), addr);
-#else
+	if (pmd_none(*pmd) || pmd_sect(*pmd)) {
 		pte = alloc(PTRS_PER_PTE * sizeof(pte_t));
-#endif
-		if (pmd_sect(*pmd))
+		if (pmd_sect(*pmd)) {
 			split_pmd(pmd, pte);
+		}
 		__pmd_populate(pmd, __pa(pte), PMD_TYPE_TABLE);
 		flush_tlb_all();
 	}
+	BUG_ON(pmd_bad(*pmd));
+
 
 	pte = pte_offset_kernel(pmd, addr);
 	do {
@@ -229,23 +220,27 @@ static void alloc_init_pmd(struct mm_struct *mm, pud_t *pud,
 {
 	pmd_t *pmd;
 	unsigned long next;
+#ifdef CONFIG_TIMA_RKP
+	int rkp_do = 0;
+#endif
 
 	/*
 	 * Check for initial section mappings in the pgd/pud and remove them.
 	 */
 	if (pud_none(*pud) || pud_bad(*pud)) {
 #ifdef CONFIG_TIMA_RKP
-#ifdef CONFIG_SENTINEL
-		pmd = sentinel_early_alloc(PTRS_PER_PMD * sizeof(pmd_t), addr);
+#ifdef CONFIG_KNOX_KAP
+		if (boot_mode_security)  rkp_do = 1;
 #else
-		pmd = rkp_ro_alloc();
+		rkp_do = 1;
 #endif
+		if( rkp_do ){
+			pmd = rkp_ro_alloc();
+		}else{
+			pmd = alloc(PTRS_PER_PMD * sizeof(pmd_t));
+		}
 #else	/* !CONFIG_TIMA_RKP */
-#ifdef CONFIG_SENTINEL
-		pmd = sentinel_early_alloc(PTRS_PER_PMD * sizeof(pmd_t), addr);
-#else
 		pmd = alloc(PTRS_PER_PMD * sizeof(pmd_t));
-#endif
 #endif
 		if (pud_sect(*pud)) {
 			/*
@@ -295,11 +290,7 @@ static inline bool use_1G_block(unsigned long addr, unsigned long next,
 	if (((addr | next | phys) & ~PUD_MASK) != 0)
 		return false;
 
-#ifdef CONFIG_TIMA_RKP
-	return false;
-#else
 	return true;
-#endif
 }
 
 static void alloc_init_pud(struct mm_struct *mm, pgd_t *pgd,
@@ -339,13 +330,8 @@ static void alloc_init_pud(struct mm_struct *mm, pgd_t *pgd,
 				flush_tlb_all();
 				if (pud_table(old_pud)) {
 					phys_addr_t table = __pa(pmd_offset(&old_pud, 0));
-#ifdef CONFIG_TIMA_RKP
-					if ((u64) table < (u64) __pa(_text) || (u64) table > (u64) __pa(_etext))
-						memblock_free(table, PAGE_SIZE);
-#else
 					if (!WARN_ON_ONCE(slab_is_available()))
 						memblock_free(table, PAGE_SIZE);
-#endif
 				}
 			}
 		} else {
@@ -359,7 +345,7 @@ static void alloc_init_pud(struct mm_struct *mm, pgd_t *pgd,
  * Create the page directory entries and any necessary page tables for the
  * mapping specified by 'md'.
  */
-static void __create_mapping(struct mm_struct *mm, pgd_t *pgd,
+static void  __create_mapping(struct mm_struct *mm, pgd_t *pgd,
 				    phys_addr_t phys, unsigned long virt,
 				    phys_addr_t size, pgprot_t prot,
 				    void *(*alloc)(unsigned long size))
@@ -406,7 +392,7 @@ void __init create_pgd_mapping(struct mm_struct *mm, phys_addr_t phys,
 	__create_mapping(mm, pgd_offset(mm, virt), phys, virt, size, prot,
 				late_alloc);
 }
-#ifdef CONFIG_DEBUG_RODATA
+
 static void create_mapping_late(phys_addr_t phys, unsigned long virt,
 				  phys_addr_t size, pgprot_t prot)
 {
@@ -420,7 +406,7 @@ static void create_mapping_late(phys_addr_t phys, unsigned long virt,
 				phys, virt, size, prot, late_alloc);
 }
 
-
+#ifdef CONFIG_DEBUG_RODATA
 static void __init __map_memblock(phys_addr_t start, phys_addr_t end)
 {
 	/*
@@ -465,14 +451,10 @@ static void __init map_mem(void)
 {
 	struct memblock_region *reg;
 	phys_addr_t limit;
-	phys_addr_t start;
-	phys_addr_t end;
 
 #ifdef CONFIG_TIMA_RKP
-#ifndef CONFIG_SENTINEL
-	phys_addr_t mid = 0xBF000000;
-#endif
-	int do_memset = 0;
+	phys_addr_t mid = 0x60000000;
+	int rkp_do = 0;
 #endif
 	/*
 	 * Temporarily limit the memblock range. We need to do this as
@@ -492,8 +474,8 @@ static void __init map_mem(void)
 
 	/* map all the memory banks */
 	for_each_memblock(memory, reg) {
-		start = reg->base;
-		end = start + reg->size;
+		phys_addr_t  start = reg->base;
+		phys_addr_t  end = start + reg->size;
 
 		if (start >= end)
 			break;
@@ -515,63 +497,31 @@ static void __init map_mem(void)
 #endif
 
 #ifdef CONFIG_TIMA_RKP
-	if (!do_memset) {
-#ifdef CONFIG_SENTINEL
-		__map_memblock(start, start + SENTINEL_MEMBLOCK_SIZE);
-		while (start < end) {
-			__map_memblock(start, start + PAGE_SIZE);
-			start += PAGE_SIZE;
-		}
-		memset((void*)RKP_RBUF_VA, 0, TIMA_ROBUF_SIZE);
+#ifdef CONFIG_KNOX_KAP
+	if (boot_mode_security)  rkp_do = 1;
 #else
+	rkp_do = 1;
+#endif
+	if( rkp_do ){
 		__map_memblock(start, mid);
 		memset((void*)RKP_RBUF_VA, 0, TIMA_ROBUF_SIZE);
 		__map_memblock(mid, end);
-#endif
-		do_memset = 1;
-	}
-	else {
-#ifdef CONFIG_SENTINEL
-		__map_memblock(start, start + SENTINEL_MEMBLOCK_SIZE);
-		while (start < end) {
-			__map_memblock(start, start + PAGE_SIZE);
-			start += PAGE_SIZE;
-		}
-#else
+	}else{
 		__map_memblock(start, end);
-#endif
 	}
 #else /* !CONFIG_TIMA_RKP */
-#ifdef CONFIG_SENTINEL
-		__map_memblock(start, start + SENTINEL_MEMBLOCK_SIZE);
-		while (start < end) {
-			__map_memblock(start, start + PAGE_SIZE);
-			start += PAGE_SIZE;
-		}
-#else
 		__map_memblock(start, end);
-#endif
 #endif
 	}
 
 #ifdef CONFIG_TIMA_RKP
-	vmm_extra_mem = early_alloc(0x600000);
-	if ((u64) _text & (~PMD_MASK)) {
-		start = (phys_addr_t) __pa(_text) & PMD_MASK;
-		end = (phys_addr_t) __pa(_text);
-		__map_memblock(start, end);
-		start = (phys_addr_t) __pa(_text);
-		end = (phys_addr_t) ALIGN(__pa(_text), PMD_SIZE);
-		__map_memblock(start, end);
+#ifdef CONFIG_KNOX_KAP
+	if (boot_mode_security) {
+#endif
+		vmm_extra_mem = early_alloc(0x600000);
+#ifdef CONFIG_KNOX_KAP
 	}
-	if ((u64) _etext & (~PMD_MASK)) {
-		start = (phys_addr_t) __pa(_etext) & PMD_MASK;
-		end = (phys_addr_t) __pa(_etext);
-		__map_memblock(start, end);
-		start = (phys_addr_t) __pa(_etext);
-		end = (phys_addr_t) ALIGN(__pa(_etext), PMD_SIZE);
-		__map_memblock(start, end);
-	}
+#endif
 #endif
 	/* Limit no longer required. */
 	memblock_set_current_limit(MEMBLOCK_ALLOC_ANYWHERE);
@@ -607,6 +557,7 @@ void mark_rodata_ro(void)
 				(unsigned long)__init_begin - (unsigned long)_stext,
 				PAGE_KERNEL_EXEC | PTE_RDONLY);
 }
+#endif
 
 void fixup_init(void)
 {
@@ -614,7 +565,6 @@ void fixup_init(void)
 			(unsigned long)__init_end - (unsigned long)__init_begin,
 			PAGE_KERNEL);
 }
-#endif
 
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
 static void __init *pgd_pgtable_alloc(unsigned long size)
@@ -667,14 +617,25 @@ core_initcall(map_entry_trampoline);
  */
 void __init paging_init(void)
 {
-	map_mem();
-
-	fixup_executable();
-
 #ifdef CONFIG_TIMA_RKP
-	empty_zero_page = rkp_ro_alloc();
+	int rkp_do = 0;
+#endif
+
+	map_mem();
+#ifdef CONFIG_TIMA_RKP
+#ifdef CONFIG_KNOX_KAP
+	if (boot_mode_security)
+#endif
+		rkp_do = 1;
+	if (rkp_do)
+		empty_zero_page = rkp_ro_alloc();
+	else
+		empty_zero_page = early_alloc(PAGE_SIZE);
+
 	BUG_ON(empty_zero_page == NULL);
 #endif
+	fixup_executable();
+
 	bootmem_init();
 
 	/*
@@ -684,6 +645,7 @@ void __init paging_init(void)
 	cpu_set_reserved_ttbr0();
 	local_flush_tlb_all();
 	cpu_set_default_tcr_t0sz();
+	set_memsize_kernel_type(MEMSIZE_KERNEL_OTHERS);
 }
 
 /*
@@ -770,18 +732,12 @@ void vmemmap_free(unsigned long start, unsigned long end)
 }
 #endif	/* CONFIG_SPARSEMEM_VMEMMAP */
 
-#ifdef CONFIG_TIMA_RKP
-extern pte_t bm_pte[];
-extern pmd_t bm_pmd[];
-extern pud_t bm_pud[];
-#else
 static pte_t bm_pte[PTRS_PER_PTE] __page_aligned_bss;
 #if CONFIG_PGTABLE_LEVELS > 2
 static pmd_t bm_pmd[PTRS_PER_PMD] __page_aligned_bss;
 #endif
 #if CONFIG_PGTABLE_LEVELS > 3
 static pud_t bm_pud[PTRS_PER_PUD] __page_aligned_bss;
-#endif
 #endif
 
 static inline pud_t * fixmap_pud(unsigned long addr)

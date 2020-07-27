@@ -39,6 +39,8 @@
 #include "include/sbd.h"
 #include "include/sipc5.h"
 
+#include "link_device_ect.h"
+
 #ifdef GROUP_MEM_TYPE
 
 enum mem_iface_type {
@@ -58,7 +60,7 @@ enum mem_iface_type {
 
 #ifdef GROUP_MEM_TYPE_SHMEM
 
-#ifdef CONFIG_MODEM_IF_LEGACY_QOS
+#ifdef CONFIG_MODEM_IF_QOS
 #define SHM_4M_RESERVED_SZ	4040
 #define SHM_4M_FMT_TX_BUFF_SZ	4096
 #define SHM_4M_FMT_RX_BUFF_SZ	4096
@@ -86,7 +88,7 @@ struct __packed shmem_4mb_phys_map {
 	u32 fmt_rx_head;
 	u32 fmt_rx_tail;
 
-#ifdef CONFIG_MODEM_IF_LEGACY_QOS
+#ifdef CONFIG_MODEM_IF_QOS
 	u32 raw_hprio_tx_head;
 	u32 raw_hprio_tx_tail;
 
@@ -105,7 +107,7 @@ struct __packed shmem_4mb_phys_map {
 	char fmt_tx_buff[SHM_4M_FMT_TX_BUFF_SZ];
 	char fmt_rx_buff[SHM_4M_FMT_RX_BUFF_SZ];
 
-#ifdef CONFIG_MODEM_IF_LEGACY_QOS
+#ifdef CONFIG_MODEM_IF_QOS
 	char raw_hprio_tx_buff[SHM_4M_RAW_HPRIO_TX_BUFF_SZ];
 	char raw_hprio_rx_buff[SHM_4M_RAW_HPRIO_RX_BUFF_SZ];
 #endif
@@ -167,6 +169,8 @@ struct mem_ipc_device {
 	struct sk_buff_head *skb_rxq;
 
 	unsigned int req_ack_cnt[MAX_DIR];
+	
+	spinlock_t tx_lock;
 };
 
 #endif
@@ -275,6 +279,12 @@ struct mem_link_device {
 	u8 __iomem *base;
 
 	/**
+	 * (u32 *) syscp_alive[0] = Magic Code, Version
+	 * (u32 *) syscp_alive[1] = CP Reserved Size
+	 * (u32 *) syscp_alive[2] = Shared Mem Size
+	 */
+	struct resource *syscp_info;
+	/**
 	 * Actual logical IPC devices (for IPC_FMT and IPC_RAW)
 	 */
 	struct mem_ipc_device ipc_dev[MAX_SIPC_MAP];
@@ -284,6 +294,7 @@ struct mem_link_device {
 	 */
 	u32 __iomem *magic;
 	u32 __iomem *access;
+	u32 __iomem *clk_table;
 	struct mem_ipc_device *dev[MAX_SIPC_MAP];
 
 	struct sbd_link_device sbd_link_dev;
@@ -310,12 +321,8 @@ struct mem_link_device {
 	struct work_struct pm_qos_work_cpu;
 	struct work_struct pm_qos_work_mif;
 	struct work_struct pm_qos_work_int;
-
-	unsigned int mbx_cp2ap_wakelock;	/* MBOX# for wakelock */
-	unsigned int irq_cp2ap_wakelock;	/* INTR# for wakelock */
-
-	unsigned int mbx_cp2ap_pcie_l1ss_disable;	/* MBOX# for pcie */
-	unsigned int irq_cp2ap_pcie_l1ss_disable;	/* INTR# for pcie */
+	
+	struct ect_table_data ect_table_data;	
 
 	unsigned int *ap_clk_table;
 	unsigned int ap_clk_cnt;
@@ -329,8 +336,6 @@ struct mem_link_device {
 	unsigned int mbx_cp2ap_status;	/* MBOX# for TX FLOWCTL */
 	unsigned int irq_cp2ap_status;	/* INTR# for TX FLOWCTL */
 	unsigned int tx_flowctrl_cmd;
-
-	struct wake_lock cp_wakelock;	/* Requested by CP */
 
 	/**
 	 * Member variables for TX & RX
@@ -439,6 +444,17 @@ struct mem_link_device {
 #define MEM_CRASH_MAGIC		0xDEADDEAD
 #define MEM_BOOT_MAGIC		0x424F4F54
 #define MEM_DUMP_MAGIC		0x44554D50
+
+struct clock_table_info {
+	char table_name[4];
+	u32 table_count;
+};
+
+struct clock_table {
+	char parser_version[4];
+	u32 total_table_count;
+	struct clock_table_info table_info[MAX_TABLE_COUNT];
+};
 
 #endif
 
@@ -636,7 +652,7 @@ static inline enum dev_format get_mmap_idx(enum sipc_ch_id ch,
 	if (sipc5_fmt_ch(ch))
 		return IPC_MAP_FMT;
 	else
-#ifdef CONFIG_MODEM_IF_LEGACY_QOS
+#ifdef CONFIG_MODEM_IF_QOS
 		return (skb->queue_mapping == 1) ?
 			IPC_MAP_HPRIO_RAW : IPC_MAP_NORM_RAW;
 #else

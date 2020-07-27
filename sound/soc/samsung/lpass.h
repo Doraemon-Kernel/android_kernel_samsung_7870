@@ -56,10 +56,6 @@
 #define LPASS_INTR_UART		(1 << 1)
 #define LPASS_INTR_SFR		(1 << 0)
 
-#define LPCLK_CTRLID_OFFLOAD	(1 << 0)
-#define LPCLK_CTRLID_LEGACY	(1 << 1)
-#define LPCLK_CTRLID_RECORD	(1 << 2)
-
 struct lpass_info {
 	spinlock_t		lock;
 	bool			valid;
@@ -92,9 +88,7 @@ struct lpass_info {
 	int			kfc_qos;
 	int			mif_qos;
 	int			int_qos;
-#ifdef CONFIG_SOC_EXYNOS8890
-	void			*sram_fw_back;
-#endif
+	int			idle_ip_index;
 };
 
 extern void __iomem *lpass_get_regs(void);
@@ -115,15 +109,7 @@ extern void lpass_retention_pad_reg(void);
 extern void lpass_release_pad_reg(void);
 extern void lpass_reset_clk_default(void);
 extern void lpass_init_clk_gate(void);
-extern void lpass_disable_mif_status(bool on);
-extern void lpass_mif_power_on(void);
 
-extern void lpass_update_lpclock(u32 ctrlid, bool idle);
-extern void lpass_update_lpclock_impl(struct device *dev, u32 ctrlid, bool idle);
-
-int lpass_get_dram_usage_count(void);
-void lpass_inc_dram_usage_count(void);
-void lpass_dec_dram_usage_count(void);
 extern void update_cp_available(bool);
 extern bool lpass_i2s_master_mode(void);
 #ifdef CONFIG_SND_SAMSUNG_SEIREN_OFFLOAD

@@ -86,12 +86,6 @@ void vbus_turn_on_ctrl(bool enable)
 	union power_supply_propval val;
 	int on = !!enable;
 	int ret = 0;
-	struct otg_notify *o_notify = get_otg_notify();
-
-	if ((o_notify && o_notify->unsupport_host) || !IS_ENABLED(CONFIG_USB_HOST_NOTIFY)) {
-		pr_err("%s: do not support OTG function.\n", __func__);
-		return;
-	}
 
 	pr_info("%s %d, enable=%d\n", __func__, __LINE__, enable);
 	psy_otg = get_power_supply_by_name("otg");
@@ -214,7 +208,6 @@ void process_pd(void *data, u8 plug_attach_done, u8 *pdic_attach, MSG_IRQ_STATUS
 	enum typec_pwr_opmode mode = TYPEC_PWR_MODE_USB;
 #endif
 
-
 	printk("%s\n",__func__);
 	rp_currentlvl = ((usbpd_data->func_state >> 27) & 0x3);
 	is_src = (usbpd_data->func_state & (0x1 << 25) ? 1 : 0);
@@ -233,7 +226,6 @@ void process_pd(void *data, u8 plug_attach_done, u8 *pdic_attach, MSG_IRQ_STATUS
 			ccic_event_work(usbpd_data, CCIC_NOTIFY_DEV_BATTERY, CCIC_NOTIFY_ID_ATTACH, 0, 0, 0);
 		}
 #endif
-
 		vbus_turn_on_ctrl(is_src);
 
 #if defined(CONFIG_DUAL_ROLE_USB_INTF)
@@ -245,7 +237,6 @@ void process_pd(void *data, u8 plug_attach_done, u8 *pdic_attach, MSG_IRQ_STATUS
 		mode = s2mm005_get_pd_support(usbpd_data);
 		typec_set_pwr_opmode(usbpd_data->port, mode);
 #endif
-
 #if defined(CONFIG_USB_HOST_NOTIFY)
 		if (is_src)
 			send_otg_notify(o_notify, NOTIFY_EVENT_POWER_SOURCE, 1);

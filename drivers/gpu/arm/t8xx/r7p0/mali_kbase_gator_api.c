@@ -16,7 +16,6 @@
 
 
 #include "mali_kbase.h"
-#include "mali_kbase_hw.h"
 #include "mali_kbase_mem_linux.h"
 #include "mali_kbase_gator_api.h"
 #include "mali_kbase_gator_hwcnt_names.h"
@@ -149,8 +148,10 @@ struct kbase_gator_hwcnt_handles *kbase_gator_hwcnt_init(struct kbase_gator_hwcn
 	in_out_info->nr_core_groups = hand->kbdev->gpu_props.num_core_groups;
 	in_out_info->gpu_id = hand->kbdev->gpu_props.props.core_props.product_id;
 
-	/* If we are using a v4 device (Mali-T6xx or Mali-T72x) */
-	if (kbase_hw_has_feature(hand->kbdev, BASE_HW_FEATURE_V4)) {
+	/* If we are using a Mali-T6xx or Mali-T72x device */
+	if (in_out_info->gpu_id == GPU_ID_PI_T60X ||
+	    in_out_info->gpu_id == GPU_ID_PI_T62X ||
+	    in_out_info->gpu_id == GPU_ID_PI_T72X) {
 		uint32_t cg, j;
 		uint64_t core_mask;
 
@@ -187,8 +188,12 @@ struct kbase_gator_hwcnt_handles *kbase_gator_hwcnt_init(struct kbase_gator_hwcn
 			else
 				in_out_info->hwc_layout[i++] = RESERVED_BLOCK;
 		}
-	/* If we are using any other device */
-	} else {
+	/* If we are using a Mali-T76x device */
+	} else if (
+			(in_out_info->gpu_id == GPU_ID_PI_TFRX) ||
+			(in_out_info->gpu_id == GPU_ID_PI_T86X) ||
+			(in_out_info->gpu_id == GPU_ID_PI_T76X)
+			) {
 		uint32_t nr_l2, nr_sc, j;
 		uint64_t core_mask;
 
@@ -198,8 +203,7 @@ struct kbase_gator_hwcnt_handles *kbase_gator_hwcnt_init(struct kbase_gator_hwcn
 
 		nr_sc = hand->kbdev->gpu_props.props.coherency_info.group[0].num_cores;
 
-		/* The job manager and tiler sets of counters
-		 * are always present */
+		/* For Mali-T76x, the job manager and tiler sets of counters are always present */
 		in_out_info->hwc_layout = kmalloc(sizeof(enum hwc_type) * (2 + nr_sc + nr_l2), GFP_KERNEL);
 
 		if (!in_out_info->hwc_layout)

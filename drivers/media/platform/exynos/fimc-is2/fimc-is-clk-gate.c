@@ -147,7 +147,7 @@ int fimc_is_clk_gate_set(struct fimc_is_core *core,
 		if ((gate_ctrl->msk_cnt[group_id]) == 0)
 			clear_bit(group_id, &gate_ctrl->msk_state);
 		/* if there's some processing group shot, don't clock off */
-		if (test_bit(group_id, &gate_ctrl->msk_state))
+		if (test_bit_variables(group_id, &gate_ctrl->msk_state))
 			goto exit;
 		gate_info->groups[group_id].mask_clk_off_self_mod =
 			gate_info->groups[group_id].mask_clk_off_self_org;

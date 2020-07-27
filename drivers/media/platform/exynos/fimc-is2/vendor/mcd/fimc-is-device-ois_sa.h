@@ -30,5 +30,3 @@ int fimc_is_ois_self_test_impl(struct fimc_is_core *core);
 bool fimc_is_ois_diff_test_impl(struct fimc_is_core *core, int *x_diff, int *y_diff);
 void fimc_is_ois_fw_update_impl(struct fimc_is_core *core);
 bool fimc_is_ois_check_fw_impl(struct fimc_is_core *core);
-bool fimc_is_ois_auto_test_impl(struct fimc_is_core *core,
-		            int threshold, bool *x_result, bool *y_result, int *sin_x, int *sin_y);

@@ -255,6 +255,10 @@ int sensor_dw9804_actuator_init(struct v4l2_subdev *subdev, u32 val)
 	struct fimc_is_caldata_list_dw9804 *cal_data = NULL;
 	struct i2c_client *client = NULL;
 	long cal_addr;
+#ifdef USE_CAMERA_HW_BIG_DATA
+	struct fimc_is_device_sensor *device = NULL;
+	struct cam_hw_param *hw_param = NULL;
+#endif
 #ifdef DEBUG_ACTUATOR_TIME
 	struct timeval st, end;
 	do_gettimeofday(&st);
@@ -278,19 +282,30 @@ int sensor_dw9804_actuator_init(struct v4l2_subdev *subdev, u32 val)
 	}
 
 	/* EEPROM AF calData address */
-	cal_addr = gPtr_lib_support.kvaddr + FIMC_IS_REAR_CALDATA_OFFSET + EEPROM_OEM_BASE;
+	cal_addr = gPtr_lib_support.minfo->kvaddr_rear_cal + EEPROM_OEM_BASE;
 	cal_data = (struct fimc_is_caldata_list_dw9804 *)(cal_addr);
 
 	/* Read into EEPROM data or default setting */
 	ret = sensor_dw9804_init(client, cal_data);
-	if (ret < 0)
+	if (ret < 0) {
+#ifdef USE_CAMERA_HW_BIG_DATA
+		device = v4l2_get_subdev_hostdata(subdev);
+		if (device) {
+			if (device->position == SENSOR_POSITION_REAR) {
+				fimc_is_sec_get_rear_hw_param(&hw_param);
+			} else if (device->position == SENSOR_POSITION_FRONT) {
+				fimc_is_sec_get_front_hw_param(&hw_param);
+			}
+		}
+		if (hw_param)
+			hw_param->i2c_af_err_cnt++;
+#endif
 		goto p_err;
+	}
 
 	ret = sensor_dw9804_init_position(client, actuator);
 	if (ret < 0)
 		goto p_err;
-
-
 
 #ifdef DEBUG_ACTUATOR_TIME
 	do_gettimeofday(&end);
@@ -492,16 +507,16 @@ int sensor_dw9804_actuator_probe(struct i2c_client *client,
 	probe_info("%s sensor_id %d\n", __func__, sensor_id);
 
 	device = &core->sensor[sensor_id];
-	if (!device) {
-		probe_err("sensor peri is net yet probed");
-		return -EPROBE_DEFER;
+	if (!test_bit(FIMC_IS_SENSOR_PROBE, &device->state)) {
+		err("sensor device is not yet probed");
+		ret = -EPROBE_DEFER;
+		goto p_err;
 	}
 
-	sensor_peri = find_peri_by_act_id(device, ACTUATOR_NAME_DWXXXX);
+	sensor_peri = find_peri_by_act_id(device, ACTUATOR_NAME_DW9804);
 	if (!sensor_peri) {
-		err("sensor peri is NULL");
-		ret = -ENOMEM;
-		goto p_err;
+		probe_info("sensor peri is net yet probed");
+		return -EPROBE_DEFER;
 	}
 
 	actuator = &sensor_peri->actuator;
@@ -520,7 +535,7 @@ int sensor_dw9804_actuator_probe(struct i2c_client *client,
 	sensor_peri->subdev_actuator = subdev_actuator;
 
 	/* This name must is match to sensor_open_extended actuator name */
-	actuator->id = ACTUATOR_NAME_DWXXXX;
+	actuator->id = ACTUATOR_NAME_DW9804;
 	actuator->subdev = subdev_actuator;
 	actuator->device = sensor_id;
 	actuator->client = client;
@@ -563,6 +578,7 @@ MODULE_DEVICE_TABLE(of, exynos_fimc_is_dw9804_match);
 
 static const struct i2c_device_id actuator_dw9804_idt[] = {
 	{ ACTUATOR_NAME, 0 },
+	{},
 };
 
 static struct i2c_driver actuator_dw9804_driver = {

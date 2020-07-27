@@ -25,7 +25,8 @@ const struct fimc_is_hw_ip_ops fimc_is_hw_3aa_ops = {
 	.load_setfile		= fimc_is_hw_3aa_load_setfile,
 	.apply_setfile		= fimc_is_hw_3aa_apply_setfile,
 	.delete_setfile		= fimc_is_hw_3aa_delete_setfile,
-	.size_dump		= fimc_is_hw_3aa_size_dump
+	.size_dump		= fimc_is_hw_3aa_size_dump,
+	.clk_gate		= fimc_is_hardware_clk_gate
 };
 
 int fimc_is_hw_3aa_probe(struct fimc_is_hw_ip *hw_ip, struct fimc_is_interface *itf,
@@ -42,13 +43,13 @@ int fimc_is_hw_3aa_probe(struct fimc_is_hw_ip *hw_ip, struct fimc_is_interface *
 	hw_ip->ops  = &fimc_is_hw_3aa_ops;
 	hw_ip->itf  = itf;
 	hw_ip->itfc = itfc;
-	hw_ip->fcount = 0;
+	atomic_set(&hw_ip->fcount, 0);
 	hw_ip->internal_fcount = 0;
 	hw_ip->is_leader = true;
-	atomic_set(&hw_ip->Vvalid, 0);
-	atomic_set(&hw_ip->otf_start, 0);
-	atomic_set(&hw_ip->ref_count, 0);
-	init_waitqueue_head(&hw_ip->wait_queue);
+	atomic_set(&hw_ip->status.Vvalid, V_BLANK);
+	atomic_set(&hw_ip->status.otf_start, 0);
+	atomic_set(&hw_ip->rsccount, 0);
+	init_waitqueue_head(&hw_ip->status.wait_queue);
 
 	clear_bit(HW_OPEN, &hw_ip->state);
 	clear_bit(HW_INIT, &hw_ip->state);
@@ -96,12 +97,18 @@ int fimc_is_hw_3aa_init(struct fimc_is_hw_ip *hw_ip, struct fimc_is_group *group
 	hw_ip->group[instance] = group;
 
 	if (hw_3aa->lib_func == NULL) {
+#ifdef ENABLE_FPSIMD_FOR_USER
+		fpsimd_get();
 		ret = get_lib_func(LIB_FUNC_3AA, (void **)&hw_3aa->lib_func);
-		dbg_hw("lib_interface_func is set (%d)\n", hw_ip->id);
+		fpsimd_put();
+#else
+		ret = get_lib_func(LIB_FUNC_3AA, (void **)&hw_3aa->lib_func);
+#endif
+		info_hw("[%d][ID:%d]get_lib_func is set\n", instance, hw_ip->id);
 	}
 
 	if (hw_3aa->lib_func == NULL) {
-		err_hw("func_3aa(null) (%d)", hw_ip->id);
+		err_hw("[%d][ID:%d]hw_3aa->lib_func(null)", instance, hw_ip->id);
 		fimc_is_load_clear();
 		return -EINVAL;
 	}
@@ -142,6 +149,7 @@ int fimc_is_hw_3aa_object_close(struct fimc_is_hw_ip *hw_ip, u32 instance)
 	struct fimc_is_hw_3aa *hw_3aa;
 
 	BUG_ON(!hw_ip);
+	BUG_ON(!hw_ip->priv_info);
 
 	hw_3aa = (struct fimc_is_hw_3aa *)hw_ip->priv_info;
 
@@ -162,22 +170,21 @@ int fimc_is_hw_3aa_close(struct fimc_is_hw_ip *hw_ip, u32 instance)
 	if (!test_bit(HW_OPEN, &hw_ip->state))
 		return 0;
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_3aa = (struct fimc_is_hw_3aa *)hw_ip->priv_info;
+	BUG_ON(!hw_3aa->lib_support);
 
 	for (i = 0; i < FIMC_IS_MAX_TASK_WORKER; i++) {
-		if (hw_3aa->lib_support->task_taaisp[i].task == NULL) {
-			err_hw("task is null");
-		} else {
-			if (hw_3aa->lib_support->task_taaisp[i].task->state <= 0) {
-				warn_hw("kthread state(%ld), exit_code(%d), exit_state(%d)\n",
+		if (hw_3aa->lib_support->task_taaisp[i].task) {
+			dbg_hw("kthread state(%ld), exit_code(%d), exit_state(%d)",
 					hw_3aa->lib_support->task_taaisp[i].task->state,
 					hw_3aa->lib_support->task_taaisp[i].task->exit_code,
 					hw_3aa->lib_support->task_taaisp[i].task->exit_state);
 
-				ret = kthread_stop(hw_3aa->lib_support->task_taaisp[i].task);
-				if (ret)
-					err_hw("kthread_stop fail (%d)", ret);
-			}
+			ret = kthread_stop(hw_3aa->lib_support->task_taaisp[i].task);
+			if (ret)
+				err_hw("kthread_stop fail (%d)", ret);
+			hw_3aa->lib_support->task_taaisp[i].task = NULL;
 		}
 	}
 
@@ -185,12 +192,12 @@ int fimc_is_hw_3aa_close(struct fimc_is_hw_ip *hw_ip, u32 instance)
 	frame_manager_close(hw_ip->framemgr);
 	frame_manager_close(hw_ip->framemgr_late);
 
-	info_hw("[%d]close (%d)(%d)\n", instance, hw_ip->id, atomic_read(&hw_ip->ref_count));
+	info_hw("[%d]close (%d)(%d)\n", instance, hw_ip->id, atomic_read(&hw_ip->rsccount));
 
 	return ret;
 }
 
-int fimc_is_hw_3aa_enable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_map)
+int fimc_is_hw_3aa_mode_change(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_map)
 {
 	int ret = 0;
 	struct fimc_is_hw_3aa *hw_3aa;
@@ -198,9 +205,7 @@ int fimc_is_hw_3aa_enable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_ma
 	struct fimc_is_framemgr *framemgr;
 	struct camera2_shot *shot = NULL;
 
-	BUG_ON(!hw_ip);
-
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
 	if (!test_bit(HW_INIT, &hw_ip->state)) {
@@ -208,9 +213,15 @@ int fimc_is_hw_3aa_enable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_ma
 		return -EINVAL;
 	}
 
+	info_hw("[%d][ID:%d]mode_change for sensor\n", instance, hw_ip->id);
+
+	BUG_ON(!hw_ip->group[instance]);
+
 	if (test_bit(FIMC_IS_GROUP_OTF_INPUT, &hw_ip->group[instance]->state)) {
 		/* For sensor info initialize for mode change */
 		framemgr = hw_ip->framemgr;
+		BUG_ON(!framemgr);
+
 		framemgr_e_barrier(framemgr, 0);
 		frame = peek_frame(framemgr, FS_PROCESS);
 		framemgr_x_barrier(framemgr, 0);
@@ -221,6 +232,7 @@ int fimc_is_hw_3aa_enable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_ma
 				instance, framemgr->queued_count[FS_PROCESS]);
 		}
 
+		BUG_ON(!hw_ip->priv_info);
 		hw_3aa = (struct fimc_is_hw_3aa *)hw_ip->priv_info;
 		if (shot) {
 			ret = fimc_is_lib_isp_sensor_info_mode_chg(&hw_3aa->lib[instance],
@@ -230,6 +242,23 @@ int fimc_is_hw_3aa_enable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_ma
 					instance, hw_ip->id);
 			}
 		}
+	}
+
+	return ret;
+}
+
+int fimc_is_hw_3aa_enable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_map)
+{
+	int ret = 0;
+
+	BUG_ON(!hw_ip);
+
+	if (!test_bit_variables(hw_ip->id, &hw_map))
+		return 0;
+
+	if (!test_bit(HW_INIT, &hw_ip->state)) {
+		err_hw("[%d]not initialized!! (%d)", instance, hw_ip->id);
+		return -EINVAL;
 	}
 
 	set_bit(HW_RUN, &hw_ip->state);
@@ -243,19 +272,22 @@ int fimc_is_hw_3aa_disable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_m
 	u32 timetowait;
 	struct fimc_is_hw_3aa *hw_3aa;
 	struct taa_param_set *param_set;
+	u32 i;
 
 	BUG_ON(!hw_ip);
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
-	info_hw("[%d][ID:%d]stream_off \n", instance, hw_ip->id);
+	info_hw("[%d][ID:%d]3aa_disable: Vvalid(%d)\n", instance, hw_ip->id,
+		atomic_read(&hw_ip->status.Vvalid));
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_3aa = (struct fimc_is_hw_3aa *)hw_ip->priv_info;
 	param_set = &hw_3aa->param_set[instance];
 
-	timetowait = wait_event_timeout(hw_ip->wait_queue,
-		!atomic_read(&hw_ip->Vvalid),
+	timetowait = wait_event_timeout(hw_ip->status.wait_queue,
+		!atomic_read(&hw_ip->status.Vvalid),
 		FIMC_IS_HW_STOP_TIMEOUT);
 
 	if (!timetowait) {
@@ -266,6 +298,15 @@ int fimc_is_hw_3aa_disable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_m
 
 	param_set->fcount = 0;
 	if (test_bit(HW_RUN, &hw_ip->state)) {
+		/* TODO: need to divide each task index */
+		for (i = 0; i < FIMC_IS_MAX_TASK_WORKER; i++) {
+			BUG_ON(!hw_3aa->lib_support);
+			if (hw_3aa->lib_support->task_taaisp[i].task == NULL)
+				err_hw("task is null");
+			else
+				flush_kthread_worker(&hw_3aa->lib_support->task_taaisp[i].worker);
+		}
+
 		fimc_is_lib_isp_stop(hw_ip, &hw_3aa->lib[instance], instance);
 		clear_bit(HW_RUN, &hw_ip->state);
 	} else {
@@ -297,14 +338,19 @@ int fimc_is_hw_3aa_shot(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame
 		return -EINVAL;
 	}
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
-	set_bit(hw_ip->id, &frame->core_flag);
+	if ((!fimc_is_hw_frame_done_with_dma())
+		|| (!test_bit(ENTRY_3AC, &frame->out_flag) && !test_bit(ENTRY_3AP, &frame->out_flag)))
+		set_bit(hw_ip->id, &frame->core_flag);
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_3aa = (struct fimc_is_hw_3aa *)hw_ip->priv_info;
 	param_set = &hw_3aa->param_set[frame->instance];
 	region = hw_ip->region[frame->instance];
+	BUG_ON(!region);
+
 	param = &region->parameter.taa;
 
 	if (frame->type == SHOT_TYPE_INTERNAL) {
@@ -318,6 +364,7 @@ int fimc_is_hw_3aa_shot(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame
 		hw_ip->internal_fcount = frame->fcount;
 		goto config;
 	} else {
+		BUG_ON(!frame->shot);
 		/* per-frame control
 		 * check & update size from region */
 		lindex = frame->shot->ctl.vendor_entry.lowIndexParam;
@@ -325,17 +372,8 @@ int fimc_is_hw_3aa_shot(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame
 
 		if (hw_ip->internal_fcount != 0) {
 			hw_ip->internal_fcount = 0;
-
-			if (param->otf_input.cmd != param_set->otf_input.cmd)
-				lindex |= LOWBIT_OF(PARAM_3AA_OTF_INPUT);
-			if (param->vdma1_input.cmd != param_set->dma_input.cmd)
-				lindex |= LOWBIT_OF(PARAM_3AA_VDMA1_INPUT);
-			if (param->otf_output.cmd != param_set->otf_output.cmd)
-				lindex |= LOWBIT_OF(PARAM_3AA_OTF_OUTPUT);
-			if (param->vdma4_output.cmd != param_set->dma_output_before_bds.cmd)
-				lindex |= LOWBIT_OF(PARAM_3AA_VDMA4_OUTPUT);
-			if (param->vdma2_output.cmd != param_set->dma_output_after_bds.cmd)
-				lindex |= LOWBIT_OF(PARAM_3AA_VDMA2_OUTPUT);
+			param_set->dma_output_before_bds.cmd  = param->vdma4_output.cmd;
+			param_set->dma_output_after_bds.cmd  = param->vdma2_output.cmd;
 		}
 	}
 
@@ -366,7 +404,6 @@ int fimc_is_hw_3aa_shot(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame
 
 	if (param_set->dma_output_after_bds.cmd != DMA_OUTPUT_COMMAND_DISABLE) {
 #if defined(SOC_3AAISP)
-		/* handle vdma2 as 3ac node */
 		param_set->output_dva_after_bds = frame->shot->uctl.scalerUd.txcTargetAddress[0];
 		if (frame->shot->uctl.scalerUd.txcTargetAddress[0] == 0) {
 			info_hw("[F:%d]txcTargetAddress[0] is zero", frame->fcount);
@@ -386,7 +423,7 @@ config:
 	param_set->fcount = frame->fcount;
 
 	if (frame->type == SHOT_TYPE_INTERNAL) {
-		fimc_is_log_write("[%d]3aa_shot [T:%d][R:%d][F:%d][IN:0x%x] [%d][C:0x%x]" \
+		fimc_is_log_write("[@][DRV][%d]3aa_shot [T:%d][R:%d][F:%d][IN:0x%x] [%d][C:0x%x]" \
 			" [%d][P:0x%x]\n",
 			param_set->instance_id, frame->type, param_set->reprocessing,
 			param_set->fcount, param_set->input_dva,
@@ -432,12 +469,8 @@ int fimc_is_hw_3aa_set_param(struct fimc_is_hw_ip *hw_ip, struct is_region *regi
 	struct taa_param_set *param_set;
 
 	BUG_ON(!hw_ip);
-	BUG_ON(!region);
 
-	hw_3aa = (struct fimc_is_hw_3aa *)hw_ip->priv_info;
-	param_set = &hw_3aa->param_set[instance];
-
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
 	if (!test_bit(HW_INIT, &hw_ip->state)) {
@@ -445,11 +478,20 @@ int fimc_is_hw_3aa_set_param(struct fimc_is_hw_ip *hw_ip, struct is_region *regi
 		return -EINVAL;
 	}
 
+	BUG_ON(!hw_ip->priv_info);
+
+	hw_3aa = (struct fimc_is_hw_3aa *)hw_ip->priv_info;
+	param_set = &hw_3aa->param_set[instance];
+
 	hw_ip->region[instance] = region;
 	hw_ip->lindex[instance] = lindex;
 	hw_ip->hindex[instance] = hindex;
 
 	fimc_is_hw_3aa_update_param(hw_ip, region, param_set, lindex, hindex, instance);
+
+	ret = fimc_is_lib_isp_set_param(hw_ip, &hw_3aa->lib[instance], param_set);
+	if (ret)
+		err_hw("[%d] set_param fail", instance);
 
 	return ret;
 }
@@ -463,6 +505,7 @@ void fimc_is_hw_3aa_update_param(struct fimc_is_hw_ip *hw_ip, struct is_region *
 	BUG_ON(!param_set);
 
 	param = &region->parameter.taa;
+	param_set->instance_id = instance;
 
 	if (lindex & LOWBIT_OF(PARAM_SENSOR_CONFIG)) {
 		memcpy(&param_set->sensor_config, &region->parameter.sensor.config,
@@ -503,9 +546,13 @@ int fimc_is_hw_3aa_get_meta(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *f
 	int ret = 0;
 	struct fimc_is_hw_3aa *hw_3aa;
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	BUG_ON(!hw_ip);
+	BUG_ON(!frame);
+
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_3aa = (struct fimc_is_hw_3aa *)hw_ip->priv_info;
 
 	ret = fimc_is_lib_isp_get_meta(hw_ip, &hw_3aa->lib[frame->instance], frame);
@@ -524,6 +571,7 @@ int fimc_is_hw_3aa_frame_ndone(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame
 	int ret = 0;
 
 	BUG_ON(!hw_ip);
+	BUG_ON(!frame);
 
 	switch (hw_ip->id) {
 	case DEV_HW_3AA0:
@@ -579,7 +627,7 @@ int fimc_is_hw_3aa_load_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 	else if ((hw_ip->id == DEV_HW_3AA1) && test_bit(DEV_HW_3AA0, &hw_map))
 		return 0;
 
-	if (!test_bit(hw_ip->id, &hw_map)) {
+	if (!test_bit_variables(hw_ip->id, &hw_map)) {
 		dbg_hw("[%d]%s: hw_map(0x%lx)\n", instance, __func__, hw_map);
 		return 0;
 	}
@@ -603,7 +651,9 @@ int fimc_is_hw_3aa_load_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 		break;
 	}
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_3aa = (struct fimc_is_hw_3aa *)hw_ip->priv_info;
+
 	addr = hw_ip->setfile_info.table[index].addr;
 	size = hw_ip->setfile_info.table[index].size;
 	ret = fimc_is_lib_isp_create_tune_set(&hw_3aa->lib[instance],
@@ -621,6 +671,7 @@ int fimc_is_hw_3aa_apply_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 	ulong cal_addr = 0;
 	u32 setfile_index = 0;
 	int ret = 0;
+	int cal_version_index = 0x20;
 
 	BUG_ON(!hw_ip);
 
@@ -630,7 +681,7 @@ int fimc_is_hw_3aa_apply_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 	else if ((hw_ip->id == DEV_HW_3AA1) && test_bit(DEV_HW_3AA0, &hw_map))
 		return 0;
 
-	if (!test_bit(hw_ip->id, &hw_map)) {
+	if (!test_bit_variables(hw_ip->id, &hw_map)) {
 		dbg_hw("[%d]%s: hw_map(0x%lx)\n", instance, __func__, hw_map);
 		return 0;
 	}
@@ -647,17 +698,41 @@ int fimc_is_hw_3aa_apply_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 	info_hw("[%d][ID:%d] setfile (%d) scenario (%d)\n", instance, hw_ip->id,
 		setfile_index, index);
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_3aa = (struct fimc_is_hw_3aa *)hw_ip->priv_info;
+
 	ret = fimc_is_lib_isp_apply_tune_set(&hw_3aa->lib[instance], setfile_index, instance);
 
-	if (hw_ip->sensor_position == SENSOR_POSITION_REAR)
-		cal_addr = hw_3aa->lib_support->kvaddr + FIMC_IS_REAR_CALDATA_OFFSET;
-	else if (hw_ip->sensor_position == SENSOR_POSITION_FRONT)
-		cal_addr = hw_3aa->lib_support->kvaddr + FIMC_IS_FRONT_CALDATA_OFFSET;
+	if (hw_ip->hardware->sensor_position[instance] == SENSOR_POSITION_REAR) {
+		cal_addr = hw_3aa->lib_support->minfo->kvaddr_rear_cal;
+#if defined (EEP_HEADER_VERSION_START_ADDR)
+		cal_version_index = EEP_HEADER_VERSION_START_ADDR;
+#endif /*EEP_HEADER_VERSION_START_ADDR*/
+	}
+	else if (hw_ip->hardware->sensor_position[instance] == SENSOR_POSITION_REAR2) {
+		cal_addr = hw_3aa->lib_support->minfo->kvaddr_rear2_cal;
+#if defined (EEP_HEADER_VERSION_START_ADDR_REAR2)
+		cal_version_index = EEP_HEADER_VERSION_START_ADDR_REAR2;
+#endif /*EEP_HEADER_VERSION_START_ADDR_REAR2*/
+	}
+	else if (hw_ip->hardware->sensor_position[instance] == SENSOR_POSITION_REAR3) {
+		cal_addr = hw_3aa->lib_support->minfo->kvaddr_rear3_cal;
+#if defined (EEP_HEADER_VERSION_START_ADDR_REAR3)
+		cal_version_index = EEP_HEADER_VERSION_START_ADDR_REAR3;
+#endif /*EEP_HEADER_VERSION_START_ADDR_REAR3*/
+	}
+	else if (hw_ip->hardware->sensor_position[instance] == SENSOR_POSITION_FRONT) {
+		cal_addr = hw_3aa->lib_support->minfo->kvaddr_front_cal;
+#if defined (OTP_HEADER_VERSION_START_ADDR_FRONT)
+		cal_version_index = OTP_HEADER_VERSION_START_ADDR_FRONT;
+#endif /*OTP_HEADER_VERSION_START_ADDR_FRONT*/
+	}
 	else
 		return 0;
 
-	ret = fimc_is_lib_isp_load_cal_data(&hw_3aa->lib[instance], instance, cal_addr);
+	info_hw("[%d][ID:%d] load cal data, position: %d, addr: 0x%lx \n", instance, hw_ip->id,
+				hw_ip->hardware->sensor_position[instance], cal_addr);
+	ret = fimc_is_lib_isp_load_cal_data(&hw_3aa->lib[instance], instance, cal_addr, cal_version_index);
 
 	return ret;
 }
@@ -676,7 +751,7 @@ int fimc_is_hw_3aa_delete_setfile(struct fimc_is_hw_ip *hw_ip, u32 instance,
 	else if ((hw_ip->id == DEV_HW_3AA1) && test_bit(DEV_HW_3AA0, &hw_map))
 		return 0;
 
-	if (!test_bit(hw_ip->id, &hw_map)) {
+	if (!test_bit_variables(hw_ip->id, &hw_map)) {
 		dbg_hw("[%d]%s: hw_map(0x%lx)\n", instance, __func__, hw_map);
 		return 0;
 	}
@@ -684,7 +759,9 @@ int fimc_is_hw_3aa_delete_setfile(struct fimc_is_hw_ip *hw_ip, u32 instance,
 	if (hw_ip->setfile_info.num == 0)
 		return 0;
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_3aa = (struct fimc_is_hw_3aa *)hw_ip->priv_info;
+
 	for (i = 0; i < hw_ip->setfile_info.num; i++)
 		ret = fimc_is_lib_isp_delete_tune_set(&hw_3aa->lib[instance],
 				(u32)i, instance);
@@ -700,9 +777,10 @@ void fimc_is_hw_3aa_size_dump(struct fimc_is_hw_ip *hw_ip)
 
 	fimc_is_isp_get_bcrop1_size(hw_ip->regs, &bcrop_w, &bcrop_h);
 
-	info_hw("[3AA]=SIZE=====================================\n");
-	info_hw("[BCROP1]w(%d), h(%d)\n", bcrop_w, bcrop_h);
-	info_hw("[3AA]==========================================\n");
+	dbg_hw("[3AA]=SIZE=====================================\n"
+		"[BCROP1]w(%d), h(%d)\n"
+		"[3AA]==========================================\n",
+		 bcrop_w, bcrop_h);
 }
 
 void fimc_is_hw_3aa_dump(void)

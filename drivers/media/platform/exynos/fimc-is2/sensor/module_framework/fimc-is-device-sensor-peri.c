@@ -114,10 +114,90 @@ struct fimc_is_device_sensor_peri *find_peri_by_flash_id(struct fimc_is_device_s
 	return sensor_peri;
 }
 
+struct fimc_is_device_sensor_peri *find_peri_by_preprocessor_id(struct fimc_is_device_sensor *device,
+							u32 preprocessor)
+{
+	u32 mindex = 0, mmax = 0;
+	struct fimc_is_module_enum *module_enum = NULL;
+	struct fimc_is_resourcemgr *resourcemgr = NULL;
+	struct fimc_is_device_sensor_peri *sensor_peri = NULL;
+
+	BUG_ON(!device);
+	resourcemgr = device->resourcemgr;
+	module_enum = device->module_enum;
+	BUG_ON(!module_enum);
+
+	if (unlikely(resourcemgr == NULL))
+		return NULL;
+
+	mmax = atomic_read(&resourcemgr->rsccount_module);
+	for (mindex = 0; mindex < mmax; mindex++) {
+		if (module_enum[mindex].ext.preprocessor_con.product_name == preprocessor) {
+			sensor_peri = (struct fimc_is_device_sensor_peri *)module_enum[mindex].private_data;
+			break;
+		}
+	}
+
+	if (mindex >= mmax) {
+		merr("preprocessor(%d) is not found", device, preprocessor);
+		printk("preprocessor is not found");
+	}
+
+	return sensor_peri;
+}
+
+static void fimc_is_sensor_init_expecting_dm(struct fimc_is_device_sensor *device,
+	struct fimc_is_cis *cis)
+{
+	int i = 0;
+	u32 m_fcount;
+	u32 sensitivity;
+	u64 exposureTime;
+	struct fimc_is_sensor_ctl *module_ctl;
+	camera2_sensor_ctl_t *sensor_ctrl = NULL;
+	camera2_sensor_uctl_t *sensor_uctrl = NULL;
+
+	if (test_bit(FIMC_IS_SENSOR_FRONT_START, &device->state)) {
+		mwarn("sensor is already stream on", device);
+		goto p_err;
+	}
+
+	m_fcount = (device->fcount + 1) % EXPECT_DM_NUM;
+
+	module_ctl = &cis->sensor_ctls[m_fcount];
+	sensor_ctrl = &module_ctl->cur_cam20_sensor_ctrl;
+	sensor_uctrl = &module_ctl->cur_cam20_sensor_udctrl;
+
+	sensitivity = sensor_uctrl->sensitivity;
+	exposureTime = sensor_uctrl->exposureTime;
+
+	if (module_ctl->valid_sensor_ctrl == true) {
+		if (sensor_ctrl->sensitivity)
+			sensitivity = sensor_ctrl->sensitivity;
+
+		if (sensor_ctrl->exposureTime)
+			exposureTime = sensor_ctrl->exposureTime;
+	}
+
+	for (i = m_fcount + 2; i < m_fcount + EXPECT_DM_NUM; i++) {
+		cis->expecting_sensor_dm[i % EXPECT_DM_NUM].sensitivity = sensitivity;
+		cis->expecting_sensor_dm[i % EXPECT_DM_NUM].exposureTime = exposureTime;
+	}
+
+p_err:
+	return;
+}
+
 int fimc_is_sensor_wait_streamoff(struct fimc_is_device_sensor *device)
 {
 	int ret = 0;
 	struct fimc_is_device_csi *csi;
+	struct fimc_is_module_enum *module;
+	struct fimc_is_device_sensor_peri *sensor_peri;
+	struct fimc_is_cis cis;
+	struct v4l2_subdev *subdev_module;
+	struct v4l2_subdev *subdev_cis;
+
 	u32 timeout = 500;
 	u32 time = 0;
 	u32 sleep_time = 2;
@@ -132,6 +212,33 @@ int fimc_is_sensor_wait_streamoff(struct fimc_is_device_sensor *device)
 		goto p_err;
 	}
 
+	subdev_module = device->subdev_module;
+	if (!subdev_module) {
+		err("subdev_module is NULL");
+		return -EINVAL;
+	}
+
+	module = (struct fimc_is_module_enum *)v4l2_get_subdevdata(subdev_module);
+	if (!module) {
+		err("module is NULL");
+		return -EINVAL;
+	}
+
+	sensor_peri = (struct fimc_is_device_sensor_peri *)module->private_data;
+	if (!sensor_peri) {
+		err("sensor_peri is NULL");
+		return -EINVAL;
+	}
+
+	subdev_cis = sensor_peri->subdev_cis;
+	if (!subdev_cis) {
+		err("subdev_cis is NULL");
+		ret = -EINVAL;
+		goto p_err;
+	}
+
+	cis = sensor_peri->cis;
+
 	timeout = (1000 / csi->image.framerate) / sleep_time + 1;
 
 	msleep(sleep_time);
@@ -140,13 +247,21 @@ int fimc_is_sensor_wait_streamoff(struct fimc_is_device_sensor *device)
 			break;
 
 		time++;
-		dbg_flash("waiting stream off (%d), cur fps(%d)\n", time, csi->image.framerate);
+		dbg_sensor("waiting stream off (%d), cur fps(%d)\n", time, csi->image.framerate);
 		msleep(sleep_time);
 	}
 
 	if (time > timeout) {
 		err("timeout for wait stream off");
 		ret = -1;
+		goto p_err;
+	}
+
+	/* sensor wait stream off */
+	ret = CALL_CISOPS(&cis, cis_wait_streamoff, subdev_cis);
+	if (ret) {
+		err("[%s] wait stream off fail\n", __func__);
+		goto p_err;
 	}
 
 p_err:
@@ -216,43 +331,78 @@ void fimc_is_sensor_set_cis_uctrl_list(struct fimc_is_device_sensor_peri *sensor
 	}
 }
 
-void fimc_is_sensor_m2m_work_fn(struct kthread_work *work)
+void fimc_is_sensor_sensor_work_fn(struct kthread_work *work)
 {
 	struct fimc_is_device_sensor_peri *sensor_peri;
 	struct fimc_is_device_sensor *device;
 
-	sensor_peri = container_of(work, struct fimc_is_device_sensor_peri, work);
+	sensor_peri = container_of(work, struct fimc_is_device_sensor_peri, sensor_work);
 
 	device = v4l2_get_subdev_hostdata(sensor_peri->subdev_cis);
 
 	fimc_is_sensor_ctl_frame_evt(device);
 }
 
-int fimc_is_sensor_init_m2m_thread(struct fimc_is_device_sensor_peri *sensor_peri)
+int fimc_is_sensor_init_sensor_thread(struct fimc_is_device_sensor_peri *sensor_peri)
 {
 	int ret = 0;
 	struct sched_param param = {.sched_priority = MAX_RT_PRIO - 1};
 
-	spin_lock_init(&sensor_peri->work_lock);
-	init_kthread_worker(&sensor_peri->worker);
-	sensor_peri->task = kthread_run(kthread_worker_fn, &sensor_peri->worker, "fimc_is_sen_m2m_work");
-	ret = sched_setscheduler_nocheck(sensor_peri->task, SCHED_FIFO, &param);
-	if (ret) {
-		err("sched_setscheduler_nocheck is fail(%d)", ret);
-		return ret;
-	}
+	if (sensor_peri->sensor_task == NULL) {
+		spin_lock_init(&sensor_peri->sensor_work_lock);
+		init_kthread_worker(&sensor_peri->sensor_worker);
+		sensor_peri->sensor_task = kthread_run(kthread_worker_fn, &sensor_peri->sensor_worker, "fimc_is_sen_sensor_work");
+		ret = sched_setscheduler_nocheck(sensor_peri->sensor_task, SCHED_FIFO, &param);
+		if (ret) {
+			err("sched_setscheduler_nocheck is fail(%d)", ret);
+			return ret;
+		}
 
-	init_kthread_work(&sensor_peri->work, fimc_is_sensor_m2m_work_fn);
-	sensor_peri->work_index = 0;
+		init_kthread_work(&sensor_peri->sensor_work, fimc_is_sensor_sensor_work_fn);
+		sensor_peri->sensor_work_index = 0;
+	}
 
 	return ret;
 }
 
-void fimc_is_sensor_deinit_m2m_thread(struct fimc_is_device_sensor_peri *sensor_peri)
+void fimc_is_sensor_deinit_sensor_thread(struct fimc_is_device_sensor_peri *sensor_peri)
 {
-	if (sensor_peri->task != NULL) {
-		if (kthread_stop(sensor_peri->task))
+	if (sensor_peri->sensor_task != NULL) {
+		if (kthread_stop(sensor_peri->sensor_task))
 			err("kthread_stop fail");
+
+		sensor_peri->sensor_task = NULL;
+	}
+}
+
+int fimc_is_sensor_init_mode_change_thread(struct fimc_is_device_sensor_peri *sensor_peri)
+{
+	int ret = 0;
+	struct sched_param param = {.sched_priority = MAX_RT_PRIO - 1};
+
+	/* Always first applyed to mode change when camera on */
+	sensor_peri->mode_change_flag = true;
+
+	init_kthread_worker(&sensor_peri->mode_change_worker);
+	sensor_peri->mode_change_task = kthread_run(kthread_worker_fn, &sensor_peri->mode_change_worker, "fimc_is_sensor_mode_change");
+	ret = sched_setscheduler_nocheck(sensor_peri->mode_change_task, SCHED_FIFO, &param);
+	if (ret) {
+		err("sched_setscheduler_nocheck is fail(%d)\n", ret);
+		return ret;
+	}
+
+	init_kthread_work(&sensor_peri->mode_change_work, fimc_is_sensor_mode_change_work_fn);
+
+	return ret;
+}
+
+void fimc_is_sensor_deinit_mode_change_thread(struct fimc_is_device_sensor_peri *sensor_peri)
+{
+	if (sensor_peri->mode_change_task != NULL) {
+		if (kthread_stop(sensor_peri->mode_change_task))
+			err("kthread_stop fail");
+
+		sensor_peri->mode_change_task = NULL;
 	}
 }
 
@@ -295,14 +445,42 @@ int fimc_is_sensor_initial_setting_low_exposure(struct fimc_is_device_sensor_per
 	return ret;
 }
 
-int fimc_is_sensor_setting_mode_change(struct fimc_is_device_sensor_peri *sensor_peri)
+void fimc_is_sensor_mode_change_work_fn(struct kthread_work *work)
 {
-	int ret = 0;
+		struct fimc_is_device_sensor_peri *sensor_peri;
+		struct fimc_is_cis *cis;
+
+		sensor_peri = container_of(work, struct fimc_is_device_sensor_peri, mode_change_work);
+
+		cis = (struct fimc_is_cis *)v4l2_get_subdevdata(sensor_peri->subdev_cis);
+
+		CALL_CISOPS(cis, cis_mode_change, cis->subdev, cis->cis_data->sens_config_index_cur);
+}
+
+int fimc_is_sensor_mode_change(struct fimc_is_cis *cis, u32 mode)
+{
+
+		int ret = 0;
+		struct fimc_is_device_sensor_peri *sensor_peri;
+
+		BUG_ON(!cis);
+		BUG_ON(!cis->cis_data);
+
+		sensor_peri = container_of(cis, struct fimc_is_device_sensor_peri, cis);
+
+		queue_kthread_work(&sensor_peri->mode_change_worker, &sensor_peri->mode_change_work);
+
+	return ret;
+}
+
+void fimc_is_sensor_setting_mode_change(struct fimc_is_device_sensor_peri *sensor_peri)
+{
 	struct fimc_is_device_sensor *device;
 	u32 expo = 0;
 	u32 tgain = 0;
 	u32 again = 0;
 	u32 dgain = 0;
+	u32 frame_duration = 0;
 
 	BUG_ON(!sensor_peri);
 
@@ -329,6 +507,10 @@ int fimc_is_sensor_setting_mode_change(struct fimc_is_device_sensor_peri *sensor
 	else
 		tgain = again;
 
+
+	CALL_CISOPS(&sensor_peri->cis, cis_adjust_frame_duration, sensor_peri->subdev_cis, expo, &frame_duration);
+	fimc_is_sensor_peri_s_frame_duration(device, frame_duration);
+
 	fimc_is_sensor_peri_s_analog_gain(device, again, again);
 	fimc_is_sensor_peri_s_digital_gain(device, dgain, dgain);
 	fimc_is_sensor_peri_s_exposure_time(device, expo, expo);
@@ -348,8 +530,6 @@ int fimc_is_sensor_setting_mode_change(struct fimc_is_device_sensor_peri *sensor
 			tgain, tgain,
 			again, again,
 			dgain, dgain);
-
-	return ret;
 }
 
 void fimc_is_sensor_flash_fire_work(struct work_struct *data)
@@ -375,11 +555,17 @@ void fimc_is_sensor_flash_fire_work(struct work_struct *data)
 	device = v4l2_get_subdev_hostdata(sensor_peri->subdev_flash);
 	BUG_ON(!device);
 
+	mutex_lock(&sensor_peri->cis.control_lock);
+	if (!sensor_peri->cis.cis_data->stream_on) {
+		warn("[%s] already stream off\n", __func__);
+		goto p_err_mutext;
+	}
+
 	/* sensor stream off */
 	ret = CALL_CISOPS(&sensor_peri->cis, cis_stream_off, sensor_peri->subdev_cis);
 	if (ret < 0) {
 		err("[%s] stream off fail\n", __func__);
-		goto p_err;
+		goto p_err_streamoff;
 	}
 
 	ret = fimc_is_sensor_wait_streamoff(device);
@@ -506,12 +692,14 @@ void fimc_is_sensor_flash_fire_work(struct work_struct *data)
 		}
 	}
 
-p_err:
+p_err_streamoff:
 	/* sensor stream on */
 	ret = CALL_CISOPS(&sensor_peri->cis, cis_stream_on, sensor_peri->subdev_cis);
 	if (ret < 0) {
 		err("[%s] stream on fail\n", __func__);
 	}
+p_err_mutext:
+	mutex_unlock(&sensor_peri->cis.control_lock);
 }
 
 void fimc_is_sensor_flash_expire_handler(unsigned long data)
@@ -596,7 +784,8 @@ int fimc_is_sensor_flash_fire(struct fimc_is_device_sensor_peri *device,
 		flash->flash_data.flash_fired = (bool)on;
 	}
 
-	if (flash->flash_data.mode == CAM2_FLASH_MODE_SINGLE) {
+	if (flash->flash_data.mode == CAM2_FLASH_MODE_SINGLE ||
+			flash->flash_data.mode == CAM2_FLASH_MODE_OFF) {
 		if (flash->flash_data.flash_fired == true) {
 			/* Flash firing time have to be setted in case of capture flash
 			 * Max firing time of capture flash is 1 sec
@@ -681,14 +870,18 @@ int fimc_is_sensor_peri_notify_vsync(struct v4l2_subdev *subdev, void *arg)
 
 	sensor_peri->cis.cis_data->sen_vsync_count = vsync_count;
 
-	if (sensor_peri->sensor_interface.otf_flag_3aa == false) {
+	if (sensor_peri->sensor_interface.otf_flag_3aa == false ||
+			(sensor_peri->cis.cis_data->video_mode == true &&
+			sensor_peri->cis.cis_data->max_fps >= 60)) {
 		/* run sensor setting thread */
-		queue_kthread_work(&sensor_peri->worker, &sensor_peri->work);
+		queue_kthread_work(&sensor_peri->sensor_worker, &sensor_peri->sensor_work);
 	}
 
-	ret = fimc_is_sensor_peri_notify_flash_fire(subdev, arg);
-	if (unlikely(ret < 0))
+	if (sensor_peri->subdev_flash != NULL) {
+	    ret = fimc_is_sensor_peri_notify_flash_fire(subdev, arg);
+	    if (unlikely(ret < 0))
 		err("err!!!(%s), notify flash fire fail(%d)", __func__, ret);
+	}
 
 	if (test_bit(FIMC_IS_SENSOR_ACTUATOR_AVAILABLE, &sensor_peri->peri_state)) {
 		/* M2M case */
@@ -886,12 +1079,10 @@ void fimc_is_sensor_peri_m2m_actuator(struct work_struct *data)
 	int ret = 0;
 	int index;
 	struct fimc_is_device_sensor *device;
-	struct fimc_is_module_enum *module;
 	struct fimc_is_device_sensor_peri *sensor_peri;
 	struct fimc_is_actuator_interface *actuator_itf;
 	struct fimc_is_actuator *actuator;
 	struct fimc_is_actuator_data *actuator_data;
-	struct v4l2_subdev *subdev_module;
 	u32 pre_position, request_frame_cnt;
 	u32 cur_frame_cnt;
 	u32 i;
@@ -907,16 +1098,6 @@ void fimc_is_sensor_peri_m2m_actuator(struct work_struct *data)
 
 	device = v4l2_get_subdev_hostdata(sensor_peri->subdev_actuator);
 	BUG_ON(!device);
-
-	subdev_module = device->subdev_module;
-	if (!subdev_module) {
-		err("subdev_module is NULL");
-	}
-
-	module = (struct fimc_is_module_enum *)v4l2_get_subdevdata(subdev_module);
-	if (!module) {
-		err("subdev_module is NULL");
-	}
 
 	actuator_itf = &sensor_peri->sensor_interface.actuator_itf;
 
@@ -974,6 +1155,8 @@ void fimc_is_sensor_peri_probe(struct fimc_is_device_sensor_peri *sensor_peri)
 	INIT_WORK(&sensor_peri->actuator.actuator_data.actuator_work, fimc_is_sensor_peri_m2m_actuator);
 
 	hrtimer_init(&sensor_peri->actuator.actuator_data.afwindow_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+
+	mutex_init(&sensor_peri->cis.control_lock);
 }
 
 int fimc_is_sensor_peri_s_stream(struct fimc_is_device_sensor *device,
@@ -984,7 +1167,9 @@ int fimc_is_sensor_peri_s_stream(struct fimc_is_device_sensor *device,
 	struct fimc_is_module_enum *module;
 	struct fimc_is_device_sensor_peri *sensor_peri = NULL;
 	struct v4l2_subdev *subdev_cis = NULL;
+	struct v4l2_subdev *subdev_preprocessor = NULL;
 	struct fimc_is_cis *cis = NULL;
+	struct fimc_is_preprocessor *preprocessor = NULL;
 
 	BUG_ON(!device);
 
@@ -1013,6 +1198,15 @@ int fimc_is_sensor_peri_s_stream(struct fimc_is_device_sensor *device,
 	BUG_ON(!cis);
 	BUG_ON(!cis->cis_data);
 
+	subdev_preprocessor = sensor_peri->subdev_preprocessor;
+	if (!subdev_preprocessor)
+		dbg("[sen:%d] no subdev_preprocessor(s_stream, on:%d)", module->sensor_id, on);
+
+	if (subdev_preprocessor) {
+		preprocessor = (struct fimc_is_preprocessor *)v4l2_get_subdevdata(subdev_preprocessor);
+		BUG_ON(!preprocessor);
+	}
+
 	ret = fimc_is_sensor_peri_debug_fixed((struct fimc_is_device_sensor *)v4l2_get_subdev_hostdata(subdev_module));
 	if (ret) {
 		err("fimc_is_sensor_peri_debug_fixed is fail(%d)", ret);
@@ -1020,25 +1214,70 @@ int fimc_is_sensor_peri_s_stream(struct fimc_is_device_sensor *device,
 	}
 
 	if (on) {
+		fimc_is_sensor_init_expecting_dm(device, cis);
+
+		/* If sensor setting @work is queued or executing,
+		   wait for it to finish execution when working s_format */
+		flush_kthread_work(&sensor_peri->mode_change_work);
+
+		/* stream on sequence */
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+		if (cis->need_mode_change == false && cis->use_initial_ae == false) {
+#else
 		if (cis->need_mode_change == false) {
-#if 0
+#endif
 			/* only first time after camera on */
 			fimc_is_sensor_initial_setting_low_exposure(sensor_peri);
-#endif
 			cis->need_mode_change = true;
 			sensor_peri->actuator.actuator_data.timer_check = HRTIMER_POSSIBLE;
 		} else {
 			fimc_is_sensor_setting_mode_change(sensor_peri);
 		}
 
-		ret = CALL_CISOPS(cis, cis_stream_on, subdev_cis);
-	} else {
-		ret = CALL_CISOPS(cis, cis_stream_off, subdev_cis);
-		if (ret == 0) {
-			ret = fimc_is_sensor_wait_streamoff(device);
+		if (subdev_preprocessor) {
+			/* Before stream on preprocessor, do stream off and mode change */
+			ret = CALL_PREPROPOPS(preprocessor, preprocessor_stream_off, subdev_preprocessor);
+			if (ret) {
+				err("[SEN:%d] v4l2_subdev_call(preprocessor_stream, off:%d) is fail(%d)",
+						module->sensor_id, on, ret);
+				goto p_err;
+			}
+
+			ret = CALL_PREPROPOPS(preprocessor, preprocessor_mode_change, subdev_preprocessor, device->cfg->mode);
+			if (ret) {
+				err("[SEN:%d] v4l2_subdev_call(preprocessor_mode_change) is fail(%d)",
+						module->sensor_id, ret);
+				goto p_err;
+			}
+
+			ret = CALL_PREPROPOPS(preprocessor, preprocessor_stream_on, subdev_preprocessor);
+			if (ret) {
+				err("[SEN:%d] v4l2_subdev_call(preprocessor_stream, on:%d) is fail(%d)",
+						module->sensor_id, on, ret);
+				goto p_err;
+			}
 		}
 
+		ret = CALL_CISOPS(cis, cis_stream_on, subdev_cis);
+	} else {
+		/* stream off sequence */
+		mutex_lock(&cis->control_lock);
+		ret = CALL_CISOPS(cis, cis_stream_off, subdev_cis);
+		mutex_unlock(&cis->control_lock);
+		if (subdev_preprocessor){
+			ret = CALL_PREPROPOPS(preprocessor, preprocessor_stream_off, subdev_preprocessor);
+			if (ret) {
+				err("[SEN:%d] v4l2_subdev_call(preprocessor_stream, off:%d) is fail(%d)",
+						module->sensor_id, on, ret);
+				goto p_err;
+			}
+		}
+		if (ret == 0)
+			ret = fimc_is_sensor_wait_streamoff(device);
+
 		hrtimer_cancel(&sensor_peri->actuator.actuator_data.afwindow_timer);
+		memset(&sensor_peri->cis.cur_sensor_uctrl, 0, sizeof(camera2_sensor_uctl_t));
+		memset(&sensor_peri->cis.expecting_sensor_dm[0], 0, sizeof(camera2_sensor_dm_t) * EXPECT_DM_NUM);
 	}
 	if (ret) {
 		err("[SEN:%d] v4l2_subdev_call(s_stream, on:%d) is fail(%d)",
@@ -1417,11 +1656,12 @@ int fimc_is_sensor_peri_actuator_check_move_done(struct fimc_is_device_sensor_pe
 		if (ret) {
 			err("[SEN:%d] v4l2_subdev_call(g_ctrl, id:%d) is fail",
 					actuator->id, v4l2_ctrl.id);
-			return ret;
+			goto exit;
 		}
 	} while (v4l2_ctrl.value == ACTUATOR_STATUS_BUSY &&
 			actuator_data->check_time_out == false);
 
+exit:
 	del_timer(&actuator->actuator_data.timer_wait);
 
 	return ret;

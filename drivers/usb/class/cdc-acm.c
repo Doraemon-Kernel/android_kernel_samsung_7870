@@ -1345,16 +1345,6 @@ made_compressed_probe:
 		goto alloc_fail;
 	}
 
-	ctrlsize = usb_endpoint_maxp(epctrl);
-	readsize = usb_endpoint_maxp(epread) *
-				(quirks == SINGLE_RX_URB ? 1 : 2);
-	acm->combined_interfaces = combined_interfaces;
-	acm->writesize = usb_endpoint_maxp(epwrite) * 20;
-	acm->control = control_interface;
-	acm->data = data_interface;
-
-	usb_get_intf(acm->control); /* undone in destruct() */
-
 	minor = acm_alloc_minor(acm);
 	if (minor == ACM_TTY_MINORS) {
 		dev_err(&intf->dev, "no more free acm devices\n");
@@ -1362,6 +1352,13 @@ made_compressed_probe:
 		return -ENODEV;
 	}
 
+	ctrlsize = usb_endpoint_maxp(epctrl);
+	readsize = usb_endpoint_maxp(epread) *
+				(quirks == SINGLE_RX_URB ? 1 : 2);
+	acm->combined_interfaces = combined_interfaces;
+	acm->writesize = usb_endpoint_maxp(epwrite) * 20;
+	acm->control = control_interface;
+	acm->data = data_interface;
 	acm->minor = minor;
 	acm->dev = usb_dev;
 	acm->ctrl_caps = ac_management_function;
@@ -1516,6 +1513,7 @@ skip_countries:
 	usb_driver_claim_interface(&acm_driver, data_interface, acm);
 	usb_set_intfdata(data_interface, acm);
 
+	usb_get_intf(control_interface);
 	tty_dev = tty_port_register_device(&acm->port, acm_tty_driver, minor,
 			&control_interface->dev);
 	if (IS_ERR(tty_dev)) {

@@ -107,6 +107,30 @@ static int s5p_mfc_reset(struct s5p_mfc_dev *dev)
 	return 0;
 }
 
+int s5p_mfc_ver_major(struct s5p_mfc_dev *dev)
+{
+	int version =  mfc_version(dev);
+
+	if (version > 0xFFF)
+		return ((version >> 12) & 0xF);
+	else if (version > 0xFF)
+		return ((version >> 8) & 0xF);
+	else
+		return ((version >> 4) & 0xF);
+}
+
+int s5p_mfc_ver_minor(struct s5p_mfc_dev *dev)
+{
+	int version =  mfc_version(dev);
+
+	if (version > 0xFFF)
+		return ((version >> 4) & 0xFF);
+	else if (version > 0xFF)
+		return (version & 0xFF);
+	else
+		return (version & 0xF);
+}
+
 /* Initialize hardware */
 static int _s5p_mfc_init_hw(struct s5p_mfc_dev *dev, enum mfc_buf_usage_type buf_type)
 {
@@ -203,9 +227,9 @@ static int _s5p_mfc_init_hw(struct s5p_mfc_dev *dev, enum mfc_buf_usage_type buf
 	if (fimv_info != 'D' && fimv_info != 'E')
 		fimv_info = 'N';
 
-	mfc_info_dev("MFC v%d.%x, F/W: %02xyy, %02xmm, %02xdd (%c)\n",
-		 MFC_VER_MAJOR(dev),
-		 MFC_VER_MINOR(dev),
+	mfc_info_dev("MFC v%d.%d, F/W: %02xyy, %02xmm, %02xdd (%c)\n",
+		 s5p_mfc_ver_major(dev),
+		 s5p_mfc_ver_minor(dev),
 		 s5p_mfc_get_fw_ver_year(),
 		 s5p_mfc_get_fw_ver_month(),
 		 s5p_mfc_get_fw_ver_date(),
@@ -287,9 +311,11 @@ void s5p_mfc_deinit_hw(struct s5p_mfc_dev *dev)
 		s5p_mfc_reset(dev);
 		s5p_mfc_clock_off(dev);
 	} else if (IS_MFCv10X(dev)) {
+		s5p_mfc_clock_on(dev);
 		mfc_info_dev("MFC h/w state: %d\n",
 				MFC_READL(S5P_FIMV_MFC_STATE));
 		MFC_WRITEL(0x1, S5P_FIMV_MFC_CLOCK_OFF);
+		s5p_mfc_clock_off(dev);
 	}
 
 	mfc_debug(2, "mfc deinit completed\n");

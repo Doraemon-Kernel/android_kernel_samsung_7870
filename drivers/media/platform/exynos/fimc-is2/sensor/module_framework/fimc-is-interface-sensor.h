@@ -15,7 +15,6 @@
 #include "fimc-is-config.h"
 #include "exynos-fimc-is-sensor.h"
 #include "fimc-is-metadata.h"
-#include "fimc-is-regs.h"
 #include "fimc-is-binary.h"
 
 #define SENSOR_INTERFACE_MAGIC 0xFEDCBA98
@@ -66,7 +65,7 @@ enum DIFF_BET_SEN_ISP { /* Set to 0: 3AA 3frame delay, 1: 3AA 4frame delay, 3: M
 };
 
 /* DEVICE SENSOR INTERFACE */
-#define SENSOR_REGISTER_FUNC_ADDR	(FIMC_IS_SDK_LIB_ADDR + 0x28)
+#define SENSOR_REGISTER_FUNC_ADDR	(DDK_LIB_ADDR + 0x28)
 typedef int (*register_sensor_interface)(void *itf);
 static const register_sensor_interface register_sensor_itf = (register_sensor_interface)SENSOR_REGISTER_FUNC_ADDR;
 
@@ -375,6 +374,10 @@ struct fimc_is_cis_ops {
 	cis_func_type cis_get_line_readout_time_ns; /* TBD */
 	cis_func_type cis_read_sysreg; /* TBD */
 	cis_func_type cis_read_userreg; /* TBD */
+	int (*cis_wait_streamoff)(struct v4l2_subdev *subdev);
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+	int (*cis_set_initial_exposure)(struct v4l2_subdev *subdev);
+#endif
 };
 
 struct fimc_is_sensor_ctl
@@ -432,6 +435,12 @@ typedef enum fimc_is_sensor_adjust_direction_ {
 	SENSOR_ADJUST_TO_LONG	= 2,
 } fimc_is_sensor_adjust_direction;
 
+/* If companion statistics are used, then 3A algorithms need to know whether current stat. are ready to use or not. */
+enum itf_cis_hdr_stat_status {
+	SENSOR_STAT_STATUS_NO_DATA = 0,
+	SENSOR_STAT_STATUS_DONE = 1,
+};
+
 enum itf_cis_interface {
 	ITF_CIS_SMIA = 0,
 	ITF_CIS_SMIA_WDR,
@@ -479,9 +488,28 @@ struct fimc_is_actuator_ops {
 	actuator_func_type actuator_cal_data;
 };
 
+/* for SetAlgResFlag API */
+struct fimc_is_3a_res_to_sensor {
+	u32 hdr_ratio;
+	u32 red_gain;
+	u32 green_gain;
+	u32 blue_gain;
+	u32 hdr_enabled;
+	u32 hdr_state;
+	u32 thermal_mode;
+	bool video_mode;
+};
+
 /* Flash */
 struct fimc_is_flash_ops {
 	int (*flash_control)(struct v4l2_subdev *subdev, enum flash_mode mode, u32 intensity);
+};
+
+/* comapnion */
+struct fimc_is_preprocessor_ops {
+	int (*preprocessor_stream_on)(struct v4l2_subdev *subdev);
+	int (*preprocessor_stream_off)(struct v4l2_subdev *subdev);
+	int (*preprocessor_mode_change)(struct v4l2_subdev *subdev, u32 mode);
 };
 
 struct fimc_is_sensor_interface;
@@ -654,6 +682,32 @@ struct fimc_is_cis_interface_ops {
 	/* Set sensor 3a mode - OTF/M2M */
 	int (*set_sensor_3a_mode)(struct fimc_is_sensor_interface *itf,
 					u32 mode);
+#ifdef USE_FACE_UNLOCK_AE_AWB_INIT
+	int (*get_initial_exposure_gain_of_sensor)(struct fimc_is_sensor_interface *itf,
+					u32 *long_expo,
+					u32 *long_again,
+					u32 *long_dgain,
+					u32 *short_expo,
+					u32 *short_again,
+					u32 *short_dgain);
+#endif
+	/* DO NOT CHANGE THIS STRUCTURE! - "fimc_is_cis_interface_ops structure"
+	   If the new function is needed, it can be added in "fimc_is_cis_ext_interface_ops"
+	   to keep the backward compatibility */
+};
+
+struct fimc_is_cis_ext_interface_ops {
+	int (*get_sensor_hdr_stat)(struct fimc_is_sensor_interface *itf,
+			enum itf_cis_hdr_stat_status *status);
+
+	int (*set_3a_alg_res_to_sens)(struct fimc_is_sensor_interface *itf,
+			struct fimc_is_3a_res_to_sensor *sensor_setting);
+
+	/* In order to change a current CIS mode when an user select the WDR (long and short exposure) mode or the normal AE mo */
+	int (*change_cis_mode)(struct fimc_is_sensor_interface *itf,
+			enum itf_cis_interface cis_mode);
+
+	/* new function can be added here */
 };
 
 struct fimc_is_cis_event_ops {
@@ -780,6 +834,7 @@ struct fimc_is_sensor_interface {
 	u32			flash_mode[NUM_FRAMES];
 	u32			flash_intensity[NUM_FRAMES];
 	u32			flash_firing_duration[NUM_FRAMES];
+	struct fimc_is_cis_ext_interface_ops	cis_ext_itf_ops;
 };
 
 int init_sensor_interface(struct fimc_is_sensor_interface *itf);

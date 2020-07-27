@@ -118,7 +118,7 @@
 #define MAX_LHFD_SHOT_BUF		(2)
 
 #define NUM_VRA_INTERNAL_BUF		(1)
-#define SIZE_VRA_INTERNEL_BUF		(0x00400000)
+#define SIZE_VRA_INTERNEL_BUF		(0x00650000)
 
 #define NUM_ODC_INTERNAL_BUF		(2)
 #define NUM_DIS_INTERNAL_BUF		(1)
@@ -266,6 +266,9 @@ struct fimc_is_core {
 	struct i2c_client			*client2;
 
 	struct fimc_is_vender			vender;
+#ifdef CONFIG_OIS_USE
+	bool						ois_ver_read;
+#endif
 };
 
 #if defined(CONFIG_VIDEOBUF2_CMA_PHYS)

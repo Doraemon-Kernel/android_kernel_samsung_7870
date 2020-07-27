@@ -249,7 +249,18 @@ const struct v4l2_file_operations fimc_is_3xp_video_fops = {
 static int fimc_is_3xp_video_querycap(struct file *file, void *fh,
 	struct v4l2_capability *cap)
 {
-	/* Todo : add to query capability code */
+	struct fimc_is_video *video = video_drvdata(file);
+
+	FIMC_BUG(!cap);
+	FIMC_BUG(!video);
+
+	snprintf(cap->driver, sizeof(cap->driver), "%s", video->vd.name);
+	snprintf(cap->card, sizeof(cap->card), "%s", video->vd.name);
+	cap->capabilities |= V4L2_CAP_STREAMING
+			| V4L2_CAP_VIDEO_CAPTURE
+			| V4L2_CAP_VIDEO_CAPTURE_MPLANE;
+	cap->device_caps |= cap->capabilities;
+
 	return 0;
 }
 
@@ -729,6 +740,7 @@ static void fimc_is_3xp_buffer_finish(struct vb2_buffer *vb)
 
 const struct vb2_ops fimc_is_3xp_qops = {
 	.queue_setup		= fimc_is_3xp_queue_setup,
+	.buf_init			= fimc_is_buffer_init,
 	.buf_prepare		= fimc_is_3xp_buffer_prepare,
 	.buf_queue		= fimc_is_3xp_buffer_queue,
 	.buf_finish		= fimc_is_3xp_buffer_finish,

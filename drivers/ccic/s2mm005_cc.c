@@ -138,10 +138,6 @@ void ccic_event_work(void *data, int dest, int id, int attach, int event, int su
 
 	pr_info("usb: %s\n", __func__);
 	event_work = kmalloc(sizeof(struct ccic_state_work), GFP_ATOMIC);
-	if (!event_work) {
-		pr_err("%s: failed to alloc for event_work\n", __func__);
-		return;
-	}
 	INIT_WORK(&event_work->ccic_work, ccic_event_notifier);
 
 	event_work->dest = dest;
@@ -177,7 +173,6 @@ void ccic_event_work(void *data, int dest, int id, int attach, int event, int su
 			(event != USB_STATUS_NOTIFY_DETACH)) {
 			// Role change try and new mode detected
 			pr_info("usb: %s, role_reverse_completion\n", __func__);
-			usbpd_data->typec_try_state_change = 0;
 			complete(&usbpd_data->role_reverse_completion);
 		}
 		
@@ -354,7 +349,7 @@ int dual_role_get_local_prop(struct dual_role_phy_instance *dual_role,
 
 	pr_info("%s : request prop = %d , attached_state = %d, power_role = %d\n",
 		__func__, prop, attached_state, power_role);
-
+	
 	if (prop == DUAL_ROLE_PROP_VCONN_SUPPLY) {
 		if (usbpd_data->vconn_en)
 			*val = DUAL_ROLE_PROP_VCONN_SUPPLY_YES;
@@ -415,6 +410,27 @@ int dual_role_set_prop(struct dual_role_phy_instance *dual_role,
 		return -EINVAL;
 }
 #elif defined(CONFIG_TYPEC)
+void typec_role_swap_check(struct work_struct *wk)
+{
+	struct delayed_work *delay_work =
+		container_of(wk, struct delayed_work, work);
+	struct s2mm005_data *usbpd_data =
+		container_of(delay_work, struct s2mm005_data, typec_role_swap_work);
+
+	pr_info("%s: s2mm005_port_type_set check again usbpd_data->pd_state=%d\n",
+		__func__, usbpd_data->pd_state);
+
+	usbpd_data->typec_try_state_change = 0;
+
+	if (usbpd_data->pd_state == State_PE_Initial_detach) {
+		pr_err("%s: ccic_set_dual_role reverse failed, set mode to DRP\n", __func__);
+		disable_irq(usbpd_data->irq);
+		/* exit from Disabled state and set mode to DRP */
+		s2mm005_rprd_mode_change(usbpd_data, TYPE_C_ATTACH_DRP);
+		enable_irq(usbpd_data->irq);
+	}
+}
+
 int s2mm005_port_type_set(const struct typec_capability *cap, enum typec_port_type port_type)
 {
 	struct s2mm005_data *usbpd_data = container_of(cap, struct s2mm005_data, typec_cap);
@@ -448,8 +464,8 @@ int s2mm005_port_type_set(const struct typec_capability *cap, enum typec_port_ty
 		break;
 	case TYPEC_PORT_DRP:
 		pr_info("%s : set to DRP\n", __func__);
-		usbpd_data->typec_try_state_change = 0;
-		s2mm005_rprd_mode_change(usbpd_data, TYPE_C_ATTACH_DRP);
+//		usbpd_data->typec_try_state_change = 0;
+//		s2mm005_rprd_mode_change(usbpd_data, TYPE_C_ATTACH_DRP);
 		return 0;
 	default :
 		pr_info("%s : invalid typec_role\n", __func__);
@@ -463,16 +479,18 @@ int s2mm005_port_type_set(const struct typec_capability *cap, enum typec_port_ty
 						msecs_to_jiffies
 						(DUAL_ROLE_SET_MODE_WAIT_MS));
 
-		usbpd_data->typec_try_state_change = 0;
 		if (!timeout) {
 			pr_err("%s: reverse failed, set mode to DRP\n", __func__);
 			disable_irq(usbpd_data->irq);
 			/* exit from Disabled state and set mode to DRP */
+			usbpd_data->typec_try_state_change = 0;
 			s2mm005_rprd_mode_change(usbpd_data, TYPE_C_ATTACH_DRP);
 			enable_irq(usbpd_data->irq);
 			return -EIO;
-		} else
-			pr_err("%s: reverse success\n", __func__);
+		} else {
+			pr_err("%s: reverse success, one more check\n", __func__);
+			schedule_delayed_work(&usbpd_data->typec_role_swap_work, msecs_to_jiffies(DUAL_ROLE_SET_MODE_WAIT_MS));
+		}
 	}
 
 	return 0;
@@ -498,6 +516,7 @@ void process_cc_water_det(void * data)
 			s2mm005_manual_LPM(usbpd_data, 0x9);
 	}
 }
+
 #if defined(CONFIG_CCIC_ALTERNATE_MODE)
 void dp_detach(void *data)
 {
@@ -531,54 +550,19 @@ void process_cc_water(void * data, LP_STATE_Type *Lp_DATA)
 	/* read reg for water and dry state */
 	REG_ADD = 0x60;
 	R_len = 4;
-	usbpd_data->s2mm005_i2c_err = s2mm005_read_byte(i2c, REG_ADD, Lp_DATA->BYTE, R_len);
+	s2mm005_read_byte(i2c, REG_ADD, Lp_DATA->BYTE, R_len);
 	dev_info(&i2c->dev, "%s: WATER reg:0x%02X WATER=%d DRY=%d\n", __func__,
 		Lp_DATA->BYTE[0],
 		Lp_DATA->BITS.WATER_DET,
 		Lp_DATA->BITS.RUN_DRY);
 
-	if (!usbpd_data->water_detect_support) {
-		dev_info(&i2c->dev, "%s: It does not support water detection\n", __func__);
-		return;
-	}
-
-	if (usbpd_data->s2mm005_i2c_err < 0) {
-		pr_err("%s : i2c err : ret = %d\n", __func__, usbpd_data->s2mm005_i2c_err);
-
-		Lp_DATA->BITS.WATER_DET = 0;
-		Lp_DATA->BITS.RUN_DRY = 1;
-		Lp_DATA->BITS.BOOTING_RUN_DRY = usbpd_data->booting_run_dry;
-
-	} else {
-		if (Lp_DATA->BITS.WATER_DET == 0
-			&& Lp_DATA->BITS.RUN_DRY == 0
-			&& Lp_DATA->BITS.BOOTING_RUN_DRY == 0) {
-
-			usbpd_data->s2mm005_i2c_err = s2mm005_read_byte(i2c, REG_ADD, Lp_DATA->BYTE, R_len);
-			dev_info(&i2c->dev, "Re: %s: WATER reg:0x%02X WATER=%d DRY=%d\n", __func__,
-				Lp_DATA->BYTE[0],
-				Lp_DATA->BITS.WATER_DET,
-				Lp_DATA->BITS.RUN_DRY);
-
-			if (!Lp_DATA->BITS.AUTO_LP_ENABLE_BIT) {
-				if (Lp_DATA->BITS.WATER_DET == 1 || Lp_DATA->BITS.RUN_DRY == 0)
-					usbpd_data->s2mm005_i2c_err = -CCIC_I2C_VALUE_INVALID;
-			}
-
-			if (usbpd_data->s2mm005_i2c_err < 0) {
-				pr_err("%s : i2c err : ret = %d\n", __func__, usbpd_data->s2mm005_i2c_err);
-				Lp_DATA->BITS.WATER_DET = 0;
-				Lp_DATA->BITS.RUN_DRY = 1;
-				Lp_DATA->BITS.BOOTING_RUN_DRY = usbpd_data->booting_run_dry;
-			}
-		}
-	}
-
 #if defined(CONFIG_BATTERY_SAMSUNG)
-	if (lpcharge) {
-		dev_info(&i2c->dev, "%s: BOOTING_RUN_DRY=%d\n", __func__,
-			Lp_DATA->BITS.BOOTING_RUN_DRY);
-		usbpd_data->booting_run_dry  = Lp_DATA->BITS.BOOTING_RUN_DRY;
+	if (usbpd_data->firm_ver[3] == 0x7 && usbpd_data->firm_ver[2] >= 0x22) { /* temp code */
+		if (lpcharge) {
+			dev_info(&i2c->dev, "%s: BOOTING_RUN_DRY=%d\n", __func__,
+				Lp_DATA->BITS.BOOTING_RUN_DRY);
+			usbpd_data->booting_run_dry  = Lp_DATA->BITS.BOOTING_RUN_DRY;
+		}
 	}
 #endif
 
@@ -596,7 +580,8 @@ void process_cc_water(void * data, LP_STATE_Type *Lp_DATA)
 			0/*attach*/, 0, 0);
 	}
 
-	usbpd_data->run_dry = Lp_DATA->BITS.RUN_DRY;
+	if (usbpd_data->firm_ver[3] >= 0x7)
+		usbpd_data->run_dry = Lp_DATA->BITS.RUN_DRY;
 
 	/* check for water case */
 	if ((Lp_DATA->BITS.WATER_DET & !usbpd_data->water_det)) {
@@ -623,7 +608,9 @@ void process_cc_attach(void * data,u8 *plug_attach_done)
 #if defined(CONFIG_USB_HOST_NOTIFY)
 	struct otg_notify *o_notify = get_otg_notify();
 #endif
-
+	int is_dfp = 0;
+	int is_src = 0;
+	
 	pr_info("%s\n",__func__);
 
 	// Check for moisture
@@ -638,40 +625,34 @@ void process_cc_attach(void * data,u8 *plug_attach_done)
 			CCIC_NOTIFY_DEV_BATTERY, CCIC_NOTIFY_ID_WATER,
 			1/*attach*/, 0, 0);
 
-		if (usbpd_data->s2mm005_i2c_err >= 0) {
-			REG_ADD = 0x20;
-			R_len = 4;
-			s2mm005_read_byte(i2c, REG_ADD, Func_DATA.BYTE, R_len);
-			dev_info(&i2c->dev, "Rsvd_H:0x%02X   PD_Nxt_State:0x%02X   Rsvd_L:0x%02X   PD_State:%02d\n",
-				Func_DATA.BYTES.RSP_BYTE2,
-				Func_DATA.BYTES.PD_Next_State,
-				Func_DATA.BYTES.RSP_BYTE1,
-				Func_DATA.BYTES.PD_State);
-		}
+		REG_ADD = 0x20;
+		R_len = 4;
+		s2mm005_read_byte(i2c, REG_ADD, Func_DATA.BYTE, R_len);
+		dev_info(&i2c->dev, "Rsvd_H:0x%02X   PD_Nxt_State:0x%02X   Rsvd_L:0x%02X   PD_State:%02d\n",
+			Func_DATA.BYTES.RSP_BYTE2,
+			Func_DATA.BYTES.PD_Next_State,
+			Func_DATA.BYTES.RSP_BYTE1,
+			Func_DATA.BYTES.PD_State);
+
 		return;
 	} else {
-		if (usbpd_data->s2mm005_i2c_err < 0) {
-			if (usbpd_data->pd_state == State_PE_Initial_detach)
-				return;
+		REG_ADD = 0x20;
+		R_len = 4;
 
-			Func_DATA.DATA = 0;
-		} else {
-			REG_ADD = 0x20;
-			R_len = 4;
-
-			s2mm005_read_byte(i2c, REG_ADD, Func_DATA.BYTE, R_len);
-			dev_info(&i2c->dev, "Rsvd_H:0x%02X   PD_Nxt_State:0x%02X   Rsvd_L:0x%02X   PD_State:%02d\n",
-				Func_DATA.BYTES.RSP_BYTE2,
-				Func_DATA.BYTES.PD_Next_State,
-				Func_DATA.BYTES.RSP_BYTE1,
-				Func_DATA.BYTES.PD_State);
-		}
+		s2mm005_read_byte(i2c, REG_ADD, Func_DATA.BYTE, R_len);
+		dev_info(&i2c->dev, "Rsvd_H:0x%02X   PD_Nxt_State:0x%02X   Rsvd_L:0x%02X   PD_State:%02d\n",
+			Func_DATA.BYTES.RSP_BYTE2,
+			Func_DATA.BYTES.PD_Next_State,
+			Func_DATA.BYTES.RSP_BYTE1,
+			Func_DATA.BYTES.PD_State);
 
 		usbpd_data->pd_state = Func_DATA.BYTES.PD_State;
 		usbpd_data->func_state = Func_DATA.DATA;
 
+		is_dfp = usbpd_data->func_state & (0x1 << 26) ? 1 : 0;
+		is_src = usbpd_data->func_state & (0x1 << 25) ? 1 : 0;	
 		dev_info(&i2c->dev, "func_state :0x%X, is_dfp : %d, is_src : %d\n", usbpd_data->func_state, \
-			(usbpd_data->func_state & (0x1 << 26) ? 1 : 0), (usbpd_data->func_state & (0x1 << 25) ? 1 : 0));
+			is_dfp, is_src);
 
 		if (Func_DATA.BITS.RESET) {
 			dev_info(&i2c->dev, "ccic reset detected\n");
@@ -701,6 +682,8 @@ void process_cc_attach(void * data,u8 *plug_attach_done)
 		usbpd_data->plug_rprd_sel = 1;
 		if (usbpd_data->is_dr_swap || usbpd_data->is_pr_swap) {
 			dev_info(&i2c->dev, "%s - ignore all pd_state by %s\n",	__func__,(usbpd_data->is_dr_swap ? "dr_swap" : "pr_swap"));
+			if(!is_src)
+				vbus_turn_on_ctrl(0);
 			return;
 		}
 
@@ -712,6 +695,11 @@ void process_cc_attach(void * data,u8 *plug_attach_done)
 		case State_PE_SRC_Disabled:
 			dev_info(&i2c->dev, "%s %d: pd_state:%02d, is_host = %d, is_client = %d\n",
 							__func__, __LINE__, usbpd_data->pd_state, usbpd_data->is_host, usbpd_data->is_client);
+			if (!is_dfp) {			
+				dev_info(&i2c->dev, "%s No DFP! is_dfp:%d\n", __func__, is_dfp);
+				return;
+			}
+			
 			if (usbpd_data->is_client == CLIENT_ON) {
 				dev_info(&i2c->dev, "%s %d: pd_state:%02d, turn off client\n",
 							__func__, __LINE__, usbpd_data->pd_state);
@@ -750,10 +738,6 @@ void process_cc_attach(void * data,u8 *plug_attach_done)
 				ccic_event_work(usbpd_data,
 					CCIC_NOTIFY_DEV_USB, CCIC_NOTIFY_ID_USB,
 					1/*attach*/, USB_STATUS_NOTIFY_ATTACH_DFP/*drp*/, 0);
-#if defined(CONFIG_COMBO_REDRIVER)
-				mdelay(8);
-				ptn36502_config(USB3_ONLY_MODE, DFP);
-#endif
 				/* add to turn on external 5V */
 #if defined(CONFIG_USB_HOST_NOTIFY)
 				if (is_blocked(o_notify, NOTIFY_BLOCK_TYPE_HOST))
@@ -777,7 +761,11 @@ void process_cc_attach(void * data,u8 *plug_attach_done)
 		case State_ErrorRecovery:
 			dev_info(&i2c->dev, "%s %d: pd_state:%02d, is_host = %d, is_client = %d\n",
 						__func__, __LINE__, usbpd_data->pd_state, usbpd_data->is_host, usbpd_data->is_client);
-
+			if (is_dfp) {
+				dev_info(&i2c->dev, "%s No UFP! is_dfp:%d\n", __func__, is_dfp);
+				return;
+			}
+			
 			if (usbpd_data->is_host == HOST_ON_BY_RD) {
 				dev_info(&i2c->dev, "%s %d: pd_state:%02d,  turn off host\n",
 						__func__, __LINE__, usbpd_data->pd_state);
@@ -802,20 +790,14 @@ void process_cc_attach(void * data,u8 *plug_attach_done)
 				usbpd_data->is_host = HOST_OFF;
 				msleep(300);
 			}
-
-			if (Lp_DATA.BITS.PDSTATE29_SBU_DONE) {
-				dev_info(&i2c->dev, "%s SBU check done\n", __func__);
-				ccic_event_work(usbpd_data,
+			/* muic */
+			ccic_event_work(usbpd_data,
 					CCIC_NOTIFY_DEV_MUIC, CCIC_NOTIFY_ID_ATTACH,
-					1/*attach*/, 0/*rprd*/,
-					(Func_DATA.BITS.VBUS_CC_Short || Func_DATA.BITS.VBUS_SBU_Short) ? Rp_Abnormal:Func_DATA.BITS.RP_CurrentLvl);
-			} else {
-				/* muic */
-				ccic_event_work(usbpd_data,
-						CCIC_NOTIFY_DEV_MUIC, CCIC_NOTIFY_ID_ATTACH,
-						1/*attach*/, 0/*rprd*/, Rp_Sbu_check);
-			}
-
+					1/*attach*/, 0/*rprd*/, Func_DATA.BITS.VBUS_CC_Short? Rp_Abnormal:Func_DATA.BITS.RP_CurrentLvl);
+#if defined(CONFIG_USB_HW_PARAM)
+			if (Func_DATA.BITS.VBUS_CC_Short && (usbpd_data->pd_state == State_ErrorRecovery))
+				inc_hw_param(o_notify, USB_CCIC_VBUS_CC_SHORT_COUNT);
+#endif
 			if (usbpd_data->is_client == CLIENT_OFF && usbpd_data->is_host == HOST_OFF) {
 				/* usb */
 				usbpd_data->is_client = CLIENT_ON;
@@ -831,9 +813,6 @@ void process_cc_attach(void * data,u8 *plug_attach_done)
 				ccic_event_work(usbpd_data,
 						CCIC_NOTIFY_DEV_USB, CCIC_NOTIFY_ID_USB,
 						1/*attach*/, USB_STATUS_NOTIFY_ATTACH_UFP/*drp*/, 0);
-#if defined(CONFIG_COMBO_REDRIVER)
-				ptn36502_config(USB3_ONLY_MODE, UFP);
-#endif
 			}
 			break;
 		case State_PE_PRS_SRC_SNK_Transition_to_off:
@@ -869,9 +848,6 @@ void process_cc_attach(void * data,u8 *plug_attach_done)
 		ccic_event_work(usbpd_data,
 			CCIC_NOTIFY_DEV_MUIC, CCIC_NOTIFY_ID_ATTACH,
 			0/*attach*/, 0/*rprd*/, 0);
-#if defined(CONFIG_COMBO_REDRIVER)
-		ptn36502_config(INIT_MODE, 0);
-#endif
 		if(usbpd_data->is_host > HOST_OFF || usbpd_data->is_client > CLIENT_OFF) {
 #if defined(CONFIG_DUAL_ROLE_USB_INTF)
 			if(usbpd_data->is_host > HOST_OFF || usbpd_data->power_role == DUAL_ROLE_PROP_PR_SRC)
@@ -910,7 +886,7 @@ void process_cc_attach(void * data,u8 *plug_attach_done)
 	}
 }
 
-////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////// ////////////////////////////////////
 // Detach processing
 // 1. Used when the s2mm005 unbind case
 ////////////////////////////////////////////////////////////////////////////////
@@ -959,7 +935,9 @@ void process_cc_get_int_status(void *data, uint32_t *pPRT_MSG, MSG_IRQ_STATUS_Ty
 	VDM_MSG_IRQ_STATUS_Type VDM_MSG_IRQ_State;
 	SSM_MSG_IRQ_STATUS_Type SSM_MSG_IRQ_State;
 	AP_REQ_GET_STATUS_Type AP_REQ_GET_State;
-
+	FUNC_STATE_Type state_type;
+	uint32_t is_dfp;
+	
 	pr_info("%s\n",__func__);
 	for(cnt = 0;cnt < 48;cnt++)
 	{
@@ -1021,7 +999,14 @@ void process_cc_get_int_status(void *data, uint32_t *pPRT_MSG, MSG_IRQ_STATUS_Ty
 		else
 		{
 #endif
+			state_type.DATA = usbpd_data->func_state;
+			is_dfp = state_type.BITS.IS_DFP;
+			
 			if (usbpd_data->is_host == HOST_ON_BY_RD) {
+				if (is_dfp) {
+					pr_err("%s error. is_dfp is true. but already dfp.\n",__func__);
+					goto error;
+				}
 				ccic_event_work(usbpd_data,
 						CCIC_NOTIFY_DEV_USB, CCIC_NOTIFY_ID_USB,
 						0/*attach*/, USB_STATUS_NOTIFY_DETACH/*drp*/, 0);
@@ -1035,6 +1020,10 @@ void process_cc_get_int_status(void *data, uint32_t *pPRT_MSG, MSG_IRQ_STATUS_Ty
 				usbpd_data->is_host = HOST_OFF;
 				usbpd_data->is_client = CLIENT_ON;
 			} else if (usbpd_data->is_client == CLIENT_ON) {
+				if (!is_dfp) {
+					pr_err("%s error. is_dfp is false. but already ufp.\n",__func__);
+					goto error;
+				}
 				ccic_event_work(usbpd_data,
 						CCIC_NOTIFY_DEV_USB, CCIC_NOTIFY_ID_USB,
 						0/*attach*/, USB_STATUS_NOTIFY_DETACH/*drp*/, 0);
@@ -1047,17 +1036,45 @@ void process_cc_get_int_status(void *data, uint32_t *pPRT_MSG, MSG_IRQ_STATUS_Ty
 						USB_STATUS_NOTIFY_ATTACH_DFP/*drp*/, 0);
 				usbpd_data->is_host = HOST_ON_BY_RD;
 				usbpd_data->is_client = CLIENT_OFF;
-			}
+			} else {
+				/* both of host and device not worked case. 
+				    rebooting case with dex connection */
+				   
+				    if (is_dfp) {
+						pr_info("%s: all usb off case : is dfp=%d : run usb host \n", __func__, is_dfp);
+						ccic_event_work(usbpd_data, CCIC_NOTIFY_DEV_MUIC,
+							CCIC_NOTIFY_ID_ATTACH, 1/*attach*/, 1/*rprd*/,0);
+						ccic_event_work(usbpd_data,
+								CCIC_NOTIFY_DEV_USB, CCIC_NOTIFY_ID_USB,
+								1/*attach*/,
+								USB_STATUS_NOTIFY_ATTACH_DFP/*drp*/, 0);
+						usbpd_data->is_host = HOST_ON_BY_RD;
+						usbpd_data->is_client = CLIENT_OFF;					
+				    } else {
+				    		pr_info("%s: all usb off case : is dfp=%d : run usb client \n", __func__, is_dfp);
+						ccic_event_work(usbpd_data,
+							CCIC_NOTIFY_DEV_MUIC, CCIC_NOTIFY_ID_ATTACH,
+							1/*attach*/, 0/*rprd*/,0);
+						ccic_event_work(usbpd_data,
+								CCIC_NOTIFY_DEV_USB, CCIC_NOTIFY_ID_USB,
+								1/*attach*/, USB_STATUS_NOTIFY_ATTACH_UFP/*drp*/, 0);
+						usbpd_data->is_host = HOST_OFF;
+						usbpd_data->is_client = CLIENT_ON;
+
+				    }
+					
+			}	
 #if defined(CONFIG_CCIC_ALTERNATE_MODE)
 		}
 #endif
 	}
 
+error:
+
 #if defined(CONFIG_CCIC_ALTERNATE_MODE)
-	if(VDM_MSG_IRQ_State.DATA && usbpd_data->is_host == HOST_ON_BY_RD)
+	if(VDM_MSG_IRQ_State.DATA)
 		receive_alternate_message(usbpd_data, &VDM_MSG_IRQ_State);
-	if(SSM_MSG_IRQ_State.BITS.Ssm_Flag_Unstructured_Data
-			&& usbpd_data->is_host == HOST_ON_BY_RD)
+	if(SSM_MSG_IRQ_State.BITS.Ssm_Flag_Unstructured_Data)
 		receive_unstructured_vdm_message(usbpd_data, &SSM_MSG_IRQ_State);
 	if(!AP_REQ_GET_State.BITS.Alt_Mode_By_I2C)
 		set_enable_alternate_mode(ALTERNATE_MODE_RESET);
@@ -1073,7 +1090,7 @@ void process_cc_rid(void *data)
 	struct i2c_client *i2c = usbpd_data->i2c;
 	static int prev_rid = RID_OPEN;
 	u8 rid;
-#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_DUAL_ROLE_USB_INTF)
+#if defined(CONFIG_USB_HOST_NOTIFY)
 	struct otg_notify *o_notify = get_otg_notify();
 #endif
 
@@ -1095,9 +1112,9 @@ void process_cc_rid(void *data)
 				usbpd_data->is_client = CLIENT_OFF;
 #if defined(CONFIG_DUAL_ROLE_USB_INTF)
 				usbpd_data->power_role = DUAL_ROLE_PROP_PR_NONE;
+#endif
 #if defined(CONFIG_USB_HOST_NOTIFY)
 				send_otg_notify(o_notify, NOTIFY_EVENT_POWER_SOURCE, 0);
-#endif
 #endif
 				/* usb or otg */
 				ccic_event_work(usbpd_data,

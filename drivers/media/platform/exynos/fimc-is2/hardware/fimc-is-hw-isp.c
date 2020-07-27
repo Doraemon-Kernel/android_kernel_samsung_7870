@@ -21,10 +21,12 @@ const struct fimc_is_hw_ip_ops fimc_is_hw_isp_ops = {
 	.disable		= fimc_is_hw_isp_disable,
 	.shot			= fimc_is_hw_isp_shot,
 	.set_param		= fimc_is_hw_isp_set_param,
+	.get_meta		= fimc_is_hw_isp_get_meta,
 	.frame_ndone		= fimc_is_hw_isp_frame_ndone,
 	.load_setfile		= fimc_is_hw_isp_load_setfile,
 	.apply_setfile		= fimc_is_hw_isp_apply_setfile,
-	.delete_setfile		= fimc_is_hw_isp_delete_setfile
+	.delete_setfile		= fimc_is_hw_isp_delete_setfile,
+	.clk_gate		= fimc_is_hardware_clk_gate
 };
 
 int fimc_is_hw_isp_probe(struct fimc_is_hw_ip *hw_ip, struct fimc_is_interface *itf,
@@ -41,12 +43,12 @@ int fimc_is_hw_isp_probe(struct fimc_is_hw_ip *hw_ip, struct fimc_is_interface *
 	hw_ip->ops  = &fimc_is_hw_isp_ops;
 	hw_ip->itf  = itf;
 	hw_ip->itfc = itfc;
-	hw_ip->fcount = 0;
+	atomic_set(&hw_ip->fcount, 0);
 	hw_ip->internal_fcount = 0;
 	hw_ip->is_leader = true;
-	atomic_set(&hw_ip->Vvalid, 0);
-	atomic_set(&hw_ip->ref_count, 0);
-	init_waitqueue_head(&hw_ip->wait_queue);
+	atomic_set(&hw_ip->status.Vvalid, V_BLANK);
+	atomic_set(&hw_ip->rsccount, 0);
+	init_waitqueue_head(&hw_ip->status.wait_queue);
 
 	clear_bit(HW_OPEN, &hw_ip->state);
 	clear_bit(HW_INIT, &hw_ip->state);
@@ -95,12 +97,18 @@ int fimc_is_hw_isp_init(struct fimc_is_hw_ip *hw_ip, struct fimc_is_group *group
 	hw_ip->group[instance] = group;
 
 	if (hw_isp->lib_func == NULL) {
+#ifdef ENABLE_FPSIMD_FOR_USER
+		fpsimd_get();
 		ret = get_lib_func(LIB_FUNC_ISP, (void **)&hw_isp->lib_func);
-		dbg_hw("lib_interface_func is set (%d)\n", hw_ip->id);
+		fpsimd_put();
+#else
+		ret = get_lib_func(LIB_FUNC_ISP, (void **)&hw_isp->lib_func);
+#endif
+		info_hw("[%d][ID:%d]get_lib_func is set\n", instance, hw_ip->id);
 	}
 
 	if (hw_isp->lib_func == NULL) {
-		err_hw("func_isp(null) (%d)", hw_ip->id);
+		err_hw("[%d][ID:%d]hw_isp->lib_func(null)", instance, hw_ip->id);
 		fimc_is_load_clear();
 		return -EINVAL;
 	}
@@ -141,6 +149,7 @@ int fimc_is_hw_isp_object_close(struct fimc_is_hw_ip *hw_ip, u32 instance)
 	struct fimc_is_hw_isp *hw_isp;
 
 	BUG_ON(!hw_ip);
+	BUG_ON(!hw_ip->priv_info);
 
 	hw_isp = (struct fimc_is_hw_isp *)hw_ip->priv_info;
 
@@ -161,23 +170,22 @@ int fimc_is_hw_isp_close(struct fimc_is_hw_ip *hw_ip, u32 instance)
 	if (!test_bit(HW_OPEN, &hw_ip->state))
 		return 0;
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_isp = (struct fimc_is_hw_isp *)hw_ip->priv_info;
+	BUG_ON(!hw_isp->lib_support);
 
 	/* TODO: check 3aa */
 	for (i = 0; i < FIMC_IS_MAX_TASK_WORKER; i++) {
-		if (hw_isp->lib_support->task_taaisp[i].task == NULL) {
-			err_hw("task is null");
-		} else {
-			if (hw_isp->lib_support->task_taaisp[i].task->state <= 0) {
-				warn_hw("kthread state(%ld), exit_code(%d), exit_state(%d)\n",
+		if (hw_isp->lib_support->task_taaisp[i].task) {
+			dbg_hw("kthread state(%ld), exit_code(%d), exit_state(%d)",
 					hw_isp->lib_support->task_taaisp[i].task->state,
 					hw_isp->lib_support->task_taaisp[i].task->exit_code,
 					hw_isp->lib_support->task_taaisp[i].task->exit_state);
 
-				ret = kthread_stop(hw_isp->lib_support->task_taaisp[i].task);
-				if (ret)
-					err_hw("kthread_stop fail (%d)", ret);
-			}
+			ret = kthread_stop(hw_isp->lib_support->task_taaisp[i].task);
+			if (ret)
+				err_hw("kthread_stop fail (%d)", ret);
+			hw_isp->lib_support->task_taaisp[i].task = NULL;
 		}
 	}
 
@@ -185,7 +193,7 @@ int fimc_is_hw_isp_close(struct fimc_is_hw_ip *hw_ip, u32 instance)
 	frame_manager_close(hw_ip->framemgr);
 	frame_manager_close(hw_ip->framemgr_late);
 
-	info_hw("[%d]close (%d)(%d)\n", instance, hw_ip->id, atomic_read(&hw_ip->ref_count));
+	info_hw("[%d]close (%d)(%d)\n", instance, hw_ip->id, atomic_read(&hw_ip->rsccount));
 
 	return ret;
 }
@@ -196,7 +204,7 @@ int fimc_is_hw_isp_enable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_ma
 
 	BUG_ON(!hw_ip);
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
 	if (!test_bit(HW_INIT, &hw_ip->state)) {
@@ -218,16 +226,18 @@ int fimc_is_hw_isp_disable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_m
 
 	BUG_ON(!hw_ip);
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
-	info_hw("[%d][ID:%d]stream_off \n", instance, hw_ip->id);
+	info_hw("[%d][ID:%d]isp_disable: Vvalid(%d)\n", instance, hw_ip->id,
+		atomic_read(&hw_ip->status.Vvalid));
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_isp = (struct fimc_is_hw_isp *)hw_ip->priv_info;
 	param_set = &hw_isp->param_set[instance];
 
-	timetowait = wait_event_timeout(hw_ip->wait_queue,
-		!atomic_read(&hw_ip->Vvalid),
+	timetowait = wait_event_timeout(hw_ip->status.wait_queue,
+		!atomic_read(&hw_ip->status.Vvalid),
 		FIMC_IS_HW_STOP_TIMEOUT);
 
 	if (!timetowait) {
@@ -238,6 +248,7 @@ int fimc_is_hw_isp_disable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_m
 
 	param_set->fcount = 0;
 	if (test_bit(HW_RUN, &hw_ip->state)) {
+		/* TODO: need to kthread_flush when isp use task */
 		fimc_is_lib_isp_stop(hw_ip, &hw_isp->lib[instance], instance);
 		clear_bit(HW_RUN, &hw_ip->state);
 	} else {
@@ -253,11 +264,11 @@ int fimc_is_hw_isp_shot(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame
 	ulong hw_map)
 {
 	int ret = 0;
-	u32 lindex, hindex;
 	struct fimc_is_hw_isp *hw_isp;
 	struct isp_param_set *param_set;
 	struct is_region *region;
 	struct isp_param *param;
+	u32 lindex, hindex;
 
 	BUG_ON(!hw_ip);
 	BUG_ON(!frame);
@@ -269,14 +280,19 @@ int fimc_is_hw_isp_shot(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame
 		return -EINVAL;
 	}
 
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
-	set_bit(hw_ip->id, &frame->core_flag);
+	if ((!fimc_is_hw_frame_done_with_dma())
+		|| (!test_bit(ENTRY_IXC, &frame->out_flag) && !test_bit(ENTRY_IXP, &frame->out_flag)))
+		set_bit(hw_ip->id, &frame->core_flag);
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_isp = (struct fimc_is_hw_isp *)hw_ip->priv_info;
 	param_set = &hw_isp->param_set[frame->instance];
 	region = hw_ip->region[frame->instance];
+	BUG_ON(!region);
+
 	param = &region->parameter.isp;
 
 	if (frame->type == SHOT_TYPE_INTERNAL) {
@@ -287,8 +303,10 @@ int fimc_is_hw_isp_shot(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame
 		param_set->output_dva_chunk = 0x0;
 		param_set->dma_output_yuv.cmd  = DMA_OUTPUT_COMMAND_DISABLE;
 		param_set->output_dva_yuv = 0x0;
+		hw_ip->internal_fcount = frame->fcount;
 		goto config;
 	} else {
+		BUG_ON(!frame->shot);
 		/* per-frame control
 		* check & update size from region */
 		lindex = frame->shot->ctl.vendor_entry.lowIndexParam;
@@ -296,17 +314,8 @@ int fimc_is_hw_isp_shot(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame
 
 		if (hw_ip->internal_fcount != 0) {
 			hw_ip->internal_fcount = 0;
-
-			if (param->otf_input.cmd != param_set->otf_input.cmd)
-				lindex |= LOWBIT_OF(PARAM_ISP_OTF_INPUT);
-			if (param->vdma1_input.cmd != param_set->dma_input.cmd)
-				lindex |= LOWBIT_OF(PARAM_ISP_VDMA1_INPUT);
-			if (param->otf_output.cmd != param_set->otf_output.cmd)
-				lindex |= LOWBIT_OF(PARAM_ISP_OTF_OUTPUT);
-			if (param->vdma4_output.cmd != param_set->dma_output_chunk.cmd)
-				lindex |= LOWBIT_OF(PARAM_ISP_VDMA4_OUTPUT);
-			if (param->vdma5_output.cmd != param_set->dma_output_yuv.cmd)
-				lindex |= LOWBIT_OF(PARAM_ISP_VDMA5_OUTPUT);
+			param_set->dma_output_chunk.cmd = param->vdma4_output.cmd;
+			param_set->dma_output_yuv.cmd  = param->vdma5_output.cmd;
 		}
 	}
 
@@ -347,7 +356,7 @@ config:
 	param_set->fcount = frame->fcount;
 
 	if (frame->type == SHOT_TYPE_INTERNAL) {
-		fimc_is_log_write("[%d]isp_shot [T:%d][R:%d][F:%d][IN:0x%x] [%d][OUT:0x%x]\n",
+		fimc_is_log_write("[@][DRV][%d]isp_shot [T:%d][R:%d][F:%d][IN:0x%x] [%d][OUT:0x%x]\n",
 			param_set->instance_id, frame->type, param_set->reprocessing,
 			param_set->fcount, param_set->input_dva,
 			param_set->dma_output_yuv.cmd, param_set->output_dva_yuv);
@@ -360,20 +369,20 @@ config:
 	}
 
 	if (param_set->otf_input.cmd == OTF_INPUT_COMMAND_ENABLE) {
-		struct fimc_is_hw_ip *hw_ip_3aa;
-		struct fimc_is_hw_3aa *hw_3aa;
-		enum fimc_is_hardware_id hw_id;
-		int hw_slot;
+		struct fimc_is_hw_ip *hw_ip_3aa = NULL;
+		struct fimc_is_hw_3aa *hw_3aa = NULL;
+		enum fimc_is_hardware_id hw_id = DEV_HW_END;
+		int hw_slot = 0;
 
-		if (test_bit(DEV_HW_3AA0, &hw_map)) {
+		if (test_bit(DEV_HW_3AA0, &hw_map))
 			hw_id = DEV_HW_3AA0;
-		} else  if (test_bit(DEV_HW_3AA1, &hw_map)) {
+		else if (test_bit(DEV_HW_3AA1, &hw_map))
 			hw_id = DEV_HW_3AA1;
-		}
 
 		hw_slot = fimc_is_hw_slot_id(hw_id);
 		if (valid_hw_slot_id(hw_slot)) {
 			hw_ip_3aa = &hw_ip->hardware->hw_ip[hw_slot];
+			BUG_ON(!hw_ip_3aa->priv_info);
 			hw_3aa = (struct fimc_is_hw_3aa *)hw_ip_3aa->priv_info;
 			param_set->taa_param = &hw_3aa->param_set[frame->instance];
 		}
@@ -394,18 +403,18 @@ int fimc_is_hw_isp_set_param(struct fimc_is_hw_ip *hw_ip, struct is_region *regi
 	struct isp_param_set *param_set;
 
 	BUG_ON(!hw_ip);
-	BUG_ON(!region);
 
-	hw_isp = (struct fimc_is_hw_isp *)hw_ip->priv_info;
-	param_set = &hw_isp->param_set[instance];
-
-	if (!test_bit(hw_ip->id, &hw_map))
+	if (!test_bit_variables(hw_ip->id, &hw_map))
 		return 0;
 
 	if (!test_bit(HW_INIT, &hw_ip->state)) {
 		err_hw("not initialized!! (%d)", hw_ip->id);
 		return -EINVAL;
 	}
+
+	BUG_ON(!hw_ip->priv_info);
+	hw_isp = (struct fimc_is_hw_isp *)hw_ip->priv_info;
+	param_set = &hw_isp->param_set[instance];
 
 	hw_ip->region[instance] = region;
 	hw_ip->lindex[instance] = lindex;
@@ -425,6 +434,7 @@ void fimc_is_hw_isp_update_param(struct fimc_is_hw_ip *hw_ip, struct is_region *
 	BUG_ON(!param_set);
 
 	param = &region->parameter.isp;
+	param_set->instance_id = instance;
 
 	/* check input */
 	if (lindex & LOWBIT_OF(PARAM_ISP_OTF_INPUT)) {
@@ -454,6 +464,28 @@ void fimc_is_hw_isp_update_param(struct fimc_is_hw_ip *hw_ip, struct is_region *
 	}
 }
 
+int fimc_is_hw_isp_get_meta(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame,
+	ulong hw_map)
+{
+	int ret = 0;
+	struct fimc_is_hw_isp *hw_isp;
+
+	BUG_ON(!hw_ip);
+	BUG_ON(!frame);
+
+	if (!test_bit_variables(hw_ip->id, &hw_map))
+		return 0;
+
+	BUG_ON(!hw_ip->priv_info);
+	hw_isp = (struct fimc_is_hw_isp *)hw_ip->priv_info;
+
+	ret = fimc_is_lib_isp_get_meta(hw_ip, &hw_isp->lib[frame->instance], frame);
+	if (ret)
+		err_hw("[%d] get_meta fail", frame->instance);
+
+	return ret;
+}
+
 int fimc_is_hw_isp_frame_ndone(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame,
 	u32 instance, bool late_flag)
 {
@@ -462,6 +494,7 @@ int fimc_is_hw_isp_frame_ndone(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame
 	enum fimc_is_frame_done_type done_type;
 
 	BUG_ON(!hw_ip);
+	BUG_ON(!frame);
 
 	switch (hw_ip->id) {
 	case DEV_HW_ISP0:
@@ -514,7 +547,7 @@ int fimc_is_hw_isp_load_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 	if (test_bit(DEV_HW_3AA0, &hw_map) || test_bit(DEV_HW_3AA1, &hw_map))
 		return 0;
 
-	if (!test_bit(hw_ip->id, &hw_map)) {
+	if (!test_bit_variables(hw_ip->id, &hw_map)) {
 		dbg_hw("[%d]%s: hw_map(0x%lx)\n", instance, __func__, hw_map);
 		return 0;
 	}
@@ -538,7 +571,9 @@ int fimc_is_hw_isp_load_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 		break;
 	}
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_isp = (struct fimc_is_hw_isp *)hw_ip->priv_info;
+
 	addr = hw_ip->setfile_info.table[index].addr;
 	size = hw_ip->setfile_info.table[index].size;
 	ret = fimc_is_lib_isp_create_tune_set(&hw_isp->lib[instance],
@@ -561,7 +596,7 @@ int fimc_is_hw_isp_apply_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 	if (test_bit(DEV_HW_3AA0, &hw_map) || test_bit(DEV_HW_3AA1, &hw_map))
 		return 0;
 
-	if (!test_bit(hw_ip->id, &hw_map)) {
+	if (!test_bit_variables(hw_ip->id, &hw_map)) {
 		dbg_hw("[%d]%s: hw_map(0x%lx)\n", instance, __func__, hw_map);
 		return 0;
 	}
@@ -578,7 +613,9 @@ int fimc_is_hw_isp_apply_setfile(struct fimc_is_hw_ip *hw_ip, int index,
 	info_hw("[%d][ID:%d] setfile (%d) scenario (%d)\n", instance, hw_ip->id,
 		setfile_index, index);
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_isp = (struct fimc_is_hw_isp *)hw_ip->priv_info;
+
 	ret = fimc_is_lib_isp_apply_tune_set(&hw_isp->lib[instance], setfile_index, instance);
 
 	return ret;
@@ -594,7 +631,7 @@ int fimc_is_hw_isp_delete_setfile(struct fimc_is_hw_ip *hw_ip, u32 instance, ulo
 	if (test_bit(DEV_HW_3AA0, &hw_map) || test_bit(DEV_HW_3AA1, &hw_map))
 		return 0;
 
-	if (!test_bit(hw_ip->id, &hw_map)) {
+	if (!test_bit_variables(hw_ip->id, &hw_map)) {
 		dbg_hw("[%d]%s: hw_map(0x%lx)\n", instance, __func__, hw_map);
 		return 0;
 	}
@@ -607,7 +644,9 @@ int fimc_is_hw_isp_delete_setfile(struct fimc_is_hw_ip *hw_ip, u32 instance, ulo
 	if (hw_ip->setfile_info.num == 0)
 		return 0;
 
+	BUG_ON(!hw_ip->priv_info);
 	hw_isp = (struct fimc_is_hw_isp *)hw_ip->priv_info;
+
 	for (i = 0; i < hw_ip->setfile_info.num; i++)
 		ret = fimc_is_lib_isp_delete_tune_set(&hw_isp->lib[instance],
 				(u32)i, instance);

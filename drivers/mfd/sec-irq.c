@@ -19,6 +19,7 @@
 #include <linux/mfd/samsung/core.h>
 #include <linux/mfd/samsung/irq.h>
 #include <linux/mfd/samsung/s2mpu03.h>
+#include <linux/mfd/samsung/s2mpu05.h>
 #include <linux/mfd/samsung/s2mps16.h>
 #include <linux/mfd/samsung/s2mps15.h>
 #include <linux/mfd/samsung/s2mps13.h>
@@ -237,6 +238,78 @@ static struct regmap_irq s2mps16_irqs[] = {
 };
 
 #ifndef CONFIG_EXYNOS_MBOX
+
+static struct regmap_irq s2mpu05_irqs[] = {
+	[S2MPU05_IRQ_PWRONF] = {
+		.reg_offset = 0,
+		.mask = S2MPU05_IRQ_PWRONF_MASK,
+	},
+	[S2MPU05_IRQ_PWRONR] = {
+		.reg_offset = 0,
+		.mask = S2MPU05_IRQ_PWRONR_MASK,
+	},
+	[S2MPU05_IRQ_JIGONBF] = {
+		.reg_offset = 0,
+		.mask = S2MPU05_IRQ_JIGONBF_MASK,
+	},
+	[S2MPU05_IRQ_JIGONBR] = {
+		.reg_offset = 0,
+		.mask = S2MPU05_IRQ_JIGONBR_MASK,
+	},
+	[S2MPU05_IRQ_ACOKF] = {
+		.reg_offset = 0,
+		.mask = S2MPU05_IRQ_ACOKF_MASK,
+	},
+	[S2MPU05_IRQ_ACOKR] = {
+		.reg_offset = 0,
+		.mask = S2MPU05_IRQ_ACOKR_MASK,
+	},
+	[S2MPU05_IRQ_PWRON1S] = {
+		.reg_offset = 0,
+		.mask = S2MPU05_IRQ_PWRON1S_MASK,
+	},
+	[S2MPU05_IRQ_MRB] = {
+		.reg_offset = 0,
+		.mask = S2MPU05_IRQ_MRB_MASK,
+	},
+	[S2MPU05_IRQ_RTC60S] = {
+		.reg_offset = 1,
+		.mask = S2MPU05_IRQ_RTC60S_MASK,
+	},
+	[S2MPU05_IRQ_RTCA1] = {
+		.reg_offset = 1,
+		.mask = S2MPU05_IRQ_RTCA1_MASK,
+	},
+	[S2MPU05_IRQ_RTCA0] = {
+		.reg_offset = 1,
+		.mask = S2MPU05_IRQ_RTCA0_MASK,
+	},
+	[S2MPU05_IRQ_SMPL] = {
+		.reg_offset = 1,
+		.mask = S2MPU05_IRQ_SMPL_MASK,
+	},
+	[S2MPU05_IRQ_RTC1S] = {
+		.reg_offset = 1,
+		.mask = S2MPU05_IRQ_RTC1S_MASK,
+	},
+	[S2MPU05_IRQ_WTSR] = {
+		.reg_offset = 1,
+		.mask = S2MPU05_IRQ_WTSR_MASK,
+	},
+	[S2MPU05_IRQ_INT120C] = {
+		.reg_offset = 2,
+		.mask = S2MPU05_IRQ_INT120C_MASK,
+	},
+	[S2MPU05_IRQ_INT140C] = {
+		.reg_offset = 2,
+		.mask = S2MPU05_IRQ_INT140C_MASK,
+	},
+	[S2MPU05_IRQ_TSD] = {
+		.reg_offset = 2,
+		.mask = S2MPU05_IRQ_TSD_MASK,
+	},
+};
+
 static struct regmap_irq s2mpu03_irqs[] = {
 	[S2MPU03_IRQ_PWRONF] = {
 		.reg_offset = 0,
@@ -835,6 +908,16 @@ void sec_irq_exit(struct sec_pmic_dev *sec_pmic)
 
 #else /* CONFIG_EXYNOS_MBOX */
 
+static struct regmap_irq_chip s2mpu05_irq_chip = {
+	.name = "s2mpu05",
+	.irqs = s2mpu05_irqs,
+	.num_irqs = ARRAY_SIZE(s2mpu05_irqs),
+	.num_regs = 3,
+	.status_base = S2MPU05_REG_INT1,
+	.mask_base = S2MPU05_REG_INT1M,
+	.ack_base = S2MPU05_REG_INT1,
+};
+
 static struct regmap_irq_chip s2mps16_irq_chip = {
 	.name = "s2mps16",
 	.irqs = s2mps16_irqs,
@@ -958,6 +1041,12 @@ int sec_irq_init(struct sec_pmic_dev *sec_pmic)
 		ret = regmap_add_irq_chip(sec_pmic->regmap, sec_pmic->irq,
 				  IRQF_TRIGGER_LOW | IRQF_ONESHOT,
 				  sec_pmic->irq_base, &s2mps16_irq_chip,
+				  &sec_pmic->irq_data);
+		break;
+	case S2MPU05X:
+		ret = regmap_add_irq_chip(sec_pmic->regmap, sec_pmic->irq,
+				  IRQF_TRIGGER_LOW | IRQF_ONESHOT,
+				  sec_pmic->irq_base, &s2mpu05_irq_chip,
 				  &sec_pmic->irq_data);
 		break;
 	default:

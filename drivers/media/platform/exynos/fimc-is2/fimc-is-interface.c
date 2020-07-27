@@ -143,32 +143,34 @@ static int fimc_is_err_report_handler(struct fimc_is_interface *itf, struct fimc
 void fimc_is_storefirm(struct fimc_is_interface *this)
 {
 	struct fimc_is_core *core = this->core;
-	size_t fw_size = FIMC_IS_A5_MEM_SIZE;
+	size_t fw_size = FW_MEM_SIZE;
 
 	info("%s\n", __func__);
 
-	vb2_ion_sync_for_cpu(core->resourcemgr.minfo.fw_cookie,
+	CALL_BUFOP(core->resourcemgr.minfo.pb_fw, sync_for_cpu,
+		core->resourcemgr.minfo.pb_fw,
 		0,
-		FIMC_IS_BACKUP_SIZE,
+		FW_BACKUP_SIZE,
 		DMA_BIDIRECTIONAL);
 
 	memcpy((void *)(this->itf_kvaddr + fw_size),
-			(void *)(this->itf_kvaddr), FIMC_IS_BACKUP_SIZE);
+			(void *)(this->itf_kvaddr), FW_BACKUP_SIZE);
 }
 
 void fimc_is_restorefirm(struct fimc_is_interface *this)
 {
 	struct fimc_is_core *core = this->core;
-	size_t fw_size = FIMC_IS_A5_MEM_SIZE;
+	size_t fw_size = FW_MEM_SIZE;
 
 	info("%s\n", __func__);
 
 	memcpy((void *)(this->itf_kvaddr),
-		(void *)(this->itf_kvaddr + fw_size), FIMC_IS_BACKUP_SIZE);
+		(void *)(this->itf_kvaddr + fw_size), FW_BACKUP_SIZE);
 
-	vb2_ion_sync_for_device(core->resourcemgr.minfo.fw_cookie,
+	CALL_BUFOP(core->resourcemgr.minfo.pb_fw, sync_for_device,
+		core->resourcemgr.minfo.pb_fw,
 		0,
-		FIMC_IS_BACKUP_SIZE,
+		FW_BACKUP_SIZE,
 		DMA_BIDIRECTIONAL);
 }
 
@@ -589,6 +591,55 @@ static void send_interrupt(struct fimc_is_interface *interface)
 {
 	writel(INTGR0_INTGD0, interface->regs + INTGR0);
 }
+
+#ifdef ENABLE_SYNC_REPROCESSING
+static inline void fimc_is_sync_reprocessing_queue(struct fimc_is_groupmgr *groupmgr,
+	struct fimc_is_group *group)
+{
+	int i;
+	struct fimc_is_group_task *gtask;
+	struct fimc_is_group *rgroup;
+	struct fimc_is_framemgr *rframemgr;
+	struct fimc_is_frame *rframe;
+	ulong flags;
+
+	if (test_bit(FIMC_IS_ISCHAIN_REPROCESSING, &group->device->state))
+		return;
+
+	gtask = &groupmgr->gtask[group->id];
+
+	if (atomic_read(&gtask->rep_tick) < REPROCESSING_TICK_COUNT) {
+		if (atomic_read(&gtask->rep_tick) > 0)
+			atomic_dec(&gtask->rep_tick);
+
+		return;
+	}
+
+	for (i = 0; i < FIMC_IS_STREAM_COUNT; ++i) {
+		if (!groupmgr->group[i][group->slot])
+			continue;
+
+		if (test_bit(FIMC_IS_ISCHAIN_REPROCESSING, &groupmgr->group[i][group->slot]->device->state)) {
+			rgroup = groupmgr->group[i][group->slot];
+			break;
+		}
+	}
+
+	if (i == FIMC_IS_STREAM_COUNT) {
+		mgwarn("reprocessing group not exists", group, group);
+		return;
+	}
+
+	rframemgr = GET_FRAMEMGR(rgroup->leader.vctx);
+
+	framemgr_e_barrier_irqs(rframemgr, 0, flags);
+	rframe = peek_frame(rframemgr, FS_REQUEST);
+	framemgr_x_barrier_irqr(rframemgr, 0, flags);
+
+	if (rframe)
+		queue_kthread_work(&gtask->worker, &rframe->work);
+}
+#endif
 
 static int fimc_is_set_cmd(struct fimc_is_interface *itf,
 	struct fimc_is_msg *msg,
@@ -1248,16 +1299,7 @@ static void wq_func_subdev(struct fimc_is_subdev *leader,
 	BUG_ON(!sub_frame);
 
 	ldr_vctx = leader->vctx;
-	if (unlikely(!ldr_vctx)) {
-		mserr("ldr_vctx is NULL", subdev, subdev);
-		return;
-	}
-
 	sub_vctx = subdev->vctx;
-	if (unlikely(!sub_vctx)) {
-		mserr("ldr_vctx is NULL", subdev, subdev);
-		return;
-	}
 
 	ldr_framemgr = GET_FRAMEMGR(ldr_vctx);
 	sub_framemgr = GET_FRAMEMGR(sub_vctx);
@@ -1314,15 +1356,15 @@ static void wq_func_subdev(struct fimc_is_subdev *leader,
 
 	clear_bit(subdev->id, &ldr_frame->out_flag);
 
-	/* for debug */
-	DBG_DIGIT_TAG((ldr_frame->group) ? ((struct fimc_is_group *)ldr_frame->group)->slot : 0,
-			0, GET_QUEUE(sub_vctx), sub_frame, fcount);
-
 complete:
 	sub_frame->stream->fcount = fcount;
 	sub_frame->stream->rcount = rcount;
 
 	trans_frame(sub_framemgr, sub_frame, FS_COMPLETE);
+
+	/* for debug */
+	DBG_DIGIT_TAG((ldr_frame->group) ? ((struct fimc_is_group *)ldr_frame->group)->slot : 0,
+			0, GET_QUEUE(sub_vctx), sub_frame, fcount);
 
 	CALL_VOPS(sub_vctx, done, sub_frame->index, done_state);
 }
@@ -2247,16 +2289,16 @@ static void wq_func_group_xxx(struct fimc_is_groupmgr *groupmgr,
 	BUG_ON(!frame);
 
 	/* perframe error control */
-	if (test_bit(FIMC_IS_SUBDEV_PARAM_ERR, &group->leader.state)) {
+	if (test_bit(FIMC_IS_SUBDEV_FORCE_SET, &group->leader.state)) {
 		if (!status) {
 			if (frame->lindex || frame->hindex)
-				clear_bit(FIMC_IS_SUBDEV_PARAM_ERR, &group->leader.state);
+				clear_bit(FIMC_IS_SUBDEV_FORCE_SET, &group->leader.state);
 			else
 				status = SHOT_ERR_PERFRAME;
 		}
 	} else {
 		if (status && (frame->lindex || frame->hindex))
-			set_bit(FIMC_IS_SUBDEV_PARAM_ERR, &group->leader.state);
+			set_bit(FIMC_IS_SUBDEV_FORCE_SET, &group->leader.state);
 	}
 
 	if (status) {
@@ -2277,6 +2319,12 @@ static void wq_func_group_xxx(struct fimc_is_groupmgr *groupmgr,
 #ifdef DBG_STREAMING
 	if (!status)
 		mgrinfo(" DONE(%d)\n", group, group, frame, frame->index);
+#endif
+
+#ifdef ENABLE_SYNC_REPROCESSING
+	/* Sync Reprocessing */
+	if (atomic_read(&groupmgr->gtask[group->id].refcount) > 1)
+		fimc_is_sync_reprocessing_queue(groupmgr, group);
 #endif
 
 	/* Cache Invalidation */
@@ -2456,9 +2504,7 @@ static void wq_func_shot(struct work_struct *data)
 			PROGRAM_COUNT(14);
 		} else {
 			mgerr("invalid shot done(%d)", device, group, fcount);
-#if 0 /* remove it temporarily. */
 			frame_manager_print_queues(framemgr);
-#endif
 		}
 
 		framemgr_x_barrier_irqr(framemgr, FMGR_IDX_5, flags);
@@ -2586,48 +2632,32 @@ static void interface_timer(unsigned long data)
 
 			if (test_bit(FIMC_IS_GROUP_START, &device->group_3aa.state)) {
 				framemgr = GET_SUBDEV_FRAMEMGR(&device->group_3aa.leader);
-				if (framemgr) {
-					framemgr_e_barrier_irqs(framemgr, FMGR_IDX_6, flags);
-					scount_3ax = framemgr->queued_count[FS_PROCESS];
-					shot_count += scount_3ax;
-					framemgr_x_barrier_irqr(framemgr, FMGR_IDX_6, flags);
-				} else {
-					minfo("\n### 3aa framemgr is null ###\n", device);
-				}
+				framemgr_e_barrier_irqs(framemgr, FMGR_IDX_6, flags);
+				scount_3ax = framemgr->queued_count[FS_PROCESS];
+				shot_count += scount_3ax;
+				framemgr_x_barrier_irqr(framemgr, FMGR_IDX_6, flags);
 			}
 
 			if (test_bit(FIMC_IS_GROUP_START, &device->group_isp.state)) {
 				framemgr = GET_SUBDEV_FRAMEMGR(&device->group_isp.leader);
-				if (framemgr) {
-					framemgr_e_barrier_irqs(framemgr, FMGR_IDX_7, flags);
-					scount_isp = framemgr->queued_count[FS_PROCESS];
-					shot_count += scount_isp;
-					framemgr_x_barrier_irqr(framemgr, FMGR_IDX_7, flags);
-				} else {
-					minfo("\n### isp framemgr is null ###\n", device);
-				}
+				framemgr_e_barrier_irqs(framemgr, FMGR_IDX_7, flags);
+				scount_isp = framemgr->queued_count[FS_PROCESS];
+				shot_count += scount_isp;
+				framemgr_x_barrier_irqr(framemgr, FMGR_IDX_7, flags);
 			}
 
 			if (test_bit(FIMC_IS_GROUP_START, &device->group_dis.state)) {
 				framemgr = GET_SUBDEV_FRAMEMGR(&device->group_dis.leader);
-				if (framemgr) {
-					framemgr_e_barrier_irqs(framemgr, FMGR_IDX_8, flags);
-					shot_count += framemgr->queued_count[FS_PROCESS];
-					framemgr_x_barrier_irqr(framemgr, FMGR_IDX_8, flags);
-				} else {
-					minfo("\n### dis framemgr is null ###\n", device);
-				}
+				framemgr_e_barrier_irqs(framemgr, FMGR_IDX_8, flags);
+				shot_count += framemgr->queued_count[FS_PROCESS];
+				framemgr_x_barrier_irqr(framemgr, FMGR_IDX_8, flags);
 			}
 
 			if (test_bit(FIMC_IS_GROUP_START, &device->group_vra.state)) {
 				framemgr = GET_SUBDEV_FRAMEMGR(&device->group_vra.leader);
-				if (framemgr) {
-					framemgr_e_barrier_irqs(framemgr, FMGR_IDX_31, flags);
-					shot_count += framemgr->queued_count[FS_PROCESS];
-					framemgr_x_barrier_irqr(framemgr, FMGR_IDX_31, flags);
-				} else {
-					minfo("\n### vra framemgr is null ###\n", device);
-				}
+				framemgr_e_barrier_irqs(framemgr, FMGR_IDX_31, flags);
+				shot_count += framemgr->queued_count[FS_PROCESS];
+				framemgr_x_barrier_irqr(framemgr, FMGR_IDX_31, flags);
 			}
 		}
 
@@ -3031,7 +3061,7 @@ int fimc_is_interface_probe(struct fimc_is_interface *this,
 	init_waitqueue_head(&this->idle_wait_queue);
 	spin_lock_init(&this->shot_check_lock);
 
-	this->workqueue = alloc_workqueue("fimc-is/highpri", WQ_HIGHPRI | WQ_UNBOUND, 0);
+	this->workqueue = alloc_workqueue("fimc-is/highpri", WQ_HIGHPRI, 0);
 	if (!this->workqueue)
 		probe_warn("failed to alloc own workqueue, will be use global one");
 
@@ -3224,19 +3254,20 @@ int fimc_is_hw_logdump(struct fimc_is_interface *this)
 	minfo = &core->resourcemgr.minfo;
 	read_cnt = 0;
 
-	vb2_ion_sync_for_device(minfo->fw_cookie, FIMC_IS_DEBUG_OFFSET, FIMC_IS_DEBUG_SIZE, DMA_FROM_DEVICE);
+	CALL_BUFOP(minfo->pb_fw, sync_for_cpu,
+			minfo->pb_fw, DEBUG_REGION_OFFSET, DEBUG_REGION_SIZE, DMA_FROM_DEVICE);
 
-	write_vptr = *((int *)(minfo->kvaddr + FIMC_IS_DEBUGCTL_OFFSET)) - FIMC_IS_DEBUG_OFFSET;
+	write_vptr = *((int *)(minfo->kvaddr + DEBUGCTL_OFFSET)) - DEBUG_REGION_OFFSET;
 	read_vptr = fimc_is_debug.read_vptr;
 
-	if (write_vptr < 0 || write_vptr > FIMC_IS_DEBUG_SIZE)
-		write_vptr = (read_vptr + FIMC_IS_DEBUG_SIZE) % (FIMC_IS_DEBUG_SIZE + 1);
+	if (write_vptr < 0 || write_vptr > DEBUG_REGION_SIZE)
+		write_vptr = (read_vptr + DEBUG_REGION_SIZE) % (DEBUG_REGION_SIZE + 1);
 
 	if (write_vptr >= read_vptr) {
 		read_cnt1 = write_vptr - read_vptr;
 		read_cnt2 = 0;
 	} else {
-		read_cnt1 = FIMC_IS_DEBUG_SIZE - read_vptr;
+		read_cnt1 = DEBUG_REGION_SIZE - read_vptr;
 		read_cnt2 = write_vptr;
 	}
 
@@ -3244,20 +3275,20 @@ int fimc_is_hw_logdump(struct fimc_is_interface *this)
 	info("firmware message start(%zd)\n", read_cnt);
 
 	if (read_cnt1) {
-		read_ptr = (void *)(minfo->kvaddr + FIMC_IS_DEBUG_OFFSET + fimc_is_debug.read_vptr);
+		read_ptr = (void *)(minfo->kvaddr + DEBUG_REGION_OFFSET + fimc_is_debug.read_vptr);
 
 		fimc_is_print_buffer(read_ptr, read_cnt1);
 		fimc_is_debug.read_vptr += read_cnt1;
 	}
 
-	if (fimc_is_debug.read_vptr >= FIMC_IS_DEBUG_SIZE) {
-		if (fimc_is_debug.read_vptr > FIMC_IS_DEBUG_SIZE)
+	if (fimc_is_debug.read_vptr >= DEBUG_REGION_SIZE) {
+		if (fimc_is_debug.read_vptr > DEBUG_REGION_SIZE)
 			err("[DBG] read_vptr(%zd) is invalid", fimc_is_debug.read_vptr);
 		fimc_is_debug.read_vptr = 0;
 	}
 
 	if (read_cnt2) {
-		read_ptr = (void *)(minfo->kvaddr + FIMC_IS_DEBUG_OFFSET + fimc_is_debug.read_vptr);
+		read_ptr = (void *)(minfo->kvaddr + DEBUG_REGION_OFFSET + fimc_is_debug.read_vptr);
 
 		fimc_is_print_buffer(read_ptr, read_cnt2);
 		fimc_is_debug.read_vptr += read_cnt2;
@@ -3301,6 +3332,8 @@ int fimc_is_hw_memdump(struct fimc_is_interface *this,
 	ulong start,
 	ulong end)
 {
+	struct fimc_is_core *core;
+	struct fimc_is_minfo *minfo;
 	int ret = 0;
 	ulong *cur;
 	u32 items, offset;
@@ -3315,6 +3348,11 @@ int fimc_is_hw_memdump(struct fimc_is_interface *this,
 	cur = (ulong *)start;
 	items = 0;
 	offset = 0;
+
+	core = (struct fimc_is_core *)this->core;
+	minfo = &core->resourcemgr.minfo;
+	CALL_BUFOP(minfo->pb_fw, sync_for_cpu,
+			minfo->pb_fw, start, (end - start), DMA_FROM_DEVICE);
 
 	memset(sentence, 0, sizeof(sentence));
 	printk(KERN_DEBUG "[@] Memory Dump(0x%08lX ~ 0x%08lX)\n", start, end);

@@ -15,10 +15,10 @@
 #include "fimc-is-interface-ddk.h"
 
 struct fimc_is_hw_3aa {
-	struct fimc_is_lib_isp		lib[FIMC_IS_MAX_NODES];
+	struct fimc_is_lib_isp		lib[FIMC_IS_STREAM_COUNT];
 	struct fimc_is_lib_support	*lib_support;
 	struct lib_interface_func	*lib_func;
-	struct taa_param_set		param_set[FIMC_IS_MAX_NODES];
+	struct taa_param_set		param_set[FIMC_IS_STREAM_COUNT];
 };
 
 int fimc_is_hw_3aa_probe(struct fimc_is_hw_ip *hw_ip, struct fimc_is_interface *itf,
@@ -28,6 +28,7 @@ int fimc_is_hw_3aa_init(struct fimc_is_hw_ip *hw_ip, struct fimc_is_group *group
 	bool flag, u32 module_id);
 int fimc_is_hw_3aa_object_close(struct fimc_is_hw_ip *hw_ip, u32 instance);
 int fimc_is_hw_3aa_close(struct fimc_is_hw_ip *hw_ip, u32 instance);
+int fimc_is_hw_3aa_mode_change(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_map);
 int fimc_is_hw_3aa_enable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_map);
 int fimc_is_hw_3aa_disable(struct fimc_is_hw_ip *hw_ip, u32 instance, ulong hw_map);
 int fimc_is_hw_3aa_shot(struct fimc_is_hw_ip *hw_ip, struct fimc_is_frame *frame,

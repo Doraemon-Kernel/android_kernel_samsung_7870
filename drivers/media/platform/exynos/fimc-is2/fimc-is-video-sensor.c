@@ -36,11 +36,21 @@
 #include "fimc-is-video.h"
 #include "fimc-is-resourcemgr.h"
 
+/*For control brightness of front flash led*/
+#ifdef CONFIG_LEDS_S2MU005_FLASH
+#ifdef CONFIG_LEDS_SUPPORT_FRONT_FLASH
+extern int s2mu005_led_set_front_flash_brightness(int brightness);
+#endif
+#endif
+
 #ifdef CONFIG_LEDS_IRIS_IRLED_SUPPORT
-extern int s2mpb02_ir_led_current(uint32_t current_value);
-extern int s2mpb02_ir_led_pulse_width(uint32_t width);
-extern int s2mpb02_ir_led_pulse_delay(uint32_t delay);
-extern int s2mpb02_ir_led_max_time(uint32_t max_time);
+#ifdef CONFIG_LEDS_IRIS_IRLED_KTD2692
+extern int ktd2692_set_current(uint32_t current_value);
+#endif
+#ifdef CONFIG_LEDS_IRIS_FPGA_ICE40XX
+extern int ice40_ir_led_pulse_width(uint32_t width);
+extern int ice40_ir_led_pulse_delay(uint32_t delay);
+#endif
 #endif
 
 const struct v4l2_file_operations fimc_is_ssx_video_fops;
@@ -219,7 +229,18 @@ const struct v4l2_file_operations fimc_is_ssx_video_fops = {
 static int fimc_is_ssx_video_querycap(struct file *file, void *fh,
 					struct v4l2_capability *cap)
 {
-	/* Todo : add to query capability code */
+	struct fimc_is_video *video = video_drvdata(file);
+
+	FIMC_BUG(!cap);
+	FIMC_BUG(!video);
+
+	snprintf(cap->driver, sizeof(cap->driver), "%s", video->vd.name);
+	snprintf(cap->card, sizeof(cap->card), "%s", video->vd.name);
+	cap->capabilities |= V4L2_CAP_STREAMING
+			| V4L2_CAP_VIDEO_OUTPUT
+			| V4L2_CAP_VIDEO_OUTPUT_MPLANE;
+	cap->device_caps |= cap->capabilities;
+
 	return 0;
 }
 
@@ -530,60 +551,90 @@ static int fimc_is_ssx_video_s_ctrl(struct file *file, void *priv,
 		break;
 	case V4L2_CID_SENSOR_SET_FRAME_RATE:
 		if (fimc_is_sensor_s_frame_duration(device, ctrl->value)) {
-			err("failed to set frame duration : %d\n - %d",
-					ctrl->value, ret);
+			err("failed to set frame duration : %d - %d\n", ctrl->value, ret);
 			ret = -EINVAL;
 		}
 		break;
 	case V4L2_CID_SENSOR_SET_AE_TARGET:
 		if (fimc_is_sensor_s_exposure_time(device, ctrl->value)) {
-			err("failed to set exposure time : %d\n - %d",
-					ctrl->value, ret);
+			err("failed to set exposure time : %d - %d\n", ctrl->value, ret);
 			ret = -EINVAL;
 		}
 		break;
+	case V4L2_CID_CAMERA_BRIGHTNESS:/*For control brightness of front flash led*/
+#ifdef CONFIG_LEDS_S2MU005_FLASH
+#ifdef CONFIG_LEDS_SUPPORT_FRONT_FLASH
+		pr_emerg("[s]g %s begin\n", __func__);
+		if (s2mu005_led_set_front_flash_brightness(ctrl->value) < 0) {
+			err("failed to set front flash brightness : %d - %d\n", ctrl->value, ret);
+			ret = -EINVAL;
+		}
+		pr_emerg("[s]g %s end\n", __func__);
+#else
+		warn("Not Support V4L2_CID_CAMERA_BRIGHTNESS : %d\n",ctrl->value);
+#endif /* CONFIG_LEDS_SUPPORT_FRONT_FLASH */
+#else
+		warn("Not Support V4L2_CID_CAMERA_BRIGHTNESS : %d\n",ctrl->value);
+#endif /* CONFIG_LEDS_S2MU005_FLASH */
+		break;
+
 	case V4L2_CID_SENSOR_SET_GAIN:
 		if (fimc_is_sensor_s_again(device, ctrl->value)) {
-			err("failed to set gain : %d\n - %d",
-				ctrl->value, ret);
+			err("failed to set gain : %d - %d\n", ctrl->value, ret);
 			ret = -EINVAL;
 		}
 		break;
 	case V4L2_CID_SENSOR_SET_SHUTTER:
 		if (fimc_is_sensor_s_shutterspeed(device, ctrl->value)) {
-			err("failed to set shutter speed : %d\n - %d",
-				ctrl->value, ret);
+			err("failed to set shutter speed : %d - %d\n", ctrl->value, ret);
 			ret = -EINVAL;
 		}
 		break;
 #ifdef CONFIG_LEDS_IRIS_IRLED_SUPPORT
 	case V4L2_CID_IRLED_SET_WIDTH:
-		ret = s2mpb02_ir_led_pulse_width(ctrl->value);
+#ifdef CONFIG_LEDS_IRIS_FPGA_ICE40XX
+		ret = ice40_ir_led_pulse_width(ctrl->value);
 		if (ret < 0) {
 			err("failed to set irled pulse width : %d\n - %d",ctrl->value, ret);
 			ret = -EINVAL;
 		}
+#else
+		warn("Not Support V4L2_CID_IRLED_SET_WIDTH : %d\n",ctrl->value);
+#endif
 		break;
 	case V4L2_CID_IRLED_SET_DELAY:
-		ret = s2mpb02_ir_led_pulse_delay(ctrl->value);
+#ifdef CONFIG_LEDS_IRIS_FPGA_ICE40XX
+		ret = ice40_ir_led_pulse_delay(ctrl->value);
 		if (ret < 0) {
 			err("failed to set irled pulse delay : %d\n - %d",ctrl->value, ret);
 			ret = -EINVAL;
 		}
+#else
+		warn("Not Support V4L2_CID_IRLED_SET_DELAY : %d\n",ctrl->value);
+#endif
 		break;
 	case V4L2_CID_IRLED_SET_CURRENT:
-		ret = s2mpb02_ir_led_current(ctrl->value);
+#ifdef CONFIG_LEDS_IRIS_IRLED_KTD2692
+		ret = ktd2692_set_current(ctrl->value);
 		if (ret < 0) {
 			err("failed to set irled current : %d\n - %d",ctrl->value, ret);
 			ret = -EINVAL;
 		}
+#else
+		warn("Not Support V4L2_CID_IRLED_SET_CURRENT : %d\n",ctrl->value);
+#endif
 		break;
 	case V4L2_CID_IRLED_SET_ONTIME:
-		ret = s2mpb02_ir_led_max_time(ctrl->value);
+#ifdef CONFIG_LEDS_IRIS_FPGA_ICE40XX
+		ret = 0;  /* What To Do */
+		info("%s : V4L2_CID_IRLED_SET_ONTIME is calld\n", __func__);
 		if (ret < 0) {
 			err("failed to set irled max time : %d\n - %d",ctrl->value, ret);
 			ret = -EINVAL;
 		}
+#else
+		warn("Not Support V4L2_CID_IRLED_SET_ONTIME : %d\n",ctrl->value);
+#endif
 		break;
 #endif
 	default:
@@ -873,6 +924,7 @@ static void fimc_is_ssx_buffer_finish(struct vb2_buffer *vb)
 
 const struct vb2_ops fimc_is_ssx_qops = {
 	.queue_setup		= fimc_is_ssx_queue_setup,
+	.buf_init			= fimc_is_buffer_init,
 	.buf_prepare		= fimc_is_ssx_buffer_prepare,
 	.buf_queue		= fimc_is_ssx_buffer_queue,
 	.buf_finish		= fimc_is_ssx_buffer_finish,

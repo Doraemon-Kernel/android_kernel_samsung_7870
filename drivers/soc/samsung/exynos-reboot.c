@@ -61,6 +61,7 @@ int soc_has_mongoose(void)
 #define RESET_DISABLE_CPUPORESET		(1 << 8)
 #define RESET_DISABLE_WDT_PRESET_DBG		(1 << 25)
 #define RESET_DISABLE_PRESET_DBG		(1 << 18)
+#define DFD_EDPCSR_DUMP_EN			(1 << 0)
 #define RESET_DISABLE_L2RESET			(1 << 16)
 #define RESET_DISABLE_WDT_L2RESET		(1 << 31)
 
@@ -72,6 +73,7 @@ int soc_has_mongoose(void)
 #define EXYNOS_PMU_SWRESET				(0x0400)
 #define EXYNOS_PMU_RESET_SEQUENCER_CONFIGURATION	(0x0500)
 #define EXYNOS_PMU_PS_HOLD_CONTROL			(0x330C)
+#define EXYNOS_PMU_SYSIP_DAT0                           (0x0810)
 
 static void mngs_reset_control(int en)
 {
@@ -98,71 +100,68 @@ static void mngs_reset_control(int en)
 
 		for (val = 0; val < mngs_cpu_cnt; val++) {
 			reg_val = readl(exynos_pmu_base + EXYNOS_PMU_ATLAS_CPU0_RESET + (val * 0x80));
+#ifdef CONFIG_SOC_EXYNOS8890_EVT1
 			reg_val |= (RESET_DISABLE_WDT_CPUPORESET
 					| RESET_DISABLE_CORERESET | RESET_DISABLE_CPUPORESET);
+#else
+			reg_val |= (RESET_DISABLE_CORERESET | RESET_DISABLE_CPUPORESET);
+#endif
 			writel(reg_val, exynos_pmu_base + EXYNOS_PMU_ATLAS_CPU0_RESET + (val * 0x80));
 		}
 
 		reg_val = readl(exynos_pmu_base + EXYNOS_PMU_ATLAS_DBG_RESET);
+#ifdef CONFIG_SOC_EXYNOS8890_EVT1
 		reg_val |= (RESET_DISABLE_WDT_PRESET_DBG | RESET_DISABLE_PRESET_DBG);
+#else
+		reg_val |= (RESET_DISABLE_PRESET_DBG);
+#endif
 		writel(reg_val, exynos_pmu_base + EXYNOS_PMU_ATLAS_DBG_RESET);
 
                 reg_val = readl(exynos_pmu_base + EXYNOS_PMU_ATLAS_NONCPU_RESET);
+#ifdef CONFIG_SOC_EXYNOS8890_EVT1
                 reg_val |= (RESET_DISABLE_L2RESET | RESET_DISABLE_WDT_L2RESET);
+#else
+                reg_val |= (RESET_DISABLE_L2RESET);
+#endif
                 writel(reg_val, exynos_pmu_base + EXYNOS_PMU_ATLAS_NONCPU_RESET);
 	} else {
 		/* reset enable for MNGS */
 		pr_err("%s: mngs cpu reset enable before s/w reset\n", __func__);
 		for (val = 0; val < mngs_cpu_cnt; val++) {
 			reg_val = readl(exynos_pmu_base + EXYNOS_PMU_ATLAS_CPU0_RESET + (val * 0x80));
+#ifdef CONFIG_SOC_EXYNOS8890_EVT1
 			reg_val &= ~(RESET_DISABLE_WDT_CPUPORESET
 					| RESET_DISABLE_CORERESET | RESET_DISABLE_CPUPORESET);
+#else
+			reg_val &= ~(RESET_DISABLE_CORERESET | RESET_DISABLE_CPUPORESET);
+#endif
 			writel(reg_val, exynos_pmu_base + EXYNOS_PMU_ATLAS_CPU0_RESET + (val * 0x80));
 		}
 
 		reg_val = readl(exynos_pmu_base + EXYNOS_PMU_ATLAS_DBG_RESET);
+#ifdef CONFIG_SOC_EXYNOS8890_EVT1
 		reg_val &= ~(RESET_DISABLE_WDT_PRESET_DBG | RESET_DISABLE_PRESET_DBG);
+#else
+		reg_val &= ~(RESET_DISABLE_PRESET_DBG);
+#endif
 		writel(reg_val, exynos_pmu_base + EXYNOS_PMU_ATLAS_DBG_RESET);
 
-		reg_val = readl(exynos_pmu_base + EXYNOS_PMU_ATLAS_NONCPU_RESET);
-		reg_val &= ~(RESET_DISABLE_L2RESET | RESET_DISABLE_WDT_L2RESET);
-		writel(reg_val, exynos_pmu_base + EXYNOS_PMU_ATLAS_NONCPU_RESET);
+                reg_val = readl(exynos_pmu_base + EXYNOS_PMU_ATLAS_NONCPU_RESET);
+#ifdef CONFIG_SOC_EXYNOS8890_EVT1
+                reg_val &= ~(RESET_DISABLE_L2RESET);
+#endif
+                writel(reg_val, exynos_pmu_base + EXYNOS_PMU_ATLAS_NONCPU_RESET);
 	}
 }
 
-#define DFD_EDPCSR_DUMP_EN			(1 << 0)
-#define DFD_L2RSTDISABLE_MNGS_EN		(1 << 11)
-#define DFD_DBGL1RSTDISABLE_MNGS_EN		(1 << 10)
-#define DFD_L2RSTDISABLE_APOLLO_EN		(1 << 9)
-#define DFD_DBGL1RSTDISABLE_APOLLO_EN		(1 << 8)
-#define DFD_CLEAR_L2RSTDISABLE_MNGS		(1 << 7)
-#define DFD_CLEAR_DBGL1RSTDISABLE_MNGS		(1 << 6)
-#define DFD_CLEAR_L2RSTDISABLE_APOLLO		(1 << 5)
-#define DFD_CLEAR_DBGL1RSTDISABLE_APOLLO	(1 << 4)
-
-static void dfd_set_dump_gpr(int en)
-{
-	u32 reg_val;
-
-	if (en) {
-		reg_val = DFD_EDPCSR_DUMP_EN
-			| DFD_L2RSTDISABLE_MNGS_EN | DFD_DBGL1RSTDISABLE_MNGS_EN
-			| DFD_L2RSTDISABLE_APOLLO_EN | DFD_DBGL1RSTDISABLE_APOLLO_EN;
-		writel(reg_val, exynos_pmu_base + EXYNOS_PMU_RESET_SEQUENCER_CONFIGURATION);
-	} else {
-		reg_val = readl(exynos_pmu_base + EXYNOS_PMU_RESET_SEQUENCER_CONFIGURATION);
-		if (reg_val) {
-			reg_val = DFD_EDPCSR_DUMP_EN
-				| DFD_CLEAR_L2RSTDISABLE_MNGS | DFD_CLEAR_DBGL1RSTDISABLE_MNGS
-				| DFD_CLEAR_L2RSTDISABLE_APOLLO | DFD_CLEAR_DBGL1RSTDISABLE_APOLLO;
-		}
-		writel(reg_val, exynos_pmu_base + EXYNOS_PMU_RESET_SEQUENCER_CONFIGURATION);
-	}
-}
-
-#define INFORM_NONE		0x0
-#define INFORM_RAMDUMP		0xd
-#define INFORM_RECOVERY		0xf
+#define REBOOT_MODE_NORMAL      0x00
+#define REBOOT_MODE_CHARGE      0x0A
+/* Reboot into fastboot mode */
+#define REBOOT_MODE_FASTBOOT    0xFC
+/* Auto enter bootloader command line */
+#define REBOOT_MODE_BOOTLOADER  0xFE
+/* Reboot into recovery */
+#define REBOOT_MODE_RECOVERY    0xFF
 
 #if !defined(CONFIG_SEC_REBOOT)
 #ifdef CONFIG_OF
@@ -226,29 +225,34 @@ static void exynos_power_off(void)
 
 static void exynos_reboot(enum reboot_mode mode, const char *cmd)
 {
-	u32 restart_inform, soc_id;
+	u32 soc_id;
+	void __iomem *addr;
 
 	if (!exynos_pmu_base)
 		return;
 
-	restart_inform = INFORM_NONE;
+	addr = exynos_pmu_base + EXYNOS_PMU_SYSIP_DAT0;
 
 	if (cmd) {
-		if (!strcmp((char *)cmd, "recovery"))
-			restart_inform = INFORM_RECOVERY;
-		else if(!strcmp((char *)cmd, "ramdump"))
-			restart_inform = INFORM_RAMDUMP;
+		if (!strcmp(cmd, "charge")) {
+                        __raw_writel(REBOOT_MODE_CHARGE, addr);
+                } else if (!strcmp(cmd, "fastboot") || !strcmp(cmd, "fb")) {
+                        __raw_writel(REBOOT_MODE_FASTBOOT, addr);
+                } else if (!strcmp(cmd, "bootloader") || !strcmp(cmd, "bl")) {
+                        __raw_writel(REBOOT_MODE_BOOTLOADER, addr);
+                } else if (!strcmp(cmd, "recovery")) {
+                        __raw_writel(REBOOT_MODE_RECOVERY, addr);
+                }
 	}
+
 
 	/* Check by each SoC */
 	soc_id = exynos_soc_info.product_id & EXYNOS_SOC_MASK;
 	switch(soc_id) {
 	case EXYNOS8890_SOC_ID:
 		/* Check reset_sequencer_configuration register */
-		if (readl(exynos_pmu_base + EXYNOS_PMU_RESET_SEQUENCER_CONFIGURATION) & DFD_EDPCSR_DUMP_EN) {
-			dfd_set_dump_gpr(0);
+		if (readl(exynos_pmu_base + EXYNOS_PMU_RESET_SEQUENCER_CONFIGURATION) & DFD_EDPCSR_DUMP_EN)
 			mngs_reset_control(0);
-		}
 		break;
 	default:
 		break;

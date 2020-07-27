@@ -1,10 +1,6 @@
 #ifndef _SCSI_DISK_H
 #define _SCSI_DISK_H
 
-#if defined(CONFIG_SRPMB)
-#include "scsi_srpmb.h"
-#endif
-
 /*
  * More than enough for everybody ;)  The huge number of majors
  * is a leftover from 16bit dev_t days, we don't really need that
@@ -23,8 +19,6 @@
  */
 #define SD_FLUSH_TIMEOUT_MULTIPLIER	2
 #define SD_WRITE_SAME_TIMEOUT	(120 * HZ)
-#define SD_UFS_TIMEOUT		(10 * HZ)
-#define SD_UFS_FLUSH_TIMEOUT		(6 * HZ)
 
 /*
  * Number of allowed retries
@@ -106,9 +100,6 @@ struct scsi_disk {
 	int		thread_remove;
 	int		async_end;
 	int		prv_media_present;
-#endif
-#if defined(CONFIG_SRPMB)
-	struct rpmb_irq_ctx *rpmb_ctx;
 #endif
 };
 #define to_scsi_disk(obj) container_of(obj,struct scsi_disk,dev)
@@ -279,8 +270,5 @@ static inline void sd_dif_complete(struct scsi_cmnd *cmd, unsigned int a)
 }
 
 #endif /* CONFIG_BLK_DEV_INTEGRITY */
-
-struct scsi_disk *scsi_disk_get_from_dev(struct device *dev);
-void scsi_disk_put(struct scsi_disk *sdkp);
 
 #endif /* _SCSI_DISK_H */

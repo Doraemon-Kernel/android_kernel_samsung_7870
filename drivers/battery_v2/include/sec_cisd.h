@@ -33,11 +33,11 @@
 #define CISD_STATE_LEAK_G		0x800
 
 #define is_cisd_check_type(cable_type) ( \
-	cable_type == SEC_BATTERY_CABLE_TA || \
-	cable_type == SEC_BATTERY_CABLE_9V_TA || \
-	cable_type == SEC_BATTERY_CABLE_9V_UNKNOWN || \
-	cable_type == SEC_BATTERY_CABLE_9V_ERR || \
-	cable_type == SEC_BATTERY_CABLE_PDIC)
+	cable_type == POWER_SUPPLY_TYPE_MAINS || \
+	cable_type == POWER_SUPPLY_TYPE_HV_MAINS || \
+	cable_type == POWER_SUPPLY_TYPE_HV_ERR || \
+	cable_type == POWER_SUPPLY_TYPE_HV_WIRELESS || \
+	cable_type == POWER_SUPPLY_TYPE_WIRELESS_HV_STAND)
 
 enum cisd_data {
 	CISD_DATA_FULL_COUNT = 0,
@@ -69,10 +69,10 @@ enum cisd_data {
 	CISD_DATA_SAFETY_TIMER_5,
 	CISD_DATA_SAFETY_TIMER_10,
 	CISD_DATA_AICL_COUNT,
-        CISD_DATA_BATT_TEMP_MAX,
-        CISD_DATA_BATT_TEMP_MIN,
-        CISD_DATA_CHG_TEMP_MAX,
-        CISD_DATA_CHG_TEMP_MIN,
+	CISD_DATA_BATT_TEMP_MAX,
+	CISD_DATA_BATT_TEMP_MIN,
+	CISD_DATA_CHG_TEMP_MAX,
+	CISD_DATA_CHG_TEMP_MIN,
 
 	CISD_DATA_WPC_TEMP_MAX,
 	CISD_DATA_WPC_TEMP_MIN,
@@ -127,15 +127,6 @@ struct cisd {
 	/* Big Data Field */
 	int capacity_now;
 	int data[CISD_DATA_MAX];
-
-#if defined(CONFIG_QH_ALGORITHM)
-	unsigned long prev_time;
-	unsigned long qh_valid_time;
-	int prev_qh_value;
-	int prev_qh_vfsoc;
-	int qh_value_now;
-	int qh_vfsoc_now;
-#endif
 };
 
 #endif /* __SEC_CISD_H */

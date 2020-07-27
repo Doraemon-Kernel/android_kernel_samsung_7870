@@ -1252,59 +1252,30 @@ static inline int ext4_match(struct ext4_filename *fname,
 	return (memcmp(de->name, name, len) == 0) ? 1 : 0;
 }
 
-static inline int ext4_ci_match(struct ext4_filename *fname,
-				struct ext4_dir_entry_2 *de,
-				struct inode *dir, char *ci_name_buf)
+static inline int ext4_ci_match (int len, const char * const name,
+			      struct ext4_dir_entry_2 * de)
 {
-	struct ext4_str dname = {.name = de->name, .len = de->name_len};
-	const char *uname = fname_name(fname);
-	u32 uname_len = fname_len(fname);
-
+	if (len != de->name_len)
+		return 0;
 	if (!de->inode)
 		return 0;
-
-#ifdef CONFIG_EXT4_FS_ENCRYPTION
-	if (ext4_encrypted_inode(dir)) {
-		dname.name = ci_name_buf;
-		dname.len = EXT4_NAME_LEN;
-
-		/* Directory is encrypted */
-		if (ext4_fname_disk_to_usr(dir, NULL, de, &dname) < 0)
-			return -1;
-		/* is required? */
-		dname.name[dname.len] = '\0';
-
-		uname = fname->usr_fname->name;
-		uname_len = strlen(fname->usr_fname->name);
-	}
-#endif
-	if (dname.len != uname_len)
-		goto mismatch;
-
-	if (!strncasecmp(dname.name, uname, uname_len)) {
-		if ((void*)ci_name_buf != (void*)dname.name) {
-			memcpy(ci_name_buf, dname.name, uname_len);
-			ci_name_buf[uname_len] = '\0';
-		}
-		return 1;
-	}
-mismatch:
-	ci_name_buf[0] = '\0';
-	return 0;
+	return !strncasecmp(name, de->name, len);
 }
 
 /*
  * Returns 0 if not found, -1 on failure, and 1 on success
  */
 int ext4_search_dir(struct buffer_head *bh, char *search_buf, int buf_size,
-		    struct inode *dir, struct ext4_filename *fname,
-		    const struct qstr *d_name,
-		    unsigned int offset, struct ext4_dir_entry_2 **res_dir,
-		    char *ci_name_buf)
+	       struct inode *dir, struct ext4_filename *fname,
+	       const struct qstr *d_name,
+	       unsigned int offset, struct ext4_dir_entry_2 **res_dir,
+	       char *ci_name_buf)
 {
 	struct ext4_dir_entry_2 * de;
 	char * dlimit;
 	int de_len;
+	const char *name = d_name->name;
+	int namelen = d_name->len;
 	int res;
 
 	de = (struct ext4_dir_entry_2 *)search_buf;
@@ -1312,34 +1283,40 @@ int ext4_search_dir(struct buffer_head *bh, char *search_buf, int buf_size,
 	while ((char *) de < dlimit) {
 		/* this code is executed quadratically often */
 		/* do minimal checking `by hand' */
+
 		if ((char *) de + de->name_len <= dlimit) {
-			if (ci_name_buf)
-				res = ext4_ci_match(fname, de, dir, ci_name_buf);
-			else
+			if (ci_name_buf) {
+				if (ext4_ci_match (namelen, name, de)) {
+					/* found a match - just to be sure, do a full check */
+					if (ext4_check_dir_entry(dir, NULL, de, bh, bh->b_data,
+								bh->b_size, offset))
+						return -1;
+					*res_dir = de;
+					memcpy(ci_name_buf, de->name, namelen);
+					ci_name_buf[namelen] = '\0';
+					return 1;
+				}
+			} else {
 				res = ext4_match(fname, de);
-			if (res < 0) {
-				res = -1;
-				printk(KERN_ERR
-				   "%s: ext4_%smatch error. usr_name : %s, "
-				   "buf : %p, offset : %lu\n", __func__,
-				   (ci_name_buf)? "ci_" : "",
-				   fname->usr_fname->name, search_buf,
-				   (unsigned long)de - (unsigned long)search_buf);
-				goto return_result;
-			}
-			if (res > 0) {
-				/* found a match - just to be sure, do
-				 * a full check */
-				if (ext4_check_dir_entry(dir, NULL, de, bh,
-						bh->b_data,
-						 bh->b_size, offset)) {
+				if (res < 0) {
 					res = -1;
 					goto return_result;
 				}
-				*res_dir = de;
-				res = 1;
-				goto return_result;
+				if (res > 0) {
+					/* found a match - just to be sure, do
+					 * a full check */
+					if (ext4_check_dir_entry(dir, NULL, de, bh,
+							bh->b_data,
+							 bh->b_size, offset)) {
+						res = -1;
+						goto return_result;
+					}
+					*res_dir = de;
+					res = 1;
+					goto return_result;
+				}
 			}
+
 		}
 		/* prevent looping on a bad block */
 		de_len = ext4_rec_len_from_disk(de->rec_len,
@@ -3097,18 +3074,19 @@ static int ext4_unlink(struct inode *dir, struct dentry *dentry)
 	if (IS_DIRSYNC(dir))
 		ext4_handle_sync(handle);
 
+	if (!inode->i_nlink) {
+		ext4_warning(inode->i_sb,
+			     "Deleting nonexistent file (%lu), %d",
+			     inode->i_ino, inode->i_nlink);
+		set_nlink(inode, 1);
+	}
 	retval = ext4_delete_entry(handle, dir, de, bh);
 	if (retval)
 		goto end_unlink;
 	dir->i_ctime = dir->i_mtime = ext4_current_time(dir);
 	ext4_update_dx_flag(dir);
 	ext4_mark_inode_dirty(handle, dir);
-	if (!inode->i_nlink)
-		ext4_warning(inode->i_sb,
-			     "Deleting nonexistent file (%lu), %d",
-			     inode->i_ino, inode->i_nlink);
-	else
-		drop_nlink(inode);
+	drop_nlink(inode);
 	if (!inode->i_nlink)
 		ext4_orphan_add(handle, inode);
 	inode->i_ctime = ext4_current_time(inode);

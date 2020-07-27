@@ -168,6 +168,14 @@ extern int nr_threads;
 DECLARE_PER_CPU(unsigned long, process_counts);
 extern int nr_processes(void);
 extern unsigned long nr_running(void);
+#ifdef CONFIG_SCHED_AVG_NR_RUNNING
+extern int avg_nr_running(void);
+#else
+static inline unsigned long avg_nr_running(void)
+{
+	return nr_running();
+}
+#endif
 extern bool single_task_running(void);
 extern unsigned long nr_iowait(void);
 extern unsigned long nr_iowait_cpu(int cpu);
@@ -177,6 +185,9 @@ extern unsigned long nr_running_cpu(unsigned int cpu);
 extern int register_hmp_task_migration_notifier(struct notifier_block *nb);
 #define HMP_UP_MIGRATION       0
 #define HMP_DOWN_MIGRATION     1
+#endif
+#ifdef CONFIG_SEC_PHCOMP
+extern unsigned long nr_running_cpu(unsigned int cpu);
 #endif
 
 extern void calc_global_load(unsigned long ticks);
@@ -328,7 +339,6 @@ extern void show_regs(struct pt_regs *);
  * task), SP is the stack pointer of the first frame that should be shown in the back
  * trace (or NULL if the entire call-chain of the task should be shown).
  */
-
 extern void show_stack(struct task_struct *task, unsigned long *sp);
 
 void io_schedule(void);
@@ -737,14 +747,15 @@ struct signal_struct {
 #define SIGNAL_UNKILLABLE	0x00000040 /* for init: ignore fatal signals */
 
 #define SIGNAL_STOP_MASK (SIGNAL_CLD_MASK | SIGNAL_STOP_STOPPED | \
-			  SIGNAL_STOP_CONTINUED)
+		SIGNAL_STOP_CONTINUED)
 
 static inline void signal_set_stop_flags(struct signal_struct *sig,
-					 unsigned int flags)
+		unsigned int flags)
 {
 	WARN_ON(sig->flags & (SIGNAL_GROUP_EXIT|SIGNAL_GROUP_COREDUMP));
 	sig->flags = (sig->flags & ~SIGNAL_STOP_MASK) | flags;
 }
+
 
 /* If true, all threads except ->group_exit_task have pending SIGKILL */
 static inline int signal_group_exit(const struct signal_struct *sig)
@@ -775,7 +786,7 @@ struct user_struct {
 	unsigned long mq_bytes;	/* How many bytes can be allocated to mqueue? */
 #endif
 	unsigned long locked_shm; /* How many pages of mlocked shm ? */
-	unsigned long unix_inflight;	/* How many files in flight in unix sockets */
+	unsigned long unix_inflight;    /* How many files in flight in unix sockets */
 	atomic_long_t pipe_bufs;  /* how many pages are allocated in pipe buffers */
 
 #ifdef CONFIG_KEYS
@@ -897,7 +908,6 @@ enum cpu_idle_type {
 #define SD_PREFER_SIBLING	0x1000	/* Prefer to place tasks in a sibling domain */
 #define SD_OVERLAP		0x2000	/* sched_domains of this level overlap */
 #define SD_NUMA			0x4000	/* cross-node balancing */
-#define SD_NO_LOAD_BALANCE	0x8000	/* flag for hmp scheduler */
 
 #ifdef CONFIG_SCHED_SMT
 static inline int cpu_smt_flags(void)
@@ -929,24 +939,6 @@ struct sched_domain_attr {
 }
 
 extern int sched_domain_level_max;
-
-struct capacity_state {
-	unsigned long cap;	/* compute capacity */
-	unsigned long power;	/* power consumption at this compute capacity */
-};
-
-struct idle_state {
-	unsigned long power;	 /* power consumption in this idle state */
-};
-
-struct sched_group_energy {
-	unsigned int nr_idle_states;	/* number of idle states */
-	struct idle_state *idle_states;	/* ptr to idle state array */
-	unsigned int nr_cap_states;	/* number of capacity states */
-	struct capacity_state *cap_states; /* ptr to capacity state array */
-};
-
-unsigned long capacity_curr_of(int cpu);
 
 struct sched_group;
 
@@ -1147,9 +1139,6 @@ struct sched_avg {
 #ifdef CONFIG_SCHED_HMP
 	u64 hmp_last_up_migration;
 	u64 hmp_last_down_migration;
-#ifdef CONFIG_HP_EVENT_HMP_SYSTEM_LOAD
-	bool is_big_thread;
-#endif
 #endif
 	u32 usage_avg_sum;
 };
@@ -1296,6 +1285,10 @@ union rcu_special {
 };
 struct rcu_node;
 
+#ifdef CONFIG_FIVE
+struct task_integrity;
+#endif
+
 enum perf_event_task_context {
 	perf_invalid_context = -1,
 	perf_hw_context = 0,
@@ -1304,13 +1297,6 @@ enum perf_event_task_context {
 };
 
 struct task_struct {
-#ifdef CONFIG_THREAD_INFO_IN_TASK
-	/*
-	 * For reasons of header soup (see current_thread_info()), this
-	 * must be the first element of task_struct.
-	 */
-	struct thread_info thread_info;
-#endif
 	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
 	void *stack;
 	atomic_t usage;
@@ -1320,12 +1306,9 @@ struct task_struct {
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;
 	int on_cpu;
-#ifdef CONFIG_THREAD_INFO_IN_TASK
-	unsigned int cpu;	/* current CPU */
-#endif
+	struct task_struct *last_wakee;
 	unsigned long wakee_flips;
 	unsigned long wakee_flip_decay_ts;
-	struct task_struct *last_wakee;
 
 	int wake_cpu;
 #endif
@@ -1444,15 +1427,6 @@ struct task_struct {
 	struct list_head thread_group;
 	struct list_head thread_node;
 
-#ifdef CONFIG_HP_EVENT_THREAD_GROUP
-	unsigned long thread_group_load;
-	int nr_thread_group;
-	raw_spinlock_t thread_group_lock;
-	bool hp_boost_requested;	/* This task requested hotplug boost */
-	bool applied_to_group_load;
-	bool member_of_group;
-	unsigned long group_applied_load;
-#endif
 	struct completion *vfork_done;		/* for vfork() */
 	int __user *set_child_tid;		/* CLONE_CHILD_SETTID */
 	int __user *clear_child_tid;		/* CLONE_CHILD_CLEARTID */
@@ -1757,6 +1731,9 @@ struct task_struct {
 #ifdef CONFIG_SDP
 	unsigned int sensitive;
 #endif
+#ifdef CONFIG_FIVE
+	struct task_integrity *integrity;
+#endif
 };
 
 /* Future-safe accessor for struct task_struct's cpus_allowed. */
@@ -1861,8 +1838,25 @@ static inline pid_t task_tgid_nr(struct task_struct *tsk)
 	return tsk->tgid;
 }
 
+static pid_t task_tgid_nr_ns(struct task_struct *tsk, struct pid_namespace *ns);
 
 static inline int pid_alive(const struct task_struct *p);
+static inline pid_t task_ppid_nr_ns(const struct task_struct *tsk, struct pid_namespace *ns)
+{
+	pid_t pid = 0;
+
+	rcu_read_lock();
+	if (pid_alive(tsk))
+		pid = task_tgid_nr_ns(rcu_dereference(tsk->real_parent), ns);
+	rcu_read_unlock();
+
+	return pid;
+}
+
+static inline pid_t task_ppid_nr(const struct task_struct *tsk)
+{
+	return task_ppid_nr_ns(tsk, &init_pid_ns);
+}
 
 static inline pid_t task_pgrp_nr_ns(struct task_struct *tsk,
 					struct pid_namespace *ns)
@@ -1895,23 +1889,6 @@ static inline pid_t task_tgid_nr_ns(struct task_struct *tsk, struct pid_namespac
 static inline pid_t task_tgid_vnr(struct task_struct *tsk)
 {
 	return __task_pid_nr_ns(tsk, __PIDTYPE_TGID, NULL);
-}
-
-static inline pid_t task_ppid_nr_ns(const struct task_struct *tsk, struct pid_namespace *ns)
-{
-	pid_t pid = 0;
-
-	rcu_read_lock();
-	if (pid_alive(tsk))
-		pid = task_tgid_nr_ns(rcu_dereference(tsk->real_parent), ns);
-	rcu_read_unlock();
-
-	return pid;
-}
-
-static inline pid_t task_ppid_nr(const struct task_struct *tsk)
-{
-	return task_ppid_nr_ns(tsk, &init_pid_ns);
 }
 
 /* obsolete, do not use */
@@ -2342,9 +2319,7 @@ void yield(void);
 extern struct exec_domain	default_exec_domain;
 
 union thread_union {
-#ifndef CONFIG_THREAD_INFO_IN_TASK
 	struct thread_info thread_info;
-#endif
 	unsigned long stack[THREAD_SIZE/sizeof(long)];
 };
 
@@ -2735,34 +2710,10 @@ static inline void threadgroup_lock(struct task_struct *tsk) {}
 static inline void threadgroup_unlock(struct task_struct *tsk) {}
 #endif
 
-#ifdef CONFIG_THREAD_INFO_IN_TASK
-
-static inline struct thread_info *task_thread_info(struct task_struct *task)
-{
-	return &task->thread_info;
-}
-
-/*
- * When accessing the stack of a non-current task that might exit, use
- * try_get_task_stack() instead.  task_stack_page will return a pointer
- * that could get freed out from under you.
- */
-static inline void *task_stack_page(const struct task_struct *task)
-{
-	return task->stack;
-}
-
-#define setup_thread_stack(new,old)	do { } while(0)
-
-static inline unsigned long *end_of_stack(const struct task_struct *task)
-{
-	return task->stack;
-}
-
-#elif !defined(__HAVE_THREAD_FUNCTIONS)
+#ifndef __HAVE_THREAD_FUNCTIONS
 
 #define task_thread_info(task)	((struct thread_info *)(task)->stack)
-#define task_stack_page(task)	((void *)(task)->stack)
+#define task_stack_page(task)	((task)->stack)
 
 static inline void setup_thread_stack(struct task_struct *p, struct task_struct *org)
 {
@@ -2789,14 +2740,6 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
 }
 
 #endif
-
-static inline void *try_get_task_stack(struct task_struct *tsk)
-{
-	return task_stack_page(tsk);
-}
-
-static inline void put_task_stack(struct task_struct *tsk) {}
-
 #define task_stack_end_corrupted(task) \
 		(*(end_of_stack(task)) != STACK_END_MAGIC)
 
@@ -3073,11 +3016,7 @@ static inline void ptrace_signal_wake_up(struct task_struct *t, bool resume)
 
 static inline unsigned int task_cpu(const struct task_struct *p)
 {
-#ifdef CONFIG_THREAD_INFO_IN_TASK
-	return p->cpu;
-#else
 	return task_thread_info(p)->cpu;
-#endif
 }
 
 static inline int task_node(const struct task_struct *p)
@@ -3190,30 +3129,4 @@ static inline unsigned long rlimit_max(unsigned int limit)
 	return task_rlimit_max(current, limit);
 }
 
-#if defined(CONFIG_HP_EVENT_THREAD_GROUP) || defined(CONFIG_HP_EVENT_HMP_SYSTEM_LOAD)
-void hp_event_enqueue_entity(struct sched_entity *se, int flags);
-void hp_event_dequeue_entity(struct sched_entity *se, int flags);
-void hp_event_update_entity_load(struct sched_entity *se);
-void hp_event_switched_from(struct sched_entity *se);
-void hp_event_do_exit(struct task_struct *p);
-void hp_event_update_rq_load(int cpu);
-extern unsigned int *pcpu_efficiency;
-#else
-static inline void hp_event_update_entity_load(struct sched_entity *se) { };
-static inline void hp_event_enqueue_entity(struct sched_entity *se, int flags) { };
-static inline void hp_event_dequeue_entity(struct sched_entity *se, int flags) { };
-static inline void hp_event_switched_from(struct sched_entity *se) { };
-static inline void hp_event_do_exit(struct task_struct *p) { };
-static inline void hp_event_update_rq_load(int cpu) { };
-#endif
-
-#if defined(CONFIG_HP_EVENT_HMP_SYSTEM_LOAD)
-extern int hp_sysload_to_quad_ratio;
-extern int hp_sysload_to_dual_ratio;
-extern int hp_sysload_param_calc(void);
-extern int hp_little_multiplier_ratio;
-#endif
-
-extern void save_pcpu_tick(int cpu);
-extern void restore_pcpu_tick(int cpu);
 #endif

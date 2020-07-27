@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 TRUSTONIC LIMITED
+ * Copyright (c) 2013-2014 TRUSTONIC LIMITED
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -11,7 +11,5 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  */
-#ifndef MOBICORE_COMPONENT_BUILD_TAG
 #define MOBICORE_COMPONENT_BUILD_TAG \
-	"t-base-EXYNOS64-Android-310B-V011-20180509_074946_48827"
-#endif
+	"t-base-EXYNOS64-Android-302A-V008-2015-01-29_15-01-40_305"

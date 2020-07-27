@@ -29,9 +29,6 @@
 #include <linux/suspend.h>
 #include <linux/tick.h>
 #include <trace/events/power.h>
-#ifdef CONFIG_SEC_DUMP_SUMMARY
-#include <linux/sec_debug.h>
-#endif
 
 /**
  * The "cpufreq driver" - the arch- or hardware-dependent low
@@ -764,32 +761,6 @@ static struct attribute *default_attrs[] = {
 #define to_policy(k) container_of(k, struct cpufreq_policy, kobj)
 #define to_attr(a) container_of(a, struct freq_attr, attr)
 
-#ifdef CONFIG_SEC_BSP
-void get_cpuinfo_cur_freq(int *freq, int *online)
-{
-
-	int cpu;
-	int count = 0;
-	get_online_cpus();
-	*online=cpumask_bits(cpu_online_mask)[0];
-	for_each_online_cpu(cpu) {
-		struct cpufreq_policy *policy = per_cpu(cpufreq_cpu_data, cpu);
-		if(policy == 0)
-			break;
-		if(count == 2)
-			break;
-		if(count == 0 && cpu >=4)
-			count++;
-		if(count == 1 && cpu < 4)
-			continue;
-		freq[count] = policy->cur;
-		count++;
-
-	}
-	put_online_cpus();
-}
-#endif
-
 static ssize_t show(struct kobject *kobj, struct attribute *attr, char *buf)
 {
 	struct cpufreq_policy *policy = to_policy(kobj);
@@ -798,9 +769,6 @@ static ssize_t show(struct kobject *kobj, struct attribute *attr, char *buf)
 
 	if (!down_read_trylock(&cpufreq_rwsem))
 		return -EINVAL;
-
-	if (!fattr->show)
-		return -EIO;
 
 	down_read(&policy->rwsem);
 
@@ -821,9 +789,6 @@ static ssize_t store(struct kobject *kobj, struct attribute *attr,
 	struct cpufreq_policy *policy = to_policy(kobj);
 	struct freq_attr *fattr = to_attr(attr);
 	ssize_t ret = -EINVAL;
-
-	if (!fattr->store)
-		return -EIO;
 
 	get_online_cpus();
 
@@ -1399,7 +1364,7 @@ static int __cpufreq_remove_dev_prepare(struct device *dev,
 					struct subsys_interface *sif)
 {
 	unsigned int cpu = dev->id, cpus;
-	int ret = 0;
+	int ret;
 	unsigned long flags;
 	struct cpufreq_policy *policy;
 
@@ -1420,14 +1385,9 @@ static int __cpufreq_remove_dev_prepare(struct device *dev,
 		return -EINVAL;
 	}
 
-	policy->hcpus_count++;
-
 	if (has_target()) {
-		if (policy->hcpus_count == 1)
-			ret = __cpufreq_governor(policy, CPUFREQ_GOV_STOP);
-
+		ret = __cpufreq_governor(policy, CPUFREQ_GOV_STOP);
 		if (ret) {
-			policy->hcpus_count--;
 			pr_err("%s: Failed to stop governor\n", __func__);
 			return ret;
 		}
@@ -1455,7 +1415,6 @@ static int __cpufreq_remove_dev_prepare(struct device *dev,
 					      "cpufreq"))
 				pr_err("%s: Failed to restore kobj link to cpu:%d\n",
 				       __func__, cpu_dev->id);
-			policy->hcpus_count--;
 			return ret;
 		}
 
@@ -1480,7 +1439,6 @@ static int __cpufreq_remove_dev_finish(struct device *dev,
 	write_lock_irqsave(&cpufreq_driver_lock, flags);
 	policy = per_cpu(cpufreq_cpu_data, cpu);
 	per_cpu(cpufreq_cpu_data, cpu) = NULL;
-
 	write_unlock_irqrestore(&cpufreq_driver_lock, flags);
 
 	if (!policy) {
@@ -1490,8 +1448,6 @@ static int __cpufreq_remove_dev_finish(struct device *dev,
 
 	down_write(&policy->rwsem);
 	cpus = cpumask_weight(policy->cpus);
-
-	policy->hcpus_count--;
 
 	if (cpus > 1)
 		cpumask_clear_cpu(cpu, policy->cpus);
@@ -1528,9 +1484,6 @@ static int __cpufreq_remove_dev_finish(struct device *dev,
 		if (!cpufreq_suspended)
 			cpufreq_policy_free(policy);
 	} else if (has_target()) {
-		if (policy->hcpus_count)
-			return 0;
-
 		ret = __cpufreq_governor(policy, CPUFREQ_GOV_START);
 		if (!ret)
 			ret = __cpufreq_governor(policy, CPUFREQ_GOV_LIMITS);
@@ -1774,9 +1727,6 @@ void cpufreq_resume(void)
 	struct cpufreq_policy *policy;
 
 	if (!cpufreq_driver)
-		return;
-
-	if (unlikely(!cpufreq_suspended))
 		return;
 
 	cpufreq_suspended = false;
@@ -2403,7 +2353,7 @@ static int cpufreq_cpu_callback(struct notifier_block *nfb,
 			__cpufreq_add_dev(dev, NULL);
 			break;
 
-		case CPU_DOWN_LATE_PREPARE:
+		case CPU_DOWN_PREPARE:
 			__cpufreq_remove_dev_prepare(dev, NULL);
 			break;
 
@@ -2517,13 +2467,6 @@ int cpufreq_register_driver(struct cpufreq_driver *driver_data)
 	if (cpufreq_disabled())
 		return -ENODEV;
 
-	/*
-	 * The cpufreq core depends heavily on the availability of device
-	 * structure, make sure they are available before proceeding further.
-	 */
-	if (!get_cpu_device(0))
-		return -EPROBE_DEFER;
-
 	if (!driver_data || !driver_data->verify || !driver_data->init ||
 	    !(driver_data->setpolicy || driver_data->target_index ||
 		    driver_data->target) ||
@@ -2635,30 +2578,6 @@ int cpufreq_unregister_driver(struct cpufreq_driver *driver)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(cpufreq_unregister_driver);
-
-#ifdef CONFIG_SEC_DUMP_SUMMARY
-int sec_debug_set_cpu_info(struct sec_debug_summary *summary_info, char *summary_log_buf)
-{
-	struct cpufreq_policy *data;
-	int i;
-	long val,size=0;
-
-	summary_info->kernel.cpu_info.cpu_offset_paddr = virt_to_phys(&__per_cpu_offset[0]);
-	summary_info->kernel.cpu_info.cpufreq_policy.paddr = virt_to_phys(summary_log_buf);
-
-	for(i=0;i<nr_cpu_ids;++i) {
-		data = per_cpu(cpufreq_cpu_data, i);
-		val = virt_to_phys(data);
-		memcpy(summary_log_buf+size,&val,sizeof(long)); size += sizeof(long);
-	}
-	summary_info->kernel.cpu_info.cpufreq_policy.name_length = CPUFREQ_NAME_LEN;
-	summary_info->kernel.cpu_info.cpufreq_policy.min_offset = offsetof(struct cpufreq_policy, min);
-	summary_info->kernel.cpu_info.cpufreq_policy.max_offset = offsetof(struct cpufreq_policy, max);
-	summary_info->kernel.cpu_info.cpufreq_policy.cur_offset = offsetof(struct cpufreq_policy, cur);
-
-	return size;
-}
-#endif
 
 static int __init cpufreq_core_init(void)
 {

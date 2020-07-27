@@ -14,6 +14,7 @@
 #include "fimc-is-core.h"
 #include "fimc-is-interface-library.h"
 #include "fimc-is-param.h"
+#include "fimc-is-config.h"
 
 #define CHAIN_ID_MASK		(0x0000000F)
 #define CHAIN_ID_SHIFT		(0)
@@ -119,7 +120,7 @@ struct cal_info {
 	u32 data[16];
 };
 
-#define LIB_ISP_ADDR		(LIB_ISP_BASE_ADDR + LIB_ISP_OFFSET)
+#define LIB_ISP_ADDR		(DDK_LIB_ADDR + LIB_ISP_OFFSET)
 enum lib_func_type {
 	LIB_FUNC_3AA = 1,
 	LIB_FUNC_ISP,
@@ -168,7 +169,7 @@ void fimc_is_lib_isp_chain_destroy(struct fimc_is_hw_ip *hw_ip,
 	struct fimc_is_lib_isp *this, u32 instance_id);
 void fimc_is_lib_isp_object_destroy(struct fimc_is_hw_ip *hw_ip,
 	struct fimc_is_lib_isp *this, u32 instance_id);
-int fimc_is_lib_isp_s_param(struct fimc_is_hw_ip *hw_ip,
+int fimc_is_lib_isp_set_param(struct fimc_is_hw_ip *hw_ip,
 	struct fimc_is_lib_isp *this, void *param);
 int fimc_is_lib_isp_set_ctrl(struct fimc_is_hw_ip *hw_ip,
 	struct fimc_is_lib_isp *this, struct fimc_is_frame *frame);
@@ -185,7 +186,7 @@ int fimc_is_lib_isp_apply_tune_set(struct fimc_is_lib_isp *this,
 int fimc_is_lib_isp_delete_tune_set(struct fimc_is_lib_isp *this,
 	u32 index, u32 instance_id);
 int fimc_is_lib_isp_load_cal_data(struct fimc_is_lib_isp *this,
-	u32 index, ulong addr);
+	u32 index, ulong addr, u32 cal_index);
 int fimc_is_lib_isp_get_cal_data(struct fimc_is_lib_isp *this,
 	u32 instance_id, struct cal_info *data, int type);
 int fimc_is_lib_isp_sensor_info_mode_chg(struct fimc_is_lib_isp *this,
@@ -196,4 +197,21 @@ int fimc_is_lib_isp_convert_face_map(struct fimc_is_hardware *hardware,
 	struct taa_param_set *param_set, struct fimc_is_frame *frame);
 void fimc_is_lib_isp_configure_algorithm(void);
 void fimc_is_isp_get_bcrop1_size(void __iomem *base_addr, u32 *width, u32 *height);
+
+#ifdef ENABLE_FPSIMD_FOR_USER
+#define CALL_LIBOP(lib, op, args...)					\
+	({								\
+		int ret_call_libop;					\
+									\
+		fpsimd_get();						\
+		ret_call_libop = ((lib)->func->op ?			\
+				(lib)->func->op(args) : -EINVAL);	\
+		fpsimd_put();						\
+									\
+	ret_call_libop;})
+#else
+#define CALL_LIBOP(lib, op, args...)				\
+	((lib)->func->op ? (lib)->func->op(args) : -EINVAL)
+#endif
+
 #endif

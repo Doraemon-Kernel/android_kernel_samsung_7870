@@ -47,10 +47,6 @@ config SCSI_UFSHCD
 	  However, do not compile this as a module if your root file system
 	  (the one containing the directory /) is located on a UFS device.
 
-config UFS_UN_18DIGITS
-	bool "The digits of SEC unique number"
-	depends on SCSI_UFSHCD
-
 config UFS_DYNAMIC_H8
 	bool "UFS Dynamic Hibernation (EXPERIMENTAL)"
 	depends on SCSI_UFSHCD
@@ -64,6 +60,16 @@ config SCSI_UFSHCD_PCI
 
 	  If you have a controller with this interface, say Y or M here.
 
+config SCSI_SKIP_CACHE_OP
+	bool "Skip operations for cache coherency"
+	depends on SCSI_UFSHCD
+	---help---
+	  This selects support for skipping operations for cache coherency
+
+	  to reduce I/O overhead if file system layer do same thing.
+
+	  If unsure, say N.
+
 config SCSI_UFSHCD_PLATFORM
 	tristate "Platform bus based UFS Controller support"
 	depends on SCSI_UFSHCD
@@ -75,13 +81,6 @@ config SCSI_UFSHCD_PLATFORM
 
 	  If unsure, say N.
 
-config SCSI_UFS_TEST_MODE
-	bool "Samsung UFS TEST feature"
-	depends on SCSI_UFSHCD && SCSI_UFSHCD_PLATFORM
-	---help---
-	  This selects support for test mode for debugging.
-	  Select this option if this feature is needed on working.
-	  
 config SCSI_UFS_EXYNOS
 	tristate "EXYNOS UFS Host Controller Driver"
 	depends on SCSI_UFSHCD && SCSI_UFSHCD_PLATFORM
@@ -91,7 +90,3 @@ config SCSI_UFS_EXYNOS
 	  If you have a controller with this interface, say Y or M here.
 
 	  If unsure, say N.
-
-config NO_ORDERED_DISCARD
-	bool "Do not set ordered flag on discard"
-	default n

@@ -66,23 +66,16 @@ config MALI_DVFS
 
 config MALI_DVFS_USER
 	bool "Enable DVFS USER"
-	depends on MALI_T8XX && MALI_DVFS
+	depends on MALI_t8xx && MALI_DVFS
 	default n
 	help
 	  Choose this option to enable DVFS_USER on MALI t8xx DDK.
-
-config MALI_DVFS_USER_GOVERNOR
-	bool "Enable DVFS USER GOVERNOR"
-	depends on MALI_T8XX && MALI_DVFS && MALI_DVFS_USER
-	default n
-	help
-	  Choose this option to enable DVFS_USER_GOVERNOR on MALI t8xx DDK.
 
 config MALI_RT_PM
 	bool "Enable Runtime power management"
 	depends on MALI_T8XX
 	depends on PM_RUNTIME
-	default y
+	default n
 	help
 	  Choose this option to enable runtime power management in the Mali Midgard DDK.
 
@@ -215,8 +208,8 @@ config MALI_GPU_TRACEPOINTS
 
 config MALI_SEC_HWCNT
 	bool "Enable sec hwcnt feature"
-	depends on MALI_T8XX
-	default n
+	depends on MALI_t8xx
+	default y
 	help
 	  Enable sec hwcnt feature.
 

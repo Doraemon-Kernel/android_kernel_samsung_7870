@@ -16,7 +16,6 @@
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-BUSLOG_PATH_RELATIVE = $(CURDIR)/../../../..
 UMP_PATH_RELATIVE = $(CURDIR)/../../../base/ump
 KBASE_PATH_RELATIVE = $(CURDIR)
 KDS_PATH_RELATIVE = $(CURDIR)/../../../..
@@ -28,11 +27,6 @@ endif
 
 ifneq ($(wildcard $(CURDIR)/internal/Makefile.in),)
 include $(CURDIR)/internal/Makefile.in
-endif
-
-ifeq ($(MALI_BUS_LOG), 1)
-#Add bus logger symbols
-EXTRA_SYMBOLS += $(BUSLOG_PATH_RELATIVE)/drivers/base/bus_logger/Module.symvers
 endif
 
 # GPL driver supports KDS

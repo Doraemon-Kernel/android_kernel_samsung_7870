@@ -86,7 +86,11 @@ efi_head:
 	.quad	_kernel_size_le			// Effective size of kernel image, little-endian
 	.quad	_kernel_flags_le		// Informative flags, little-endian
 	.quad	0				// reserved
-	.quad	0				// reserved
+#ifdef CONFIG_PROCA
+	.quad	_proca_conf_offset		// memory info for proca ta
+#else
+	.quad	0xecefecef			// Magic number for proca ta
+#endif
 	.quad	0				// reserved
 	.byte	0x41				// Magic number, "ARM\x64"
 	.byte	0x52
@@ -207,18 +211,9 @@ section_table:
 #endif
 
 ENTRY(stext)
-#ifdef CONFIG_RELOCATABLE_KERNEL
-	mov	x24, x1				// x1=PHYS_OFFSET
-	mov	x19, x2				// x2=real TEXT_OFFSET
-	adr	x21, __boot_kernel_offset
-	stp	x1, x2, [x21]
-#endif 
-	
 	bl	preserve_boot_args
 	bl	el2_setup			// Drop to EL1, w20=cpu_boot_mode
-#ifndef CONFIG_RELOCATABLE_KERNEL
 	adrp	x24, __PHYS_OFFSET
-#endif 
 	bl	set_cpu_boot_mode_flag
 
 	bl	__vet_fdt
@@ -229,49 +224,11 @@ ENTRY(stext)
 	 * On return, the CPU will be ready for the MMU to be turned on and
 	 * the TCR will have been set.
 	 */
-#ifndef	CONFIG_RELOCATABLE_KERNEL
 	ldr	x27, =__mmap_switched		// address to jump to after
-#else
-	adr 	x27, __relocate_kernel
-#endif
+						// MMU has been enabled
 	adr_l	lr, __enable_mmu		// return (PIC) address
 	b	__cpu_setup			// initialise processor
 ENDPROC(stext)
-
-#ifdef CONFIG_RELOCATABLE_KERNEL
-
-#define R_AARCH64_RELATIVE	0x403
-#define R_AARCH64_ABS64		0x101
-
-__relocate_kernel:
-
-	sub	x23, x19, #TEXT_OFFSET
-	adrp 	x8, __dynsym_start
-	add	x8, x8, :lo12:__dynsym_start	//x8: start of symbol table
-	adrp 	x9, __reloc_start
-	add 	x9, x9, :lo12:__reloc_start	//x9: start of relocation table
-	adrp	x10, __reloc_end
-	add	x10, x10, :lo12:__reloc_end 	//x10: end of relocation table
-
-0:	cmp	x9, x10
-	b.hs	1f
-	ldp	x11, x12, [x9], #24
-	cmp	x12, #R_AARCH64_RELATIVE
-	b.ne	0b
-	ldr	x12, [x9, #-8]
-	add	x12, x12, x23			// relocate origin x23 
-	add	x11, x11, x23
-	str	x12, [x11, x28]
-	b	0b
-
-1:	ldr	x8, =vectors			// reload VBAR_EL1 with
-	msr	vbar_el1, x8			// relocated address
-	isb
-
-	ldr	x9, =__mmap_switched
-	br	x9
-ENDPROC(__relocate_kernel)
-#endif /*CONFIG_RELOCATABLE_KERNEL*/
 
 /*
  * Preserve the arguments passed by the bootloader in x0 .. x3
@@ -455,13 +412,7 @@ __create_page_tables:
 	mov	x0, x26				// swapper_pg_dir
 	mov	x5, #PAGE_OFFSET
 	create_pgd_entry x0, x5, x3, x6
-#ifdef CONFIG_RELOCATABLE_KERNEL
-	adr_l	x6, KERNEL_END			// __pa(KERNEL_END)
-	sub	x6, x6, x24				// x24 = PHYS_OFFSET
-	add	x6, x6, x5				// x5 = PAGE_OFFSET, x6 =  __pa(KERNEL_END) - PHYS_OFFSET + PAGE_OFFSET
-#else
 	ldr	x6, =KERNEL_END			// __va(KERNEL_END)
-#endif	
 	mov	x3, x24				// phys offset
 	create_block_map x0, x7, x3, x5, x6
 
@@ -596,14 +547,9 @@ CPU_LE(	movk	x0, #0x30d0, lsl #16	)	// Clear EE and E0E on LE systems
 #endif
 
 	/* EL2 debug */
-	mrs	x0, id_aa64dfr0_el1		// Check ID_AA64DFR0_EL1 PMUVer
-	sbfx	x0, x0, #8, #4
-	cmp	x0, #1
-	b.lt	4f				// Skip if no PMU present
 	mrs	x0, pmcr_el0			// Disable debug access traps
 	ubfx	x0, x0, #11, #5			// to EL2 and allow access to
 	msr	mdcr_el2, x0			// all PMU counters from EL1
-4:
 
 	/* Stage-2 translation */
 	msr	vttbr_el2, xzr
@@ -636,18 +582,7 @@ ENTRY(set_cpu_boot_mode_flag)
 	dc	ivac, x1			// Invalidate potentially stale cache line
 	ret
 ENDPROC(set_cpu_boot_mode_flag)
-	
 
-#ifdef CONFIG_RELOCATABLE_KERNEL
-	.pushsection	.text
-ENTRY(__boot_kernel_offset)
-	.quad	0     	//Kernel Physical Address
-	.quad	0	//Kernel TEXT_OFFSET
-	.quad 	TEXT_OFFSET
-	.popsection
-#endif	
-	
-	
 /*
  * We need to find out the CPU boot mode long after boot, so we need to
  * store it in a writable variable.
@@ -727,18 +662,11 @@ ENDPROC(__secondary_switched)
 __enable_mmu:
 	ldr	x5, =vectors
 	msr	vbar_el1, x5
-	tlbi	vaae1, xzr
-	dsb	nsh
-	tlbi	vaae1, xzr
 	msr	ttbr0_el1, x25			// load TTBR0
 	msr	ttbr1_el1, x26			// load TTBR1
-	tlbi	vaae1, xzr
 	isb
-	tlbi	vaae1, xzr
-	dsb	nsh
 	msr	sctlr_el1, x0
 	isb
-
 	/*
 	 * Invalidate the local I-cache so that any instructions fetched
 	 * speculatively from the PoC are discarded, since they may have

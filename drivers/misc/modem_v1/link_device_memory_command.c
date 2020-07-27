@@ -155,7 +155,7 @@ static void cmd_crash_reset_handler(struct mem_link_device *mld)
 	ld->state = LINK_STATE_OFFLINE;
 	spin_unlock_irqrestore(&ld->lock, flags);
 
-	mif_err("%s<-%s: ERR! CP_CRASH_RESET\n", ld->name, mc->name);
+	evt_log(0, "%s<-%s: ERR! CP_CRASH_RESET\n", ld->name, mc->name);
 
 	mem_handle_cp_crash(mld, STATE_CRASH_RESET);
 }
@@ -174,9 +174,9 @@ static void cmd_crash_exit_handler(struct mem_link_device *mld)
 		del_timer(&mc->crash_ack_timer);
 
 	if (atomic_read(&mc->forced_cp_crash))
-		mif_err("%s<-%s: CP_CRASH_ACK\n", ld->name, mc->name);
+		evt_log(0, "%s<-%s: CP_CRASH_ACK\n", ld->name, mc->name);
 	else
-		mif_err("%s<-%s: ERR! CP_CRASH_EXIT\n", ld->name, mc->name);
+		evt_log(0, "%s<-%s: ERR! CP_CRASH_EXIT\n", ld->name, mc->name);
 
 #ifdef DEBUG_MODEM_IF
 	if (!atomic_read(&mc->forced_cp_crash))

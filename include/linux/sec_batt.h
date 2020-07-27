@@ -15,12 +15,15 @@
 #ifndef __SEC_BATT_H
 #define __SEC_BATT_H
 
-#include <linux/module.h>
-#include <linux/sec_ext.h>
+#if defined(CONFIG_BATTERY_SAMSUNG)
+#include <linux/battery/sec_charging_common.h>
+
+extern sec_battery_platform_data_t sec_battery_pdata;
+#endif
 
 extern unsigned int lpcharge;
-extern int charging_night_mode;
 extern int fg_reset;
+extern int factory_mode;
 
 void exynos5_universal5430_pmic_init(void);
 void exynos5_universal5430_power_init(void);

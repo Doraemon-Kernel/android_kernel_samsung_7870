@@ -181,8 +181,12 @@ static void s5p_mfc_watchdog_worker(struct work_struct *work)
 	if (s5p_mfc_get_power_ref_cnt(dev) && s5p_mfc_get_clk_ref_cnt(dev))
 		cmd = s5p_mfc_check_int_cmd(dev);
 	if (cmd) {
-		mfc_err_dev("interrupt(%d) is occured, wait scheduling\n", cmd);
-		return;
+		if (atomic_read(&dev->watchdog_cnt) == (3 * MFC_WATCHDOG_CNT)) {
+			mfc_err_dev("MFC driver waited for upward of 8sec\n");
+		} else {
+			mfc_err_dev("interrupt(%d) is occured, wait scheduling\n", cmd);
+			return;
+		}
 	} else {
 		mfc_err_dev("Driver timeout error handling\n");
 	}
@@ -340,12 +344,6 @@ int get_framerate_by_timestamp(struct s5p_mfc_ctx *ctx, struct v4l2_buffer *buf)
 				min_interval, max_framerate);
 	}
 
-	if (!ctx->ts_is_full) {
-		if (debug_ts == 1)
-			mfc_info_ctx("ts doesn't full, keep %d fps\n", ctx->framerate);
-		return ctx->framerate;
-	}
-
 	return max_framerate;
 }
 
@@ -447,13 +445,56 @@ static inline enum s5p_mfc_node_type s5p_mfc_get_node_type(struct file *file)
 
 }
 
+static void mfc_handle_black_bar_info(struct s5p_mfc_dev *dev, struct s5p_mfc_ctx *ctx)
+{
+	struct v4l2_rect new_black_bar;
+	int black_bar_info;
+	struct s5p_mfc_dec *dec = ctx->dec_priv;
+
+	black_bar_info = s5p_mfc_get_black_bar_detection();
+	mfc_debug(3, "black bar type: %#x\n", black_bar_info);
+
+	if (black_bar_info == S5P_FIMV_DISP_STATUS_BLACK_BAR) {
+		new_black_bar.left = s5p_mfc_get_black_bar_pos_x();
+		new_black_bar.top = s5p_mfc_get_black_bar_pos_y();
+		new_black_bar.width = s5p_mfc_get_black_bar_image_w();
+		new_black_bar.height = s5p_mfc_get_black_bar_image_h();
+	} else if (black_bar_info == S5P_FIMV_DISP_STATUS_BLACK_SCREEN) {
+		new_black_bar.left = -1;
+		new_black_bar.top = -1;
+		new_black_bar.width = ctx->img_width;
+		new_black_bar.height = ctx->img_height;
+	} else if (black_bar_info == S5P_FIMV_DISP_STATUS_NOT_DETECTED) {
+		new_black_bar.left = 0;
+		new_black_bar.top = 0;
+		new_black_bar.width = ctx->img_width;
+		new_black_bar.height = ctx->img_height;
+	} else {
+		mfc_err_ctx("Not supported black bar type: %#x\n", black_bar_info);
+		dec->black_bar_updated = 0;
+		return;
+	}
+
+	if ((new_black_bar.left == dec->black_bar.left) &&
+			(new_black_bar.top == dec->black_bar.top) &&
+			(new_black_bar.width == dec->black_bar.width) &&
+			(new_black_bar.height == dec->black_bar.height)) {
+		mfc_debug(3, "black bar info was not changed\n");
+		dec->black_bar_updated = 0;
+		return;
+	}
+
+	dec->black_bar = new_black_bar;
+	dec->black_bar_updated = 1;
+}
+
 static void s5p_mfc_handle_frame_all_extracted(struct s5p_mfc_ctx *ctx)
 {
 	struct s5p_mfc_dec *dec;
 	struct s5p_mfc_dev *dev;
 	struct s5p_mfc_buf *dst_buf;
 	int index, i, is_first = 1;
-	unsigned int interlace_type = 0, is_interlace = 0;
+	unsigned int interlace_type = 0, is_interlace = 0, is_mbaff = 0;
 
 	if (!ctx) {
 		mfc_err("no mfc context to run\n");
@@ -481,6 +522,9 @@ static void s5p_mfc_handle_frame_all_extracted(struct s5p_mfc_ctx *ctx)
 					  dst_buf->vb.v4l2_buf.index);
 		if (interlaced_cond(ctx))
 			is_interlace = s5p_mfc_is_interlace_picture();
+		if (CODEC_MBAFF(ctx))
+			is_mbaff = s5p_mfc_is_mbaff_picture();
+
 		for (i = 0; i < ctx->dst_fmt->mem_planes; i++)
 			vb2_set_plane_payload(&dst_buf->vb, i, 0);
 		list_del(&dst_buf->list);
@@ -492,9 +536,11 @@ static void s5p_mfc_handle_frame_all_extracted(struct s5p_mfc_ctx *ctx)
 				dst_buf->vb.v4l2_buf.field = V4L2_FIELD_INTERLACED_TB;
 			else
 				dst_buf->vb.v4l2_buf.field = V4L2_FIELD_INTERLACED_BT;
-		}
-		else
+		} else if (is_mbaff) {
+			dst_buf->vb.v4l2_buf.field = V4L2_FIELD_INTERLACED_TB;
+		} else {
 			dst_buf->vb.v4l2_buf.field = V4L2_FIELD_NONE;
+		}
 		clear_bit(dst_buf->vb.v4l2_buf.index, &dec->dpb_status);
 
 		index = dst_buf->vb.v4l2_buf.index;
@@ -669,13 +715,12 @@ static void s5p_mfc_handle_frame_new(struct s5p_mfc_ctx *ctx, unsigned int err)
 	dma_addr_t dspl_y_addr;
 	unsigned int index;
 	unsigned int frame_type;
-	unsigned int interlace_type = 0, is_interlace = 0;
-	unsigned int is_video_signal_type = 0, is_colour_description = 0;
-	unsigned int is_content_light = 0, is_display_colour = 0;
+	unsigned int interlace_type = 0, is_interlace = 0, is_mbaff = 0;
 	int mvc_view_id;
 	unsigned int dst_frame_status, last_frame_status;
 	struct list_head *dst_queue_addr;
 	unsigned int prev_flag, released_flag = 0;
+	unsigned int is_video_signal_type = 0, is_colour_description = 0;
 	int i;
 
 	if (!ctx) {
@@ -728,14 +773,18 @@ static void s5p_mfc_handle_frame_new(struct s5p_mfc_ctx *ctx, unsigned int err)
 	}
 	if (interlaced_cond(ctx))
 		is_interlace = s5p_mfc_is_interlace_picture();
-	if (FW_HAS_VIDEO_SIGNAL_TYPE(dev)) {
-		is_video_signal_type = s5p_mfc_get_video_signal_type();
-		is_colour_description = s5p_mfc_get_colour_description();
-	}
-	if (FW_HAS_SEI_INFO_FOR_HDR(dev)) {
-		is_content_light = s5p_mfc_get_sei_avail_content_light();
-		is_display_colour = s5p_mfc_get_sei_avail_mastering_display();
-	}
+	if (CODEC_MBAFF(ctx))
+		is_mbaff = s5p_mfc_is_mbaff_picture();
+
+	if (FW_HAS_BLACK_BAR_DETECT(dev) && dec->detect_black_bar)
+		mfc_handle_black_bar_info(dev, ctx);
+	else
+		dec->black_bar_updated = 0;
+
+	/* Check whether syntax of video signal type is present or not */
+	is_video_signal_type = s5p_mfc_get_video_signal_type();
+	is_colour_description = s5p_mfc_get_colour_description();
+
 	if (dec->is_dynamic_dpb) {
 		prev_flag = dec->dynamic_used;
 		dec->dynamic_used = mfc_get_dec_used_flag();
@@ -807,6 +856,7 @@ static void s5p_mfc_handle_frame_new(struct s5p_mfc_ctx *ctx, unsigned int err)
 				ctx->dst_queue_cnt--;
 
 			dst_buf->vb.v4l2_buf.sequence = ctx->sequence;
+			dst_buf->vb.v4l2_buf.reserved2 = 0;
 
 			if (is_interlace) {
 				interlace_type = s5p_mfc_get_interlace_type();
@@ -814,22 +864,19 @@ static void s5p_mfc_handle_frame_new(struct s5p_mfc_ctx *ctx, unsigned int err)
 					dst_buf->vb.v4l2_buf.field = V4L2_FIELD_INTERLACED_TB;
 				else
 					dst_buf->vb.v4l2_buf.field = V4L2_FIELD_INTERLACED_BT;
-			}
-			else
+			} else if (is_mbaff) {
+				dst_buf->vb.v4l2_buf.field = V4L2_FIELD_INTERLACED_TB;
+			} else {
 				dst_buf->vb.v4l2_buf.field = V4L2_FIELD_NONE;
-			mfc_debug(2, "is_interlace : %d interlace_type : %d\n",
-				is_interlace, interlace_type);
+			}
+			mfc_debug(2, "is_interlace : %d interlace_type : %d, is_mbaff: %d, field: 0x%#x\n",
+					is_interlace, interlace_type, is_mbaff, dst_buf->vb.v4l2_buf.field);
 
-			/* Set reserved2 bits in order to inform SEI information */
-			dst_buf->vb.v4l2_buf.reserved2 = 0;
-			if (is_content_light) {
-				dst_buf->vb.v4l2_buf.reserved2 |= (1 << 0);
-				mfc_debug(2, "content light level parsed\n");
+			if (dec->black_bar_updated) {
+				dst_buf->vb.v4l2_buf.reserved2 |= (1 << 5);
+				mfc_debug(3, "black bar detected\n");
 			}
-			if (is_display_colour) {
-				dst_buf->vb.v4l2_buf.reserved2 |= (1 << 1);
-				mfc_debug(2, "mastering display colour parsed\n");
-			}
+
 			if (is_video_signal_type) {
 				dst_buf->vb.v4l2_buf.reserved2 |= (1 << 4);
 				mfc_debug(2, "video signal type parsed\n");
@@ -1112,70 +1159,13 @@ static void s5p_mfc_handle_ref_frame(struct s5p_mfc_ctx *ctx)
 	}
 }
 
-static void s5p_mfc_move_reuse_buffer(struct s5p_mfc_ctx *ctx, int release_index)
-{
-	struct s5p_mfc_dec *dec = ctx->dec_priv;
-	struct s5p_mfc_buf *ref_mb, *tmp_mb;
-	int index;
-
-	list_for_each_entry_safe(ref_mb, tmp_mb, &dec->ref_queue, list) {
-		index = ref_mb->vb.v4l2_buf.index;
-		if (index == release_index) {
-			if (ctx->is_drm) {
-				if (test_bit(index, &ctx->raw_protect_flag)) {
-					if (s5p_mfc_raw_buf_prot(ctx, ref_mb, false))
-						mfc_err_ctx("failed to CFW_UNPROT\n");
-					else
-						clear_bit(index, &ctx->raw_protect_flag);
-				}
-				mfc_debug(2, "[%d] dec dst buf un-prot_flag: %#lx\n",
-						index, ctx->raw_protect_flag);
-			}
-
-			ref_mb->used = 0;
-
-			list_del(&ref_mb->list);
-			dec->ref_queue_cnt--;
-
-			list_add_tail(&ref_mb->list, &ctx->dst_queue);
-			ctx->dst_queue_cnt++;
-
-			clear_bit(index, &dec->dpb_status);
-			mfc_debug(2, "buffer[%d] is moved to dst queue for reuse\n", index);
-		}
-	}
-}
-
-static void s5p_mfc_handle_reuse_buffer(struct s5p_mfc_ctx *ctx)
-{
-	struct s5p_mfc_dev *dev = ctx->dev;
-	struct s5p_mfc_dec *dec = ctx->dec_priv;
-	unsigned int prev_flag, released_flag = 0;
-	int i;
-
-	if (!dec->is_dynamic_dpb)
-		return;
-
-	prev_flag = dec->dynamic_used;
-	dec->dynamic_used = mfc_get_dec_used_flag();
-	released_flag = prev_flag & (~dec->dynamic_used);
-
-	if (!released_flag)
-		return;
-
-	/* reuse not referenced buf anymore */
-	for (i = 0; i < MFC_MAX_DPBS; i++)
-		if (released_flag & (1 << i))
-			s5p_mfc_move_reuse_buffer(ctx, i);
-}
-
 /* Handle frame decoding interrupt */
 static void s5p_mfc_handle_frame(struct s5p_mfc_ctx *ctx,
 					unsigned int reason, unsigned int err)
 {
 	struct s5p_mfc_dev *dev;
 	struct s5p_mfc_dec *dec;
-	unsigned int dst_frame_status, sei_avail_frame_pack;
+	unsigned int dst_frame_status, sei_avail_status;
 	struct s5p_mfc_buf *src_buf;
 	unsigned long flags;
 	unsigned int res_change;
@@ -1204,21 +1194,14 @@ static void s5p_mfc_handle_frame(struct s5p_mfc_ctx *ctx,
 	res_change = (s5p_mfc_get_dspl_status()
 				& S5P_FIMV_DEC_STATUS_RESOLUTION_MASK)
 				>> S5P_FIMV_DEC_STATUS_RESOLUTION_SHIFT;
-	sei_avail_frame_pack = s5p_mfc_get_sei_avail_frame_pack();
+	sei_avail_status = s5p_mfc_get_sei_avail_status();
 
 	if (dec->immediate_display == 1)
 		dst_frame_status = s5p_mfc_get_dec_status()
 				& S5P_FIMV_DEC_STATUS_DECODING_STATUS_MASK;
 
 	mfc_debug(2, "Frame Status: %x\n", dst_frame_status);
-	mfc_debug(5, "SEI available status: 0x%08x\n", s5p_mfc_get_sei_avail());
-	mfc_debug(5, "SEI contents light: 0x%08x\n", s5p_mfc_get_sei_content_light());
-	mfc_debug(5, "SEI luminance: 0x%08x, 0x%08x, white point: 0x%08x\n",
-				s5p_mfc_get_sei_mastering0(), s5p_mfc_get_sei_mastering1(),
-				s5p_mfc_get_sei_mastering2());
-	mfc_debug(5, "SEI display primaries: 0x%08x, 0x%08x, 0x%08x\n",
-				s5p_mfc_get_sei_mastering3(), s5p_mfc_get_sei_mastering4(),
-				s5p_mfc_get_sei_mastering5());
+	mfc_debug(2, "SEI available status: %x\n", sei_avail_status);
 	mfc_debug(2, "Used flag: old = %08x, new = %08x\n",
 				dec->dynamic_used, mfc_get_dec_used_flag());
 
@@ -1247,7 +1230,7 @@ static void s5p_mfc_handle_frame(struct s5p_mfc_ctx *ctx,
 
 	if (ctx->codec_mode == S5P_FIMV_CODEC_H264_DEC &&
 		dst_frame_status == S5P_FIMV_DEC_STATUS_DECODING_ONLY &&
-		FW_HAS_SEI_S3D_REALLOC(dev) && sei_avail_frame_pack) {
+		FW_HAS_SEI_S3D_REALLOC(dev) && sei_avail_status) {
 		mfc_debug(2, "Frame packing SEI exists for a frame.\n");
 		mfc_debug(2, "Reallocate DPBs and issue init_buffer.\n");
 		ctx->is_dpb_realloc = 1;
@@ -1261,8 +1244,6 @@ static void s5p_mfc_handle_frame(struct s5p_mfc_ctx *ctx,
 	/* All frames remaining in the buffer have been extracted  */
 	if (dst_frame_status == S5P_FIMV_DEC_STATUS_DECODING_EMPTY) {
 		if (ctx->state == MFCINST_RES_CHANGE_FLUSH) {
-			struct mfc_timestamp *temp_ts = NULL;
-
 			mfc_debug(2, "Last frame received after resolution change.\n");
 			s5p_mfc_handle_frame_all_extracted(ctx);
 			s5p_mfc_change_state(ctx, MFCINST_RES_CHANGE_END);
@@ -1289,18 +1270,6 @@ static void s5p_mfc_handle_frame(struct s5p_mfc_ctx *ctx,
 				}
 				cleanup_assigned_dpb(ctx);
 			}
-
-			/* empty the timestamp queue */
-			while (!list_empty(&ctx->ts_list)) {
-				temp_ts = list_entry((&ctx->ts_list)->next,
-						struct mfc_timestamp, list);
-				list_del(&temp_ts->list);
-			}
-			ctx->ts_count = 0;
-			ctx->ts_is_full = 0;
-			ctx->last_framerate = 0;
-			ctx->framerate = DEC_MAX_FPS;
-
 			goto leave_handle_frame;
 		} else {
 			s5p_mfc_handle_frame_all_extracted(ctx);
@@ -1309,17 +1278,11 @@ static void s5p_mfc_handle_frame(struct s5p_mfc_ctx *ctx,
 
 	if (dec->is_dynamic_dpb) {
 		switch (dst_frame_status) {
+		case S5P_FIMV_DEC_STATUS_DECODING_ONLY:
+			dec->dynamic_used |= mfc_get_dec_used_flag();
+			/* Fall through */
 		case S5P_FIMV_DEC_STATUS_DECODING_DISPLAY:
 			s5p_mfc_handle_ref_frame(ctx);
-			break;
-		case S5P_FIMV_DEC_STATUS_DECODING_ONLY:
-			s5p_mfc_handle_ref_frame(ctx);
-			/*
-			 * Some cases can have many decoding only frames like VP9
-			 * alt-ref frame. So need handling release buffer
-			 * because of DPB full.
-			 */
-			s5p_mfc_handle_reuse_buffer(ctx);
 			break;
 		default:
 			break;
@@ -1349,7 +1312,7 @@ static void s5p_mfc_handle_frame(struct s5p_mfc_ctx *ctx,
 		dec->consumed += s5p_mfc_get_consumed_stream();
 		remained = (unsigned int)(src_buf->vb.v4l2_planes[0].bytesused - dec->consumed);
 
-		if ((dec->consumed > 0) && (remained > STUFF_BYTE) && (err == 0) &&
+		if ((prev_offset == 0) && (remained > STUFF_BYTE) && (err == 0) &&
 				(src_buf->vb.v4l2_planes[0].bytesused > dec->consumed)) {
 			/* Run MFC again on the same buffer */
 			mfc_debug(2, "Running again the same buffer.\n");
@@ -1567,6 +1530,7 @@ static irqreturn_t s5p_mfc_irq(int irq, void *priv)
 	unsigned int err;
 	unsigned long flags;
 	int new_ctx;
+	int is_interlace, is_mbaff;
 #ifdef NAL_Q_ENABLE
 	nal_queue_handle *nal_q_handle = dev->nal_q_handle;
 	EncoderOutputStr *pOutStr;
@@ -1724,11 +1688,10 @@ static irqreturn_t s5p_mfc_irq(int irq, void *priv)
 			dec->mv_count = s5p_mfc_get_mv_count();
 			if (ctx->codec_mode == S5P_FIMV_CODEC_HEVC_DEC) {
 				dec->profile = s5p_mfc_get_profile();
-				if ((dec->profile == S5P_FIMV_D_PROFILE_HEVC_MAIN_10)
-					|| (dec->profile == S5P_FIMV_D_PROFILE_HEVC_RANGE_EXT)){
+				if (dec->profile == S5P_FIMV_D_PROFILE_HEVC_MAIN_10) {
 					dec->is_10bit = 1;
-					mfc_info_ctx("HEVC 10bit contents, depth: %d\n",
-							s5p_mfc_get_bit_depth_minus8() + 8);
+					ctx->qos_ratio = (ctx->qos_ratio * 133) / 100;
+					mfc_info_ctx("HEVC 10bit contents.\n");
 				}
 			}
 
@@ -1737,9 +1700,13 @@ static irqreturn_t s5p_mfc_irq(int irq, void *priv)
 			else
 				s5p_mfc_change_state(ctx, MFCINST_HEAD_PARSED);
 
-			if (ctx->state == MFCINST_HEAD_PARSED)
-				dec->is_interlaced =
-					s5p_mfc_is_interlace_picture();
+			if (ctx->state == MFCINST_HEAD_PARSED) {
+				is_interlace = s5p_mfc_is_interlace_picture();
+				is_mbaff = s5p_mfc_is_mbaff_picture();
+				if (is_interlace || is_mbaff)
+					dec->is_interlaced = 1;
+				mfc_debug(3, "interlace: %d, mbaff: %d\n", is_interlace, is_mbaff);
+			}
 
 			if ((ctx->codec_mode == S5P_FIMV_CODEC_H264_DEC ||
 				ctx->codec_mode == S5P_FIMV_CODEC_H264_MVC_DEC ||
@@ -2270,64 +2237,14 @@ static int s5p_mfc_release(struct file *file)
 
 		/* Wait until instance is returned or timeout occured */
 		if (s5p_mfc_wait_for_done_ctx(ctx,
-				S5P_FIMV_R2H_CMD_CLOSE_INSTANCE_RET)) {
-			mfc_err_ctx("Waiting for CLOSE_INSTANCE timed out\n");
-			dev->curr_ctx_drm = ctx->is_drm;
-			set_bit(ctx->num, &dev->hw_lock);
-			s5p_mfc_clock_on(dev);
-			s5p_mfc_close_inst(ctx);
+				S5P_FIMV_R2H_CMD_CLOSE_INSTANCE_RET) == 1) {
+			mfc_err_ctx("It was expired to wait for a CLOSE_INSTANCE\n");
 			if (s5p_mfc_wait_for_done_ctx(ctx,
-				S5P_FIMV_R2H_CMD_CLOSE_INSTANCE_RET)) {
-				mfc_err_ctx("Abnormal h/w state.\n");
-
-				/* cleanup for the next open */
-				if (dev->curr_ctx == ctx->num)
-					clear_bit(ctx->num, &dev->hw_lock);
-				if (ctx->is_drm)
-					dev->num_drm_inst--;
-				dev->num_inst--;
-
-				mfc_info_dev("Failed to release MFC inst[%d:%d]\n",
-						dev->num_drm_inst, dev->num_inst);
-
-				if (dev->num_inst == 0) {
-					s5p_mfc_deinit_hw(dev);
-					del_timer_sync(&dev->watchdog_timer);
-
-					flush_workqueue(dev->sched_wq);
-
-					s5p_mfc_clock_off(dev);
-					mfc_debug(2, "power off\n");
-					s5p_mfc_power_off(dev);
-
-					s5p_mfc_release_dev_context_buffer(dev);
-					dev->drm_fw_status = 0;
-
-#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
-					dev->is_support_smc = 0;
-					if (IS_MFCv10X(dev)) {
-						ret = exynos_smc(SMC_DRM_SECBUF_UNPROT,
-								dev->drm_fw_info.phys,
-								dev->fw_region_size,
-								ION_EXYNOS_HEAP_ID_VIDEO_FW);
-						if (ret != DRMDRV_OK) {
-							mfc_err_ctx("failed MFC DRM F/W unprot(%#x)\n",
-									ret);
-							goto err_release;
-						}
-					}
-#endif
-				} else {
-					s5p_mfc_clock_off(dev);
-				}
-
-
-				mutex_unlock(&dev->mfc_mutex);
-
-				return -EIO;
+					S5P_FIMV_R2H_CMD_CLOSE_INSTANCE_RET)) {
+				mfc_err_ctx("It was once more expired. stop H/W\n");
+				s5p_mfc_check_and_stop_hw(dev);
 			}
 		}
-
 		ctx->inst_no = MFC_NO_INSTANCE_SET;
 	}
 	/* hardware locking scheme */
@@ -2995,6 +2912,10 @@ static int s5p_mfc_resume(struct device *dev)
 	if (m_dev->num_inst == 0)
 		return 0;
 
+	ret = exynos_smc(MC_FC_SET_CFW_PROT, 0, 0, 0);
+	if (ret != SMC_CFW_OK)
+		mfc_err("failed to enable MFC CFW early. ret: 0x%x\n", ret);
+
 	ret = s5p_mfc_wakeup(m_dev);
 
 	return ret;
@@ -3027,6 +2948,11 @@ static int s5p_mfc_runtime_resume(struct device *dev)
 {
 	struct s5p_mfc_dev *m_dev = platform_get_drvdata(to_platform_device(dev));
 	int pre_power;
+	uint32_t ret;
+
+	ret = exynos_smc(MC_FC_SET_CFW_PROT, 0, 0, 0);
+	if (ret != SMC_CFW_OK)
+		mfc_err("failed to enable MFC CFW early. ret: 0x%x\n", ret);
 
 	if (!m_dev) {
 		mfc_err("no mfc device to run\n");

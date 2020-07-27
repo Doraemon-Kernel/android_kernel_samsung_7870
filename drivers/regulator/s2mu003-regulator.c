@@ -339,6 +339,10 @@ static int s2mu003_pmic_probe(struct platform_device *pdev)
 		}
 	}
 
+	ret = s2mu003_assign_bits(i2c, S2MU003_Buck_LDO_CTRL, 0x01, 0x01);
+	if (ret < 0)
+		pr_info("[%s:%d] fail to set PFM mode\n", __FILE__, __LINE__);
+
 	return 0;
  err:
 	pr_info("[%s:%d] err:\n", __FILE__, __LINE__);
@@ -359,9 +363,6 @@ static int s2mu003_pmic_remove(struct platform_device *pdev)
 	for (i = 0; i < s2mu003->num_regulators; i++)
 		if (s2mu003->rdev[i])
 			regulator_unregister(s2mu003->rdev[i]);
-
-	kfree(s2mu003->rdev);
-	kfree(s2mu003);
 
 	return 0;
 }

@@ -338,6 +338,34 @@ void kbasep_pm_metrics_term(struct kbase_device *kbdev);
 void kbase_pm_report_vsync(struct kbase_device *kbdev, int buffer_updated);
 
 /**
+ * kbase_pm_register_vsync_callback - Configure the frame buffer device to set
+ *                                    the vsync callback.
+ *
+ * This function should do whatever is necessary for this integration to ensure
+ * that kbase_pm_report_vsync() is called appropriately.
+ *
+ * This function will need porting as part of the integration for a device.
+ *
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ */
+void kbase_pm_register_vsync_callback(struct kbase_device *kbdev);
+
+/**
+ * kbase_pm_unregister_vsync_callback - Free any resources that
+ *                                      kbase_pm_register_vsync_callback()
+ *                                      allocated.
+ *
+ * This function should perform any cleanup required from the call to
+ * kbase_pm_register_vsync_callback(). No call backs should occur after this
+ * function has returned.
+ *
+ * This function will need porting as part of the integration for a device.
+ *
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ */
+void kbase_pm_unregister_vsync_callback(struct kbase_device *kbdev);
+
+/**
  * kbase_pm_get_dvfs_action - Determine whether the DVFS system should change
  *                            the clock speed of the GPU.
  *
@@ -345,8 +373,19 @@ void kbase_pm_report_vsync(struct kbase_device *kbdev, int buffer_updated);
  *
  * This function should be called regularly by the DVFS system to check whether
  * the clock speed of the GPU needs updating.
+ *
+ * Return:
+ * It will return one of three enumerated values of kbase_pm_dvfs_action
+ *
+ * %KBASE_PM_DVFS_NOP        The clock does not need changing
+ *
+ * %KBASE_PM_DVFS_CLOCK_UP   The clock frequency should be increased if
+ *                           possible.
+ *
+ * %KBASE_PM_DVFS_CLOCK_DOWN The clock frequency should be decreased if
+ *                           possible.
  */
-void kbase_pm_get_dvfs_action(struct kbase_device *kbdev);
+enum kbase_pm_dvfs_action kbase_pm_get_dvfs_action(struct kbase_device *kbdev);
 
 /**
  * kbase_pm_request_gpu_cycle_counter - Mark that the GPU cycle counter is
@@ -502,15 +541,24 @@ int kbase_platform_dvfs_event(struct kbase_device *kbdev, u32 utilisation,
 void kbase_pm_power_changed(struct kbase_device *kbdev);
 
 /**
- * kbase_pm_metrics_update - Inform the metrics system that an atom is either
- *                           about to be run or has just completed.
- * @kbdev: The kbase device structure for the device (must be a valid pointer)
- * @now:   Pointer to the timestamp of the change, or NULL to use current time
+ * kbase_pm_metrics_run_atom - Inform the metrics system that an atom is about
+ *                             to be run.
  *
- * Caller must hold runpool_irq.lock
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ * @katom: The atom that is about to be run
  */
-void kbase_pm_metrics_update(struct kbase_device *kbdev,
-				ktime_t *now);
+void kbase_pm_metrics_run_atom(struct kbase_device *kbdev,
+				struct kbase_jd_atom *katom);
+
+/**
+ * kbase_pm_metrics_release_atom - Inform the metrics system that an atom has
+ *                                 been run and is being released.
+ *
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ * @katom: The atom that is about to be released
+ */
+void kbase_pm_metrics_release_atom(struct kbase_device *kbdev,
+				struct kbase_jd_atom *katom);
 
 
 #endif /* _KBASE_BACKEND_PM_INTERNAL_H_ */

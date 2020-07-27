@@ -22,6 +22,7 @@
 #define ABOV_ID 0x40
 
 extern int get_lcd_attached(char *);
+extern unsigned int lcdtype;
 
 #define LIGHT_VERSION_PATH		"/efs/FactoryApp/tkey_light_version"
 #define LIGHT_TABLE_PATH		"/efs/FactoryApp/tkey_light"
@@ -47,6 +48,7 @@ enum WINDOW_COLOR {
 	WINDOW_COLOR_GREEN,
 	WINDOW_COLOR_BLUE,
 	WINDOW_COLOR_PINKGOLD,
+	WINDOW_COLOR_PINK,
 };
 #define WINDOW_COLOR_DEFAULT		WINDOW_COLOR_BLACK
 
@@ -72,7 +74,7 @@ struct abov_touchkey_platform_data {
 	char *fw_path;
 	bool boot_on_ldo;
 	bool bringup;
-	bool ta_notifier;
+	bool each_tkey_thd;
 	int dt_light_version;
 	int dt_light_table;
 };

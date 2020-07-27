@@ -19,7 +19,7 @@
 #define	grasTuning_uParabolicCenterX_front			0x000CE71C
 #define	grasTuning_uParabolicCenterY_front			0x000CE724
 #define	grasTuning_uBiQuadFactorA_front				0x000CE72C
-#define	grasTuning_uBiQuadFactorB_front				0x000CE73C
+#define	grasTuning_uBiQuadFactorB_front				0x000C6E3C
 #define	grasTuning_uBiQuadScaleShiftAdder_front			0x000CE74C
 #define	grasTuning_AwbAshCord_front				0x000CE754
 #define	grasTuning_awbAshCordIndexes_front			0x000CE762

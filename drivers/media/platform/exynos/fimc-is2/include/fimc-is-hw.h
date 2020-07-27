@@ -19,6 +19,8 @@
 #include "../ischain/fimc-is-v4_0_0/fimc-is-hw-chain.h"
 #elif defined(CONFIG_FIMC_IS_V3_11_0)
 #include "../ischain/fimc-is-v3_11_0/fimc-is-hw-chain.h"
+#elif defined(CONFIG_FIMC_IS_V5_10_0)
+#include "../ischain/fimc-is-v5_10_0/fimc-is-hw-chain.h"
 #endif
 
 #define CSI_VIRTUAL_CH_0	0
@@ -140,7 +142,6 @@ enum csis_hw_control_id {
 	CSIS_CTRL_INTERLEAVE_MODE,
 	CSIS_CTRL_LINE_RATIO,
 	CSIS_CTRL_BUS_WIDTH,
-	CSIS_CTRL_DMA_ABORT_REQ,
 };
 
 /*
@@ -216,7 +217,6 @@ enum flite_hw_control_id {
  * MIPI-CSIS H/W APIS
  * ******************
  */
-void csi_hw_phy_otp_config(u32 __iomem *base_reg, u32 instance);
 int csi_hw_reset(u32 __iomem *base_reg);
 int csi_hw_s_settle(u32 __iomem *base_reg, u32 settle);
 int csi_hw_s_lane(u32 __iomem *base_reg, struct fimc_is_image *img, u32 lanes, u32 mipi_speed);
@@ -232,7 +232,7 @@ void csi_hw_s_dma_addr(u32 __iomem *base_reg, u32 vc, u32 number, u32 addr);
 void csi_hw_s_output_dma(u32 __iomem *base_reg, u32 vc, bool enable);
 bool csi_hw_g_output_dma_enable(u32 __iomem *base_reg, u32 vc);
 bool csi_hw_g_output_cur_dma_enable(u32 __iomem *base_reg, u32 vc);
-int csi_hw_s_config_dma(u32 __iomem *base_reg, u32 channel, struct fimc_is_image *image);
+int csi_hw_s_config_dma(u32 __iomem *base_reg, u32 channel, struct fimc_is_vci_config *config, struct fimc_is_image *image);
 #endif
 
 /*

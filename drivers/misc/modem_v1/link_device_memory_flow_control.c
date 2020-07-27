@@ -217,4 +217,3 @@ void send_res_ack(struct mem_link_device *mld, struct mem_ipc_device *dev)
 }
 
 #endif
-
