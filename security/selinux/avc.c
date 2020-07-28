@@ -715,7 +715,6 @@ out:
 	return node;
 }
 
-#ifdef CONFIG_AUDIT
 /**
  * avc_audit_pre_callback - SELinux specific information
  * will be called by generic audit code
