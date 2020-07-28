@@ -2,6 +2,7 @@
 #
 # AresKernel
 #
+CONFIG_ASMP=y
 # CONFIG_AUDIT is not set
 # CONFIG_AUDITSYSCALL is not set
 # CONFIG_AUDIT_WATCH is not set
