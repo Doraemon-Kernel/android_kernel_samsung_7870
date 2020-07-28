@@ -271,6 +271,12 @@ on boot
     chown bluetooth bluetooth /sys/class/rfkill/rfkill0/type
     chown bluetooth bluetooth /sys/class/rfkill/rfkill0/device/extldo
 
+# faced
+service faced /system/bin/faced
+    class late_start
+    user system
+    group system
+
 #MST HW Support
 #setprop ro.mst.support 1
 
