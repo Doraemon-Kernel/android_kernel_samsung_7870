@@ -182,7 +182,7 @@ BUILD_IMAGE_NAME()
 	CR_IMAGE_NAME=$CR_NAME-$CR_VERSION-$CR_VARIANT
 
   # Flashable_script
-  if [ $CR_VARIANT = $CR_VARIANT_A320X ]; then
+  if [ $CR_VARIANT = $CR_VARIANT_A320X-TREBLE ]; then
     FL_VARIANT="A320X-TREBLE"
     FL_MODEL=a3y17lte
   fi
@@ -190,7 +190,7 @@ BUILD_IMAGE_NAME()
     FL_VARIANT="A320X-OneUI"
     FL_MODEL=a3y17lte
   fi
-  if [ $CR_VARIANT = $CR_VARIANT_J530X ]; then
+  if [ $CR_VARIANT = $CR_VARIANT_J530X-TREBLE ]; then
     FL_VARIANT="J530X-TREBLE"
     FL_MODEL=j5y17lte
   fi
@@ -198,7 +198,7 @@ BUILD_IMAGE_NAME()
     FL_VARIANT="J530X-OneUI"
     FL_MODEL=j5y17lte
   fi
-  if [ $CR_VARIANT = $CR_VARIANT_J730X ]; then
+  if [ $CR_VARIANT = $CR_VARIANT_J730X-TREBLE ]; then
     FL_VARIANT="J730X-TREBLE"
     FL_MODEL=j7y17lte
   fi
@@ -206,7 +206,7 @@ BUILD_IMAGE_NAME()
     FL_VARIANT="J730X-OneUI"
     FL_MODEL=j7y17lte
   fi
-  if [ $CR_VARIANT = $CR_VARIANT_J710X ]; then
+  if [ $CR_VARIANT = $CR_VARIANT_J710X-TREBLE ]; then
     FL_VARIANT="J710X-TREBLE"
     FL_MODEL=j7xelte
   fi
@@ -214,7 +214,7 @@ BUILD_IMAGE_NAME()
     FL_VARIANT="J710X-OneUI"
     FL_MODEL=j7xelte
   fi
-  if [ $CR_VARIANT = $CR_VARIANT_J701X ]; then
+  if [ $CR_VARIANT = $CR_VARIANT_J701X-TREBLE ]; then
     FL_VARIANT="J701X-TREBLE"
     FL_MODEL=j7velte
   fi
@@ -222,7 +222,7 @@ BUILD_IMAGE_NAME()
     FL_VARIANT="J701X-OneUI"
     FL_MODEL=j7velte
   fi
-  if [ $CR_VARIANT = $CR_VARIANT_G610X ]; then
+  if [ $CR_VARIANT = $CR_VARIANT_G610X-TREBLE ]; then
     FL_VARIANT="G610X-TREBLE"
     FL_MODEL=on7xelte
   fi
@@ -230,7 +230,7 @@ BUILD_IMAGE_NAME()
     FL_VARIANT="G610X-OneUI"
     FL_MODEL=on7xelte
   fi
-  if [ $CR_VARIANT = $CR_VARIANT_J600X ]; then
+  if [ $CR_VARIANT = $CR_VARIANT_J600X-TREBLE ]; then
     FL_VARIANT="J600X-TREBLE"
     FL_MODEL=j6lte
   fi
@@ -238,7 +238,7 @@ BUILD_IMAGE_NAME()
     FL_VARIANT="J600X-OneUI"
     FL_MODEL=j6lte
   fi
-  if [ $CR_VARIANT = $CR_VARIANT_A600X ]; then
+  if [ $CR_VARIANT = $CR_VARIANT_A600X-TREBLE ]; then
     FL_VARIANT="A600X-TREBLE"
     FL_MODEL=a6lte
   fi
