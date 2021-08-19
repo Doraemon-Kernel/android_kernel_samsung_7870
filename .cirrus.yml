@@ -30,20 +30,20 @@ task:
     - ls /tmp/ci/kernel/ARES/Out/
     - ls /tmp/ci/kernel/ARES/Product/
     - export FOLDER="Doraemon-Kernel-$(date +%d_%m_%Y)"
-    - rclone copy AresKernel-V8.1-OC-A320X-TREBLE.zip drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-A320X-TREBLE.img drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-A600X-TREBLE.zip drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-A600X-TREBLE.img drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-G610X-TREBLE.zip drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-G610X-TREBLE.img drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-J530X-TREBLE.zip drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-J530X-TREBLE.img drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-J600X-TREBLE.zip drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-J600X-TREBLE.img drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-J701X-TREBLE.zip drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-J701X-TREBLE.img drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-J710X-TREBLE.zip drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-J710X-TREBLE.img drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-J730X-TREBLE.zip drive:$FOLDER/
-    - rclone copy AresKernel-V8.1-OC-J730X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-A320X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-A320X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-A600X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-A600X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-G610X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-G610X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-J530X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-J530X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-J600X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-J600X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-J701X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-J701X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-J710X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-J710X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-J730X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.0-J730X-TREBLE.img drive:$FOLDER/
     - echo "Done"
