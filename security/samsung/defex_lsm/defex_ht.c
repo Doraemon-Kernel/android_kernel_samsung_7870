@@ -21,7 +21,7 @@ DECLARE_HASHTABLE(creds_hash, 15);
 #endif /* DEFEX_PED_ENABLE */
 
 struct proc_cred_data {
-	unsigned int uid, fsuid, egid, p_root;
+	unsigned int uid, fsuid, egid;
 };
 
 struct proc_cred_struct {
@@ -48,11 +48,11 @@ int is_task_creds_ready(void)
 }
 
 #ifdef DEFEX_PED_ENABLE
-void get_task_creds(int pid, unsigned int *uid_ptr, unsigned int *fsuid_ptr, unsigned int *egid_ptr, unsigned int *p_root_ptr)
+void get_task_creds(int pid, unsigned int *uid_ptr, unsigned int *fsuid_ptr, unsigned int *egid_ptr)
 {
 	struct proc_cred_struct *obj;
 	struct proc_cred_data *cred_data;
-	unsigned int uid = 0, fsuid = 0, egid = 0, p_root = 1;
+	unsigned int uid = 0, fsuid = 0, egid = 0;
 	unsigned long flags;
 
 	if (pid <= MAX_PID_32) {
@@ -62,7 +62,6 @@ void get_task_creds(int pid, unsigned int *uid_ptr, unsigned int *fsuid_ptr, uns
 			uid = cred_data->uid;
 			fsuid = cred_data->fsuid;
 			egid = cred_data->egid;
-			p_root = cred_data->p_root;
 		}
 		spin_unlock_irqrestore(&creds_hash_update_lock, flags);
 	} else {
@@ -71,7 +70,6 @@ void get_task_creds(int pid, unsigned int *uid_ptr, unsigned int *fsuid_ptr, uns
 			uid = obj->cred_data.uid;
 			fsuid = obj->cred_data.fsuid;
 			egid = obj->cred_data.egid;
-			p_root = obj->cred_data.p_root;
 			break;
 		}
 		spin_unlock_irqrestore(&creds_hash_update_lock, flags);
@@ -79,10 +77,9 @@ void get_task_creds(int pid, unsigned int *uid_ptr, unsigned int *fsuid_ptr, uns
 	*uid_ptr = uid;
 	*fsuid_ptr = fsuid;
 	*egid_ptr = egid;
-	*p_root_ptr = p_root;
 }
 
-int set_task_creds(int pid, unsigned int uid, unsigned int fsuid, unsigned int egid, unsigned int p_root)
+int set_task_creds(int pid, unsigned int uid, unsigned int fsuid, unsigned int egid)
 {
 	struct proc_cred_struct *obj;
 	struct proc_cred_data *cred_data = NULL, *tmp_data = NULL;
@@ -109,7 +106,6 @@ alloc_obj:;
 		cred_data->uid = uid;
 		cred_data->fsuid = fsuid;
 		cred_data->egid = egid;
-		cred_data->p_root = p_root;
 		spin_unlock_irqrestore(&creds_hash_update_lock, flags);
 		if (tmp_data)
 			kfree(tmp_data);
@@ -121,7 +117,6 @@ alloc_obj:;
 		obj->cred_data.uid = uid;
 		obj->cred_data.fsuid = fsuid;
 		obj->cred_data.egid = egid;
-		obj->cred_data.p_root = p_root;
 		spin_unlock_irqrestore(&creds_hash_update_lock, flags);
 		return 0;
 	}
@@ -132,7 +127,6 @@ alloc_obj:;
 	obj->cred_data.uid = uid;
 	obj->cred_data.fsuid = fsuid;
 	obj->cred_data.egid = egid;
-	obj->cred_data.p_root = p_root;
 	spin_lock_irqsave(&creds_hash_update_lock, flags);
 	hash_add(creds_hash, &obj->node, pid);
 	spin_unlock_irqrestore(&creds_hash_update_lock, flags);

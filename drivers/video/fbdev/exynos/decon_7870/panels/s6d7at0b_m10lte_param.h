@@ -13,6 +13,11 @@ struct lcd_seq_info {
 	unsigned int	sleep;
 };
 
+struct i2c_rom_data {
+	u8 addr;
+	u8 val;
+};
+
 static u8 LM3632_INIT[] = {
 	0x09, 0x41,
 	0x02, 0x50,
@@ -80,7 +85,7 @@ static const unsigned char SEQ_S6D7AT0B_73[] = {
 
 static const unsigned char SEQ_S6D7AT0B_B1[] = {
 	0xB1,
-	0x1D, 0x32, 0x11, 0x00, 0xFF
+	0x11, 0x32, 0x11, 0x00,
 };
 
 static const unsigned char SEQ_S6D7AT0B_B3[] = {
@@ -293,7 +298,7 @@ static const unsigned char SEQ_DISPLAY_ON[] = {
 /* platform brightness <-> bl reg */
 static unsigned int brightness_table[EXTEND_BRIGHTNESS + 1] = {
 	0,
-	18, 25, 33, 41, 48, 56, 64, 72, 79, 87, /* 2: 25 */
+	18, 25, 33, 41, 48, 56, 64, 72, 79, 87, /* 1: 18 */
 	95, 103, 110, 118, 126, 133, 141, 149, 157, 164,
 	172, 180, 188, 195, 203, 211, 219, 226, 234, 242,
 	249, 257, 265, 273, 280, 288, 296, 304, 311, 319,

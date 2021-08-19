@@ -1612,6 +1612,7 @@ config ARCH_NR_GPIO
 	  If unsure, leave the default value.
 
 source kernel/Kconfig.preempt
+
 source kernel/Kconfig.hz
 
 config SCHED_HRTICK

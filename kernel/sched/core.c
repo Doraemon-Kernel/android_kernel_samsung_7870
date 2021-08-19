@@ -1848,21 +1848,8 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->se.avg.usage_avg_sum = 0;
 	p->se.avg.remainder = 0;
 #ifdef CONFIG_SCHED_HMP
-	/* keep LOAD_AVG_MAX in sync with fair.c if load avg series is changed */
-#define LOAD_AVG_MAX 47742
-	if (p->mm) {
-		p->se.avg.hmp_last_up_migration = 0;
-		p->se.avg.hmp_last_down_migration = 0;
-		p->se.avg.load_avg_ratio = 1023;
-		p->se.avg.load_avg_contrib =
-				(1023 * scale_load_down(p->se.load.weight));
-		p->se.avg.runnable_avg_period = LOAD_AVG_MAX;
-		p->se.avg.runnable_avg_sum = LOAD_AVG_MAX;
-		p->se.avg.usage_avg_sum = LOAD_AVG_MAX;
-	}
-#else
-	p->se.avg.runnable_avg_period = 0;
-	p->se.avg.runnable_avg_sum = 0;
+	p->se.avg.hmp_last_up_migration = 0;
+	p->se.avg.hmp_last_down_migration = 0;
 #endif
 #endif
 #ifdef CONFIG_SCHEDSTATS
@@ -3454,6 +3441,20 @@ static bool check_same_owner(struct task_struct *p)
 	return match;
 }
 
+static bool dl_param_changed(struct task_struct *p,
+		const struct sched_attr *attr)
+{
+	struct sched_dl_entity *dl_se = &p->dl;
+
+	if (dl_se->dl_runtime != attr->sched_runtime ||
+		dl_se->dl_deadline != attr->sched_deadline ||
+		dl_se->dl_period != attr->sched_period ||
+		dl_se->flags != attr->sched_flags)
+		return true;
+
+	return false;
+}
+
 static int __sched_setscheduler(struct task_struct *p,
 				const struct sched_attr *attr,
 				bool user)
@@ -3582,7 +3583,7 @@ recheck:
 			goto change;
 		if (rt_policy(policy) && attr->sched_priority != p->rt_priority)
 			goto change;
-		if (dl_policy(policy))
+		if (dl_policy(policy) && dl_param_changed(p, attr))
 			goto change;
 
 		p->sched_reset_on_fork = reset_on_fork;
@@ -7049,6 +7050,10 @@ void __init sched_init(void)
 {
 	int i, j;
 	unsigned long alloc_size = 0, ptr;
+
+	sec_gaf_supply_rqinfo(offsetof(struct rq, curr),
+		         offsetof(struct cfs_rq, rq));
+
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	alloc_size += 2 * nr_cpu_ids * sizeof(void **);

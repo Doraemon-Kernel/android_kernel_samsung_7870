@@ -70,7 +70,6 @@ enum sec_debug_reset_reason_t {
 	RR_B = 8,
 	RR_N = 9,
 	RR_T = 10,
-	RR_C = 11,
 };
 
 extern unsigned reset_reason;

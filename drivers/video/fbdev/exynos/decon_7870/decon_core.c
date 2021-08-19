@@ -27,6 +27,9 @@
 #include <linux/bug.h>
 #include <linux/of_address.h>
 #include <linux/smc.h>
+#ifdef CONFIG_POWERSUSPEND
+#include <linux/powersuspend.h>
+#endif
 #include <linux/clk-private.h>
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
@@ -1074,6 +1077,8 @@ int decon_enable(struct decon_device *decon)
 	}
 #endif
 
+	if (state != DECON_STATE_LPD_EXIT_REQ)
+		decon_abd_enable(decon, 1);
 err:
 	exynos_ss_printk("%s:state %d: active %d:-\n", __func__,
 				decon->state, pm_runtime_active(decon->dev));
@@ -1103,6 +1108,10 @@ int decon_disable(struct decon_device *decon)
 	/* Clear TUI state: Case of LCD off without TUI exit */
 	if (decon->out_type == DECON_OUT_TUI)
 		decon_tui_protection(decon, false);
+
+	if (decon->state != DECON_STATE_LPD_ENT_REQ)
+		decon_abd_enable(decon, 0);
+
 
 	if (decon->state != DECON_STATE_LPD_ENT_REQ)
 		mutex_lock(&decon->output_lock);
@@ -1228,11 +1237,14 @@ static int decon_blank(int blank_mode, struct fb_info *info)
 	case FB_BLANK_NORMAL:
 		DISP_SS_EVENT_LOG(DISP_EVT_BLANK, &decon->sd, ktime_set(0, 0));
 		ret = decon_disable(decon);
+#ifdef CONFIG_POWERSUSPEND
+ 		set_power_suspend_state_panel_hook(POWER_SUSPEND_ACTIVE);
+#endif		
+			
 		if (ret) {
 			decon_err("skipped to disable decon\n");
 			goto blank_exit;
 		}
-		atomic_set(&decon->ffu_flag, 2);
 #ifdef CONFIG_STATE_NOTIFIER
 		state_suspend();
 #endif
@@ -1240,11 +1252,13 @@ static int decon_blank(int blank_mode, struct fb_info *info)
 	case FB_BLANK_UNBLANK:
 		DISP_SS_EVENT_LOG(DISP_EVT_UNBLANK, &decon->sd, ktime_set(0, 0));
 		ret = decon_enable(decon);
+#ifdef CONFIG_POWERSUSPEND
+ 		set_power_suspend_state_panel_hook(POWER_SUSPEND_INACTIVE);
+#endif			
 		if (ret) {
 			decon_err("skipped to enable decon\n");
 			goto blank_exit;
 		}
-		atomic_set(&decon->ffu_flag, 2);
 #ifdef CONFIG_STATE_NOTIFIER
 		state_resume();
 #endif
@@ -2504,7 +2518,7 @@ static void decon_update_regs(struct decon_device *decon, struct decon_reg_data 
 
 		if (regs->dma_buf_data[i][0].fence) {
 			if (decon_fence_wait(regs->dma_buf_data[i][0].fence) < 0)
-				decon_abd_save_fto(&decon->abd, regs->dma_buf_data[i][0].fence);
+				decon_abd_save_log_fto(&decon->abd, regs->dma_buf_data[i][0].fence);
 		}
 	}
 
@@ -2554,13 +2568,6 @@ static void decon_update_regs(struct decon_device *decon, struct decon_reg_data 
 	/* clear I80 Framedone pending interrupt */
 	decon_write_mask(DECON_INT, VIDINTCON1, ~0, VIDINTCON1_INT_I80);
 	decon->frame_done_cnt_target = decon->frame_done_cnt_cur + 1;
-
-	if (decon->out_type == DECON_OUT_DSI && atomic_read(&decon->ffu_flag)) {
-		if (regs->num_of_window) {
-			atomic_dec(&decon->ffu_flag);
-			decon_simple_notifier_call_chain(DECON_EVENT_FRAME_SEND, FB_BLANK_UNBLANK);
-		}
-	}
 
 	if (decon->pdata->trig_mode == DECON_HW_TRIG)
 		decon_reg_set_trigger(DECON_INT, decon->pdata->dsi_mode,
@@ -2774,13 +2781,6 @@ windows_config:
 	decon_dbg("Total BW = %llu Mbits, Max BW per window = %llu Mbits\n",
 			regs->bandwidth >> 20, decon->max_win_bw >> 20);
 
-	if (decon->out_type == DECON_OUT_DSI && atomic_read(&decon->ffu_flag)) {
-		if (regs->num_of_window) {
-			atomic_dec(&decon->ffu_flag);
-			decon_simple_notifier_call_chain(DECON_EVENT_FRAME, FB_BLANK_UNBLANK);
-		}
-	}
-
 	if (ret) {
 #ifdef CONFIG_FB_WINDOW_UPDATE
 		if (regs->need_update)
@@ -2849,6 +2849,7 @@ int decon_doze_enable(struct decon_device *decon)
 {
 	struct decon_psr_info psr;
 	struct decon_init_param p;
+	int state = decon->state;
 	int ret = 0;
 	struct dsim_device *dsim = container_of(decon->output_sd, struct dsim_device, sd);
 
@@ -2969,6 +2970,9 @@ int decon_doze_enable(struct decon_device *decon)
 	decon->doze_state = DOZE_STATE_DOZE;
 	call_panel_ops(dsim, displayon, dsim);
 
+	if (state != DECON_STATE_LPD_ENT_REQ)
+		decon_abd_enable(decon, 1);
+
 err:
 	exynos_ss_printk("%s:state %d: active %d:-\n", __func__,
 				decon->state, pm_runtime_active(decon->dev));
@@ -2986,6 +2990,8 @@ int decon_doze_suspend(struct decon_device *decon)
 	decon_info("%s: -- %d, %d\n", __func__, decon->state, decon->doze_state);
 	exynos_ss_printk("disable decon-%s, state(%d) cnt %d\n", "int",
 				decon->state, pm_runtime_active(decon->dev));
+
+	decon_abd_enable(decon, 0);
 
 	if (decon->state != DECON_STATE_LPD_ENT_REQ)
 		mutex_lock(&decon->output_lock);
@@ -3080,6 +3086,11 @@ static int decon_ioctl(struct fb_info *info, unsigned int cmd,
 	struct decon_win_config_data win_data = { 0 };
 	int ret = 0;
 	u32 crtc;
+	struct fb_event v;
+	int blank = 0;
+
+	v.info = info;
+	v.data = &blank;
 
 	/* enable lpd only when system is ready to interact with driver */
 	decon_lpd_enable();
@@ -3179,22 +3190,24 @@ static int decon_ioctl(struct fb_info *info, unsigned int cmd,
 		}
 		switch (decon->pwr_mode) {
 		case DECON_POWER_MODE_DOZE:
-			decon_simple_notifier_call_chain(DECON_EARLY_EVENT_DOZE, FB_BLANK_UNBLANK);
+			decon_info("%s: DECON_POWER_MODE_DOZE\n", __func__);
 			ret = decon_doze_enable(decon);
 			if (ret) {
 				decon_err("%s: failed to decon_doze_enable: %d\n", __func__, ret);
 				ret = 0;
 			}
-			decon_simple_notifier_call_chain(DECON_EVENT_DOZE, FB_BLANK_UNBLANK);
+			blank = FB_BLANK_UNBLANK;
+			decon_notifier_call_chain(FB_EVENT_BLANK, &v);
 			break;
 		case DECON_POWER_MODE_DOZE_SUSPEND:
-			decon_simple_notifier_call_chain(DECON_EARLY_EVENT_DOZE, FB_BLANK_POWERDOWN);
+			decon_info("%s: DECON_POWER_MODE_DOZE_SUSPEND\n", __func__);
 			ret = decon_doze_suspend(decon);
 			if (ret) {
 				decon_err("%s: failed to decon_doze_suspend: %d\n", __func__, ret);
 				ret = 0;
 			}
-			decon_simple_notifier_call_chain(DECON_EVENT_DOZE, FB_BLANK_POWERDOWN);
+			blank = FB_BLANK_POWERDOWN;
+			decon_notifier_call_chain(FB_EVENT_BLANK, &v);
 			break;
 		default:
 			decon_info("%s: pwr_mode: %d\n", __func__, decon->pwr_mode);
@@ -4485,6 +4498,18 @@ static int decon_probe(struct platform_device *pdev)
 	call_panel_ops(dsim, displayon, dsim);
 
 decon_init_done:
+	decon->ignore_vsync = false;
+
+	if (!lcdtype) {
+		decon_err("%s: decon does not found panel\n", __func__);
+		decon->ignore_vsync = true;
+	} else {
+		decon_abd_register(decon);
+		decon_abd_enable(decon, 1);
+	}
+
+	decon_info("%s: panel id: %x\n", __func__, lcdtype);
+
 #ifdef CONFIG_DECON_MIPI_DSI_PKTGO
 	ret = v4l2_subdev_call(decon->output_sd, core, ioctl,
 				DSIM_IOC_PKT_GO_ENABLE, NULL);
@@ -4585,15 +4610,8 @@ static int decon_remove(struct platform_device *pdev)
 static void decon_shutdown(struct platform_device *pdev)
 {
 	struct decon_device *decon = platform_get_drvdata(pdev);
-	struct fb_info *fbinfo = decon->windows[decon->pdata->default_win]->fbinfo;
 
 	dev_info(decon->dev, "%s + state:%d\n", __func__, decon->state);
-
-	if (!lock_fb_info(fbinfo)) {
-		decon_warn("%s: fblock is failed\n", __func__);
-		return;
-	}
-
 	DISP_SS_EVENT_LOG(DISP_EVT_DECON_SHUTDOWN, &decon->sd, ktime_set(0, 0));
 
 	if (decon->pdata->psr_mode == DECON_MIPI_COMMAND_MODE)
@@ -4601,14 +4619,10 @@ static void decon_shutdown(struct platform_device *pdev)
 
 	decon_lpd_block_exit(decon);
 	/* Unused DECON state is DECON_STATE_INIT */
-	if (decon->state == DECON_STATE_ON) {
-		decon_simple_notifier_call_chain(FB_EARLY_EVENT_BLANK, FB_BLANK_POWERDOWN);
+	if (decon->state == DECON_STATE_ON)
 		decon_disable(decon);
-		decon_simple_notifier_call_chain(FB_EVENT_BLANK, FB_BLANK_POWERDOWN);
-	}
 
-	/* decon_lpd_unblock(decon); */
-	unlock_fb_info(fbinfo);
+	decon_lpd_unblock(decon);
 
 	dev_info(decon->dev, "%s -\n", __func__);
 }

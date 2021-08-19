@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_osl.c 792549 2018-12-05 09:39:13Z $
+ * $Id: linux_osl.c 680580 2017-01-20 11:49:58Z $
  */
 
 #define LINUX_PORT
@@ -541,7 +541,7 @@ int osl_static_mem_init(osl_t *osh, void *adapter)
 				ASSERT(osh->magic == OS_HANDLE_MAGIC);
 				return -ENOMEM;
 			} else {
-				printk("succeed to alloc static buf\n");
+				printk("alloc static buf at %p!\n", bcm_static_buf);
 			}
 
 			spin_lock_init(&bcm_static_buf->static_lock);
@@ -1867,32 +1867,6 @@ osl_sysuptime_us(void)
 	return usec;
 }
 
-uint64
-osl_localtime_ns(void)
-{
-	uint64 ts_nsec = 0;
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
-	ts_nsec = local_clock();
-#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36) */
-
-	return ts_nsec;
-}
-
-void
-osl_get_localtime(uint64 *sec, uint64 *usec)
-{
-	uint64 ts_nsec = 0;
-	unsigned long rem_nsec = 0;
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
-	ts_nsec = local_clock();
-	rem_nsec = do_div(ts_nsec, NSEC_PER_SEC);
-#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36) */
-	*sec = (uint64)ts_nsec;
-	*usec = (uint64)(rem_nsec / MSEC_PER_SEC);
-}
-
 
 /* Clone a packet.
  * The pkttag contents are NOT cloned.
@@ -2678,7 +2652,7 @@ osl_timer_add(osl_t *osh, osl_timer_t *t, uint32 ms, bool periodic)
 	if (periodic) {
 		printf("Periodic timers are not supported by Linux timer apis\n");
 	}
-	t->timer->expires = jiffies + ms*msecs_to_jiffies(1000)/1000;
+	t->timer->expires = jiffies + ms*HZ/1000;
 
 	add_timer(t->timer);
 
@@ -2697,7 +2671,7 @@ osl_timer_update(osl_t *osh, osl_timer_t *t, uint32 ms, bool periodic)
 		printf("Periodic timers are not supported by Linux timer apis\n");
 	}
 	t->set = TRUE;
-	t->timer->expires = jiffies + ms*msecs_to_jiffies(1000)/1000;
+	t->timer->expires = jiffies + ms*HZ/1000;
 
 	mod_timer(t->timer, t->timer->expires);
 

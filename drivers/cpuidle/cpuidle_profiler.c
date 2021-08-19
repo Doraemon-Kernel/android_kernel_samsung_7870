@@ -33,7 +33,7 @@ static DEFINE_PER_CPU(struct cpuidle_profile_info, profile_info);
  * is subordinate to C2 state idle. Each cluster has one element in
  * cpd_info[].
  */
-static struct cpuidle_profile_info cpd_info[CONFIG_NR_CLUSTERS];
+static struct cpuidle_profile_info cpd_info[MAX_CLUSTER];
 
 /*
  * "lpm_info" contains profiling data for LPM(Low Power Mode). LPM

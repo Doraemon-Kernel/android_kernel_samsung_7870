@@ -193,6 +193,7 @@ static void gpu_power_suspend(struct kbase_device *kbdev)
 	if (!platform)
 		return;
 
+
 #ifdef CONFIG_MALI_DVFS
 	gpu_dvfs_timer_control(false);
 	if (platform->dvfs_pending)
@@ -200,13 +201,12 @@ static void gpu_power_suspend(struct kbase_device *kbdev)
 #endif /* CONFIG_MALI_DVFS */
 
 	gpu_control_enable_customization(kbdev);
-
 	ret = pm_runtime_suspend(kbdev->dev);
 
 	/* we must turn on GPU power when device status is running on shutdown callbacks */
 	if (ret != 0) {
 		gpu_control_disable_customization(kbdev);
-	}
+ 	}
 	kbdev->is_power_on = false;
 
 	if (platform->early_clk_gating_status)
@@ -242,7 +242,7 @@ static int gpu_pm_notifier(struct notifier_block *nb, unsigned long event, void 
 		GPU_LOG(DVFS_ERROR, DUMMY, event, 0u, "    js_devdata [%p]\n", js_devdata);
 		GPU_LOG(DVFS_ERROR, DUMMY, event, 0u, "    platform   [%p]\n", platform);
 	}
-
+	
 	switch (event) {
 	case PM_SUSPEND_PREPARE:
 		if (kbdev && js_devdata && platform) {
@@ -262,12 +262,13 @@ static int gpu_pm_notifier(struct notifier_block *nb, unsigned long event, void 
 
 			err = platform->power_runtime_suspend_ret;
 		}
+
 		break;
 	case PM_POST_SUSPEND:
 		if (kbdev && platform) {
 			GPU_LOG(DVFS_DEBUG, LSI_RESUME, platform->power_runtime_suspend_ret, platform->power_runtime_resume_ret, \
 					"%s: resume event\n", __func__);
-
+ 
 			if (kbdev)
 				kbase_device_resume(kbdev);
 		}

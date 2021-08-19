@@ -87,57 +87,27 @@ static struct mdnie_table *mdnie_find_table(struct mdnie_info *mdnie)
 	mutex_lock(&mdnie->lock);
 
 	if (IS_LIGHT_NOTIFICATION(mdnie->light_notification)) {
-		if (mdnie->lpm) {
-			table = mdnie->tune->bypass_table ? &mdnie->tune->bypass_table[BYPASS_ON] : NULL;
-			goto exit;
-		}
 		table = mdnie->tune->light_notification_table ? &mdnie->tune->light_notification_table[mdnie->light_notification] : NULL;
 		goto exit;
 	} else if (IS_ACCESSIBILITY(mdnie->accessibility)) {
-		if (mdnie->lpm) {
-			if (mdnie->accessibility == NEGATIVE || mdnie->accessibility == GRAYSCALE_NEGATIVE) {
-				table = mdnie->tune->bypass_table ? &mdnie->tune->bypass_table[BYPASS_ON] : NULL;
-				goto exit;
-			}
-		}
 		table = mdnie->tune->accessibility_table ? &mdnie->tune->accessibility_table[mdnie->accessibility] : NULL;
 		goto exit;
 	} else if (IS_COLOR_LENS(mdnie->color_lens)) {
-		if (mdnie->lpm) {
-			table = mdnie->tune->bypass_table ? &mdnie->tune->bypass_table[BYPASS_ON] : NULL;
-			goto exit;
-		}
 		table = mdnie->tune->lens_table ? &mdnie->tune->lens_table[mdnie->color_lens] : NULL;
 		goto exit;
 	} else if (IS_HMT(mdnie->hmt_mode)) {
-		if (mdnie->lpm) {
-			table = mdnie->tune->bypass_table ? &mdnie->tune->bypass_table[BYPASS_ON] : NULL;
-			goto exit;
-		}
 		table = mdnie->tune->hmt_table ? &mdnie->tune->hmt_table[mdnie->hmt_mode] : NULL;
 		goto exit;
 	} else if (IS_NIGHT_MODE(mdnie->night_mode)) {
 		table = mdnie->tune->night_table ? &mdnie->tune->night_table[mdnie->night_mode] : NULL;
 		goto exit;
 	} else if (IS_HBM(mdnie->hbm)) {
-		if (mdnie->lpm) {
-			table = mdnie->tune->bypass_table ? &mdnie->tune->bypass_table[BYPASS_ON] : NULL;
-			goto exit;
-		}
 		table = mdnie->tune->hbm_table ? &mdnie->tune->hbm_table[mdnie->hbm] : NULL;
 		goto exit;
 	} else if (IS_DMB(mdnie->scenario)) {
-		if (mdnie->lpm) {
-			table = mdnie->tune->bypass_table ? &mdnie->tune->bypass_table[BYPASS_ON] : NULL;
-			goto exit;
-		}
 		table = mdnie->tune->dmb_table ? &mdnie->tune->dmb_table[mdnie->mode] : NULL;
 		goto exit;
 	} else if (IS_SCENARIO(mdnie->scenario)) {
-		if (mdnie->lpm && mdnie->ldu == 0) {
-			table = mdnie->tune->bypass_table ? &mdnie->tune->bypass_table[BYPASS_ON] : NULL;
-			goto exit;
-		}
 		table = mdnie->tune->main_table ? &mdnie->tune->main_table[mdnie->scenario][mdnie->mode] : NULL;
 		goto exit;
 	}
@@ -546,11 +516,7 @@ static ssize_t sensorRGB_store(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	if (mdnie->enable
-		&& mdnie->accessibility == ACCESSIBILITY_OFF
-		&& !mdnie->ldu
-		&& mdnie->mode == AUTO
-		&& (mdnie->scenario == BROWSER_MODE || mdnie->scenario == EBOOK_MODE)) {
+		if (mdnie->enable) {
 		dev_info(dev, "%s: %d, %d, %d\n", __func__, white_r, white_g, white_b);
 
 		table = mdnie_find_table(mdnie);
@@ -564,6 +530,10 @@ static ssize_t sensorRGB_store(struct device *dev,
 		mdnie->table_buffer.seq[scr_info->index].cmd[scr_info->wb] = mdnie->wrgb_current.b = (unsigned char)white_b;
 
 		mdnie_update_sequence(mdnie, &mdnie->table_buffer);
+		
+		table->seq[scr_info->index].cmd[scr_info->wr] = (unsigned char)white_r;
+		table->seq[scr_info->index].cmd[scr_info->wg] = (unsigned char)white_g;
+		table->seq[scr_info->index].cmd[scr_info->wb] = (unsigned char)white_b;
 	}
 
 	return count;
@@ -925,7 +895,6 @@ static int fb_notifier_callback(struct notifier_block *self,
 
 	switch (event) {
 	case FB_EVENT_BLANK:
-	case DECON_EVENT_DOZE:
 		break;
 	default:
 		return NOTIFY_DONE;
@@ -935,20 +904,10 @@ static int fb_notifier_callback(struct notifier_block *self,
 
 	fb_blank = *(int *)evdata->data;
 
-	dev_info(mdnie->dev, "%s: event: %lu, blank: %d\n", __func__, event, fb_blank);
+	dev_info(mdnie->dev, "%s: %d\n", __func__, fb_blank);
 
 	if (evdata->info->node)
 		return NOTIFY_DONE;
-
-	if (event == DECON_EVENT_DOZE) {
-		mutex_lock(&mdnie->lock);
-		mdnie->lpm = 1;
-		mutex_unlock(&mdnie->lock);
-	} else if (event == FB_EVENT_BLANK) {
-		mutex_lock(&mdnie->lock);
-		mdnie->lpm = 0;
-		mutex_unlock(&mdnie->lock);
-	}
 
 	if (fb_blank == FB_BLANK_UNBLANK) {
 		mutex_lock(&mdnie->lock);

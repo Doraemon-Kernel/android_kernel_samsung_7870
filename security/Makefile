@@ -41,12 +41,8 @@ subdir-$(CONFIG_FIVE)			+= samsung/five
 obj-$(CONFIG_FIVE)			+= samsung/five/
 
 # PROCA module
-subdir-$(CONFIG_PROCA)		+= proca
-obj-$(CONFIG_PROCA)		+= proca/
-
-# Kbuild should always enter proca/gaf because gaf should be always built
-subdir-y += proca/gaf
-obj-y    += proca/gaf/
+subdir-$(CONFIG_PROCA)			+= proca
+obj-$(CONFIG_PROCA)			+= proca/
 
 # TIMA uevent 
 obj-$(CONFIG_TIMA)     += tima_uevent/tima_uevent.o

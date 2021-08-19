@@ -430,10 +430,17 @@ static int mobicore_start(void)
 	}
 #endif
 
+	ret = device_user_init();
+	if (ret)
+		goto err_create_dev_user;
+
 	main_ctx.start_ret = 0;
 	goto got_ret;
 
+err_create_dev_user:
 #ifdef MC_PM_RUNTIME
+	unregister_reboot_notifier(&main_ctx.reboot_notifier);
+	unregister_pm_notifier(&main_ctx.pm_notifier);
 err_pm_notif:
 #endif
 err_version:
@@ -653,11 +660,7 @@ static int mobicore_probe(struct platform_device *pdev)
 	*/
 	err = device_admin_init();
 	if (err)
-		goto fail_create_dev;
-
-	err = device_user_init();
-	if (err)
-		goto fail_create_dev;
+		goto fail_creat_dev_admin;
 
 #ifndef MC_DELAYED_TEE_START
 	err = mobicore_start();
@@ -675,7 +678,7 @@ static int mobicore_probe(struct platform_device *pdev)
 
 fail_start:
 	device_admin_exit();
-fail_create_dev:
+fail_creat_dev_admin:
 	mc_scheduler_exit();
 fail_mc_device_sched_init:
 	mc_logging_exit();

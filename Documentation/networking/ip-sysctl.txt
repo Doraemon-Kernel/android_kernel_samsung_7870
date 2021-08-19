@@ -223,14 +223,6 @@ tcp_base_mss - INTEGER
 	Path MTU discovery (MTU probing).  If MTU probing is enabled,
 	this is the initial MSS used by the connection.
 
-tcp_min_snd_mss - INTEGER
-	TCP SYN and SYNACK messages usually advertise an ADVMSS option,
-	as described in RFC 1122 and RFC 6691.
-	If this ADVMSS option is smaller than tcp_min_snd_mss,
-	it is silently capped to tcp_min_snd_mss.
-
-	Default : 48 (at least 8 bytes of payload per segment)
-
 tcp_congestion_control - STRING
 	Set the congestion control algorithm to be used for new
 	connections. The algorithm "reno" is always available, but
@@ -393,8 +385,16 @@ tcp_orphan_retries - INTEGER
 	may consume significant resources. Cf. tcp_max_orphans.
 
 tcp_reordering - INTEGER
-	Maximal reordering of packets in a TCP stream.
+	Initial reordering level of packets in a TCP stream.
+	TCP stack can then dynamically adjust flow reordering level
+	between this initial value and tcp_max_reordering
 	Default: 3
+
+tcp_max_reordering - INTEGER
+	Maximal reordering level of packets in a TCP stream.
+	300 is a fairly conservative value, but you might increase it
+	if paths are using per packet load balancing (like bonding rr mode)
+	Default: 300
 
 tcp_retrans_collapse - BOOLEAN
 	Bug-to-bug compatibility with some broken printers.

@@ -1,5 +1,5 @@
 config SDFAT_FS
-	tristate "sdFAT filesystem support"
+	tristate
 	default y
 	select NLS
 	select NLS_UTF8
@@ -111,17 +111,7 @@ config SDFAT_DBG_BUGON
 	depends on SDFAT_FS && SDFAT_DEBUG
 	default n
 
-config SDFAT_DBG_WARNON
-	bool "enable strict WARN_ON() for debugging"
-	depends on SDFAT_FS && SDFAT_DEBUG
-	default n
-
 config SDFAT_STATISTICS
 	bool "enable statistics for bigdata"
-	depends on SDFAT_FS
-	default y
-
-config SDFAT_UEVENT
-	bool "enable uevent"
 	depends on SDFAT_FS
 	default y

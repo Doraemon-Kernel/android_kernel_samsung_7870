@@ -73,7 +73,6 @@ int soc_has_mongoose(void)
 #define EXYNOS_PMU_SWRESET				(0x0400)
 #define EXYNOS_PMU_RESET_SEQUENCER_CONFIGURATION	(0x0500)
 #define EXYNOS_PMU_PS_HOLD_CONTROL			(0x330C)
-#define EXYNOS_PMU_SYSIP_DAT0                           (0x0810)
 
 static void mngs_reset_control(int en)
 {
@@ -154,14 +153,9 @@ static void mngs_reset_control(int en)
 	}
 }
 
-#define REBOOT_MODE_NORMAL      0x00
-#define REBOOT_MODE_CHARGE      0x0A
-/* Reboot into fastboot mode */
-#define REBOOT_MODE_FASTBOOT    0xFC
-/* Auto enter bootloader command line */
-#define REBOOT_MODE_BOOTLOADER  0xFE
-/* Reboot into recovery */
-#define REBOOT_MODE_RECOVERY    0xFF
+#define INFORM_NONE		0x0
+#define INFORM_RAMDUMP		0xd
+#define INFORM_RECOVERY		0xf
 
 #if !defined(CONFIG_SEC_REBOOT)
 #ifdef CONFIG_OF
@@ -225,26 +219,19 @@ static void exynos_power_off(void)
 
 static void exynos_reboot(enum reboot_mode mode, const char *cmd)
 {
-	u32 soc_id;
-	void __iomem *addr;
+	u32 restart_inform, soc_id;
 
 	if (!exynos_pmu_base)
 		return;
 
-	addr = exynos_pmu_base + EXYNOS_PMU_SYSIP_DAT0;
+	restart_inform = INFORM_NONE;
 
 	if (cmd) {
-		if (!strcmp(cmd, "charge")) {
-                        __raw_writel(REBOOT_MODE_CHARGE, addr);
-                } else if (!strcmp(cmd, "fastboot") || !strcmp(cmd, "fb")) {
-                        __raw_writel(REBOOT_MODE_FASTBOOT, addr);
-                } else if (!strcmp(cmd, "bootloader") || !strcmp(cmd, "bl")) {
-                        __raw_writel(REBOOT_MODE_BOOTLOADER, addr);
-                } else if (!strcmp(cmd, "recovery")) {
-                        __raw_writel(REBOOT_MODE_RECOVERY, addr);
-                }
+		if (!strcmp((char *)cmd, "recovery"))
+			restart_inform = INFORM_RECOVERY;
+		else if(!strcmp((char *)cmd, "ramdump"))
+			restart_inform = INFORM_RAMDUMP;
 	}
-
 
 	/* Check by each SoC */
 	soc_id = exynos_soc_info.product_id & EXYNOS_SOC_MASK;

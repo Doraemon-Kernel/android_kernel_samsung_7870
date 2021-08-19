@@ -2,6 +2,7 @@
  * State Notifier Driver
  *
  * Copyright (c) 2013-2016, Pranav Vashi <neobuddy89@gmail.com>
+ *           (c) 2017, Joe Maples <joe@frap129.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -12,14 +13,16 @@
 #include <linux/export.h>
 #include <linux/module.h>
 #include <linux/state_notifier.h>
+#include <linux/mutex.h>
+#include "../../../kernel/power/power.h"
 
-#define DEFAULT_SUSPEND_DEFER_TIME 	10
+#define DEFAULT_SUSPEND_DEFER_TIME 	1
 #define STATE_NOTIFIER			"state_notifier"
 
 /*
  * debug = 1 will print all
  */
-static unsigned int debug = 1;
+static unsigned int debug;
 module_param_named(debug_mask, debug, uint, 0644);
 
 #define dprintk(msg...)		\
@@ -96,8 +99,18 @@ void state_suspend(void)
 
 	suspend_in_progress = true;
 
-	queue_delayed_work_on(0, susp_wq, &suspend_work,
+	queue_delayed_work(susp_wq, &suspend_work,
 		msecs_to_jiffies(suspend_defer_time * 1000));
+
+
+	if (unlikely(!mutex_trylock(&pm_mutex))) {
+	pr_info("PM is busy. Skipping suspension\n");
+	return;
+	}
+
+	pr_info("state_notifier: calling system suspension\n");
+	pm_suspend(PM_HIBERNATION_PREPARE);
+	mutex_unlock(&pm_mutex);
 }
 
 void state_resume(void)
@@ -107,7 +120,7 @@ void state_resume(void)
 	suspend_in_progress = false;
 
 	if (state_suspended)
-		queue_work_on(0, susp_wq, &resume_work);
+		queue_work(susp_wq, &resume_work);
 }
 
 static int __init state_notifier_init(void)

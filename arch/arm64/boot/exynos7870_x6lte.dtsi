@@ -382,6 +382,36 @@
 		};
 	};
 
+	firmware {
+		android {
+			compatible = "android,firmware";
+			fstab {
+				compatible = "android,fstab";
+				system {
+					compatible = "android,system";
+					dev = "/dev/block/platform/13540000.dwmmc0/by-name/SYSTEM";
+					type = "ext4";
+					mnt_flags = "ro";
+					fsmgr_flags = "wait";
+				};
+				vendor {
+					compatible = "android,vendor";
+					dev = "/dev/block/platform/13540000.dwmmc0/by-name/VENDOR";
+					type = "ext4";
+					mnt_flags = "ro";
+					fsmgr_flags = "wait";
+				};
+				odm {
+					compatible = "android,odm";
+					dev = "/dev/block/platform/13540000.dwmmc0/by-name/ODM";
+					type = "ext4";
+					mnt_flags = "ro";
+					fsmgr_flags = "wait";
+				};
+			};
+		};
+	};
+
 	mailbox_cp: mcu_ipc@10500000 {
 		compatible = "samsung,exynos7580-mailbox";
 
@@ -470,11 +500,14 @@
 
 		/* For CPUFREQ table */
 		/* CL0 */
+		/* Booting value */
+		boot_info = <40 1690000>;
+		/* boot_qos_timeout, boot_freq */
 		cl0_idx_num = <17>;
-		cl0_max_support_idx = <2>;
+		cl0_max_support_idx = <3>;
 		cl0_min_support_idx = <16>;
-		cl0_boot_max_qos = <1482000>;
-		cl0_boot_min_qos = <1482000>;
+		cl0_boot_max_qos = <1690000>;
+		cl0_boot_min_qos = <1690000>;
 		cl0_boot_lock_time = <40000000>;
 		cl0_en_ema = <1>;
 		cl0_regulator = "BUCK1";
@@ -483,8 +516,8 @@
 		cl1_idx_num = <17>;
 		cl1_max_support_idx = <2>;
 		cl1_min_support_idx = <16>;
-		cl1_boot_max_qos = <1482000>;
-		cl1_boot_min_qos = <1482000>;
+		cl1_boot_max_qos = <1794000>;
+		cl1_boot_min_qos = <1794000>;
 		cl1_boot_lock_time = <40000000>;
 		cl1_en_ema = <1>;
 		cl1_regulator = "BUCK1";
@@ -1352,36 +1385,6 @@
 	secgpio_dvs {
 		compatible = "samsung,exynos7870-secgpio-dvs";
 		status = "okay";
-	};
-
-	firmware {
-		android {
-			compatible = "android,firmware";
-			fstab {
-				compatible = "android,fstab";
-				system {
-					compatible = "android,system";
-					dev = "/dev/block/platform/13540000.dwmmc0/by-name/SYSTEM";
-					type = "ext4";
-					mnt_flags = "ro";
-					fsmgr_flags = "wait";
-				};
-				vendor {
-					compatible = "android,vendor";
-					dev = "/dev/block/platform/13540000.dwmmc0/by-name/VENDOR";
-					type = "ext4";
-					mnt_flags = "ro";
-					fsmgr_flags = "wait";
-				};
-				odm {
-					compatible = "android,odm";
-					dev = "/dev/block/platform/13540000.dwmmc0/by-name/ODM";
-					type = "ext4";
-					mnt_flags = "ro";
-					fsmgr_flags = "wait";
-				};
-			};
-		};
 	};
 
 	dwmmc_0: dwmmc0@13540000 {

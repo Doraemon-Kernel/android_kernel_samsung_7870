@@ -421,7 +421,8 @@ static int is_cpd_available(unsigned int cpu)
  * 		If it returns true, cluster is in idle state.
  * update_cluster_idle_state() : Update cluster idle state.
  */
-static int cluster_idle_state[CONFIG_NR_CLUSTERS];
+#define CLUSTER_TYPE_MAX	2
+static int cluster_idle_state[CLUSTER_TYPE_MAX];
 
 int check_cluster_idle_state(unsigned int cpu)
 {

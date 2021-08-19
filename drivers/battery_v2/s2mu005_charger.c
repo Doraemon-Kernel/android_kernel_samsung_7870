@@ -24,7 +24,7 @@
 
 #define EOC_DEBOUNCE_CNT 2
 #define HEALTH_DEBOUNCE_CNT 3
-#define DEFAULT_CHARGING_CURRENT 500
+#define DEFAULT_CHARGING_CURRENT 900
 
 #define EOC_SLEEP 200
 #define EOC_TIMEOUT (EOC_SLEEP * 6)
@@ -34,6 +34,10 @@
 
 #define ENABLE 1
 #define DISABLE 0
+
+#ifdef CONFIG_USB_HOST_NOTIFY
+#include <linux/usb_notify.h>
+#endif
 
 struct s2mu005_charger_data {
 	struct i2c_client       *client;

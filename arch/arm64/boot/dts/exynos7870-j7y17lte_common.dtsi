@@ -169,29 +169,6 @@
 		};
 	};
 
-	firmware {
-		android {
-			compatible = "android,firmware";
-			fstab {
-				compatible = "android,fstab";
-				system {
-					compatible = "android,system";
-					dev = "/dev/block/platform/13540000.dwmmc0/by-name/SYSTEM";
-					type = "ext4";
-					mnt_flags = "ro";
-					fsmgr_flags = "wait";
-				};
-				vendor {
-					compatible = "android,vendor";
-					dev = "/dev/block/platform/13540000.dwmmc0/by-name/VENDOR";
-					type = "ext4";
-					mnt_flags = "ro";
-					fsmgr_flags = "wait";
-				};
-			};
-		};
-	};
-
 	dwmmc0@13540000 {
 		status = "okay";
 		num-slots = <1>;
@@ -686,14 +663,14 @@
 		non_hw_trigger_levels = <7>;
 
 		/* Throttling Level */
-		trigger_levels_0 = <76>;
-		trigger_levels_1 = <81>;
-		trigger_levels_2 = <86>;
-		trigger_levels_3 = <91>;
-		trigger_levels_4 = <96>;
-		trigger_levels_5 = <101>;
-		trigger_levels_6 = <111>;
-		trigger_levels_7 = <115>;
+		trigger_levels_0 = <91>;
+		trigger_levels_1 = <96>;
+		trigger_levels_2 = <101>;
+		trigger_levels_3 = <106>;
+		trigger_levels_4 = <111>;
+		trigger_levels_5 = <116>;
+		trigger_levels_6 = <117>;
+		trigger_levels_7 = <118>;
 
 		trigger_enable_0 = <ENABLE>;
 		trigger_enable_1 = <ENABLE>;
@@ -736,14 +713,14 @@
 		non_hw_trigger_levels = <7>;
 
 		/* Throttling Level */
-		trigger_levels_0 = <76>;
-		trigger_levels_1 = <81>;
-		trigger_levels_2 = <86>;
-		trigger_levels_3 = <91>;
-		trigger_levels_4 = <96>;
-		trigger_levels_5 = <101>;
-		trigger_levels_6 = <111>;
-		trigger_levels_7 = <115>;
+		trigger_levels_0 = <91>;
+		trigger_levels_1 = <96>;
+		trigger_levels_2 = <101>;
+		trigger_levels_3 = <106>;
+		trigger_levels_4 = <111>;
+		trigger_levels_5 = <116>;
+		trigger_levels_6 = <117>;
+		trigger_levels_7 = <118>;
 
 		trigger_enable_0 = <ENABLE>;
 		trigger_enable_1 = <ENABLE>;
@@ -790,12 +767,12 @@
 		non_hw_trigger_levels = <7>;
 
 		/* Throttling Level */
-		trigger_levels_0 = <76>;
-		trigger_levels_1 = <81>;
-		trigger_levels_2 = <86>;
-		trigger_levels_3 = <91>;
-		trigger_levels_4 = <96>;
-		trigger_levels_5 = <101>;
+		trigger_levels_0 = <81>;
+		trigger_levels_1 = <86>;
+		trigger_levels_2 = <91>;
+		trigger_levels_3 = <96>;
+		trigger_levels_4 = <101>;
+		trigger_levels_5 = <106>;
 		trigger_levels_6 = <111>;
 		trigger_levels_7 = <115>;
 
@@ -826,12 +803,12 @@
 		freq_clip_max_4 = <343000>;
 		freq_clip_max_5 = <343000>;
 
-		cooling_level_0 = <76>;
-		cooling_level_1 = <81>;
-		cooling_level_2 = <86>;
-		cooling_level_3 = <91>;
-		cooling_level_4 = <96>;
-		cooling_level_5 = <101>;
+		cooling_level_0 = <81>;
+		cooling_level_1 = <86>;
+		cooling_level_2 = <91>;
+		cooling_level_3 = <96>;
+		cooling_level_4 = <101>;
+		cooling_level_5 = <106>;
 
 		/* gpu cooling related table */
 		gpu_idx_num = <6>;
@@ -1405,22 +1382,6 @@
 		flash-gpio = <&gpd3 2 0>;
 		torch-gpio = <&gpd3 3 0>;
 	};
-	
-	firmware {
-		  android {
-		   compatible = "android,firmware";
-		   fstab {
-			compatible = "android,fstab";
-			system {
-				 compatible = "android,system";
-				 dev = "/dev/block/platform/13540000.dwmmc0/by-name/SYSTEM";
-				 type = "ext4";
-				 mnt_flags = "ro";
-				 fsmgr_flags = "wait,verify";
-				};
-			};
-		};
-	};	
 
 	hsi2c_2: hsi2c@13960000 {
 		gpios = <&gpf3 2 0 &gpf3 3 0>;

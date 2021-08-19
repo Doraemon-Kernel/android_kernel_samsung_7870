@@ -84,7 +84,6 @@
 #include <linux/export.h>
 #include <linux/msg.h>
 #include <linux/shm.h>
-#include <linux/fslog.h>
 
 // [ SEC_SELINUX_PORTING_COMMON
 #include <linux/delay.h>
@@ -435,15 +434,12 @@ static int selinux_is_sblabel_mnt(struct super_block *sb)
 	return sbsec->behavior == SECURITY_FS_USE_XATTR ||
 		sbsec->behavior == SECURITY_FS_USE_TRANS ||
 		sbsec->behavior == SECURITY_FS_USE_TASK ||
-		sbsec->behavior == SECURITY_FS_USE_NATIVE ||
 		/* Special handling. Genfs but also in-core setxattr handler */
 		!strcmp(sb->s_type->name, "sysfs") ||
 		!strcmp(sb->s_type->name, "pstore") ||
 		!strcmp(sb->s_type->name, "debugfs") ||
-		!strcmp(sb->s_type->name, "rootfs") ||
 		!strcmp(sb->s_type->name, "tracefs") ||
-		!strcmp(sb->s_type->name, "f2fs") ||
-		!strcmp(sb->s_type->name, "sdcardfs");
+		!strcmp(sb->s_type->name, "rootfs");
 }
 
 static int sb_finish_set_opts(struct super_block *sb)
@@ -1411,12 +1407,6 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
 			if (rc) {
 				char *dev = inode->i_sb->s_id;
 				unsigned long ino = inode->i_ino;
-
-				/* To log callstack to selog when unlabeled */
-				SE_LOG("%s : ino(%lu) failed to get sid from context %s, rc : %d\n",
-						__func__, ino, context, rc);
-				dump_stack();
-				fslog_kmsg_selog(__func__, 12);
 
 				if (rc == -EINVAL) {
 					if (printk_ratelimit())
@@ -2924,7 +2914,6 @@ static noinline int audit_inode_permission(struct inode *inode,
 					   int result,
 					   unsigned flags)
 {
-#ifdef CONFIG_AUDIT
 	struct common_audit_data ad;
 	struct inode_security_struct *isec = inode->i_security;
 	int rc;
@@ -2936,7 +2925,6 @@ static noinline int audit_inode_permission(struct inode *inode,
 			    audited, denied, result, &ad, flags);
 	if (rc)
 		return rc;
-#endif
 	return 0;
 }
 
@@ -3066,9 +3054,7 @@ static int selinux_inode_setxattr(struct dentry *dentry, const char *name,
 	struct superblock_security_struct *sbsec;
 	struct common_audit_data ad;
 	u32 newsid, sid = current_sid();
-	int rc = 0, rc1, rc2;
-	char *context, *context2;
-	u32 context_len, context_len2;
+	int rc = 0;
 
 	if (strcmp(name, XATTR_NAME_SELINUX))
 		return selinux_inode_setotherxattr(dentry, name);
@@ -3087,8 +3073,6 @@ static int selinux_inode_setxattr(struct dentry *dentry, const char *name,
 			  FILE__RELABELFROM, &ad);
 	if (rc)
 		return rc;
-
-	rc1 = security_sid_to_context(isec->sid, &context, &context_len);
 
 	rc = security_context_to_sid(value, size, &newsid, GFP_KERNEL);
 	if (rc == -EINVAL) {
@@ -3114,41 +3098,22 @@ static int selinux_inode_setxattr(struct dentry *dentry, const char *name,
 			audit_log_n_untrustedstring(ab, value, audit_size);
 			audit_log_end(ab);
 
-			if (!rc1) kfree(context);
 			return rc;
 		}
 		rc = security_context_to_sid_force(value, size, &newsid);
 	}
-	if (rc) {
-		if (!rc1) kfree(context);
+	if (rc)
 		return rc;
-	}
 
 	rc = avc_has_perm(sid, newsid, isec->sclass,
 			  FILE__RELABELTO, &ad);
-	if (rc) {
-		if (!rc1) kfree(context);
+	if (rc)
 		return rc;
-	}
 
 	rc = security_validate_transition(isec->sid, newsid, sid,
 					  isec->sclass);
-	if (rc) {
-		if (!rc1) kfree(context);
+	if (rc)
 		return rc;
-	}
-
-	rc2 = security_sid_to_context(newsid, &context2, &context_len2);
-	if (!rc1 && !rc2) {
-		if (strstr(context, "data_file") && strstr(context2, "unlabeled")) {
-			SE_LOG("%s : ino(%lu) context changed %s -> %s\n",
-					__func__, inode->i_ino, context, context2);
-			dump_stack();
-			fslog_kmsg_selog(__func__, 12);
-		}
-	}
-	if (!rc1) kfree(context);
-	if (!rc2) kfree(context2);
 
 	return avc_has_perm(newsid,
 			    sbsec->sid,
@@ -3757,38 +3722,6 @@ static int selinux_kernel_module_request(char *kmod_name)
 
 	return avc_has_perm(sid, SECINITSID_KERNEL, SECCLASS_SYSTEM,
 			    SYSTEM__MODULE_REQUEST, &ad);
-}
-
-static int selinux_kernel_module_from_file(struct file *file)
-{
-	struct common_audit_data ad;
-	struct inode_security_struct *isec;
-	struct file_security_struct *fsec;
-	struct inode *inode;
-	u32 sid = current_sid();
-	int rc;
-
-	/* init_module */
-	if (file == NULL)
-		return avc_has_perm(sid, sid, SECCLASS_SYSTEM,
-					SYSTEM__MODULE_LOAD, NULL);
-
-	/* finit_module */
-	ad.type = LSM_AUDIT_DATA_PATH;
-	ad.u.path = file->f_path;
-
-	inode = file_inode(file);
-	isec = inode->i_security;
-	fsec = file->f_security;
-
-	if (sid != fsec->sid) {
-		rc = avc_has_perm(sid, fsec->sid, SECCLASS_FD, FD__USE, &ad);
-		if (rc)
-			return rc;
-	}
-
-	return avc_has_perm(sid, isec->sid, SECCLASS_SYSTEM,
-				SYSTEM__MODULE_LOAD, &ad);
 }
 
 static int selinux_task_setpgid(struct task_struct *p, pid_t pgid)
@@ -5829,7 +5762,7 @@ static int selinux_setprocattr(struct task_struct *p,
 		return error;
 
 	/* Obtain a SID for the context, if one was specified. */
-	if (size && str[0] && str[0] != '\n') {
+	if (size && str[1] && str[1] != '\n') {
 		if (str[size-1] == '\n') {
 			str[size-1] = 0;
 			size--;
@@ -6134,7 +6067,6 @@ static struct security_operations selinux_ops = {
 	.kernel_act_as =		selinux_kernel_act_as,
 	.kernel_create_files_as =	selinux_kernel_create_files_as,
 	.kernel_module_request =	selinux_kernel_module_request,
-	.kernel_module_from_file =      selinux_kernel_module_from_file,
 	.task_setpgid =			selinux_task_setpgid,
 	.task_getpgid =			selinux_task_getpgid,
 	.task_getsid =			selinux_task_getsid,

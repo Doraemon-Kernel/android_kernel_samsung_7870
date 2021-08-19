@@ -71,6 +71,11 @@ struct sec_nfc_i2c_info {};
 #include <linux/smc.h>
 #endif
 
+#include <linux/moduleparam.h>
+
+static int wl_nfc = 2;
+module_param(wl_nfc, int, 0644);
+
 #define SEC_NFC_GET_INFO(dev) i2c_get_clientdata(to_i2c_client(dev))
 enum sec_nfc_irq {
 	SEC_NFC_SKIP = -1,
@@ -147,7 +152,7 @@ static irqreturn_t sec_nfc_irq_thread_fn(int irq, void *dev_id)
 	mutex_unlock(&info->i2c_info.read_mutex);
 
 	wake_up_interruptible(&info->i2c_info.read_wait);
-	wake_lock_timeout(&info->nfc_wake_lock, 2*HZ);
+	wake_lock_timeout(&info->nfc_wake_lock, wl_nfc*HZ);
 
 	return IRQ_HANDLED;
 }
@@ -1001,14 +1006,6 @@ static ssize_t sec_nfc_test_store(struct class *dev,
 static CLASS_ATTR(test, 0664, sec_nfc_test_show, sec_nfc_test_store);
 #endif
 
-static ssize_t sec_nfc_support_show(struct class *class,
-					struct class_attribute *attr,
-					char *buf)
-{
-	pr_info("\n");
-	return 0;
-}
-static CLASS_ATTR(nfc_support, 0444, sec_nfc_support_show, NULL);
 static int __devinit __sec_nfc_probe(struct device *dev)
 {
 	struct sec_nfc_info *info;
@@ -1128,15 +1125,6 @@ static int __devinit __sec_nfc_probe(struct device *dev)
 			pr_err("NFC: failed to create attr_test\n");
 	}
 #endif
-	nfc_class = class_create(THIS_MODULE, "nfc");
-	if (IS_ERR(&nfc_class))
-		pr_err("NFC: failed to create nfc class\n");
-	else {
-		ret = class_create_file(nfc_class, &class_attr_nfc_support);
-		if (ret)
-			pr_err("NFC: failed to create attr_nfc_support\n");
-	}
-
 	pr_info("%s : success\n", __func__);
 	dev_dbg(dev, "%s: success info\n", __func__);
 

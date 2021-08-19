@@ -5,8 +5,6 @@
  *
  */
 
-#include <linux/pm_qos.h>
-
 #include "melfas_mms400.h"
 
 #if MMS_USE_NAP_MODE
@@ -785,10 +783,9 @@ static irqreturn_t mms_interrupt(int irq, void *dev_id)
 	u8 category = 0;
 	u8 alert_type = 0;
 
-	if (info->lowpower_mode)
+	if (info->lowpower_mode){
 		pm_wakeup_event(info->input_dev->dev.parent, 1000);
-
-	pm_qos_update_request(&info->pm_qos_req, 100);
+	}
 
 	tsp_debug_dbg(false, &client->dev, "%s [START]\n", __func__);
 
@@ -835,16 +832,12 @@ static irqreturn_t mms_interrupt(int irq, void *dev_id)
 
 		} else {
 			input_err(true, &client->dev, "%s [ERROR] Read a wrong aot action %x\n", __func__, alert_type);
-
-			pm_qos_update_request(&info->pm_qos_req, PM_QOS_DEFAULT_VALUE);
 			return IRQ_HANDLED;
 		}
 		input_report_key(info->input_dev, KEY_BLACK_UI_GESTURE, 1);
 		input_sync(info->input_dev);
 		input_report_key(info->input_dev, KEY_BLACK_UI_GESTURE, 0);
 		input_sync(info->input_dev);
-
-		pm_qos_update_request(&info->pm_qos_req, PM_QOS_DEFAULT_VALUE);
 		return IRQ_HANDLED;
 	}
 
@@ -915,8 +908,6 @@ static irqreturn_t mms_interrupt(int irq, void *dev_id)
 	}
 
 	tsp_debug_dbg(false, &client->dev, "%s [DONE]\n", __func__);
-
-	pm_qos_update_request(&info->pm_qos_req, PM_QOS_DEFAULT_VALUE);
 	return IRQ_HANDLED;
 
 ERROR:
@@ -928,9 +919,6 @@ ERROR:
 		mms_clear_input(info);
 		mms_enable(info);
 	}
-
-	pm_qos_update_request(&info->pm_qos_req, PM_QOS_DEFAULT_VALUE);
-
 	return IRQ_HANDLED;
 }
 
@@ -978,7 +966,7 @@ int mms_fw_update_from_kernel(struct mms_ts_info *info, bool force)
 	enable_irq(info->client->irq);
 	mutex_unlock(&info->lock);
 
-	if (unlikely(ret < 0)) {
+	if (ret < 0) {
 		goto ERROR;
 	}
 
@@ -1100,7 +1088,7 @@ int mms_fw_update_from_ffu(struct mms_ts_info *info, bool force)
 	enable_irq(info->client->irq);
 	mutex_unlock(&info->lock);
 
-	if (unlikely(ret < 0)) {
+	if (ret < 0) {
 		goto ERROR;
 	}
 
@@ -1457,11 +1445,8 @@ static int mms_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	device_init_wakeup(&client->dev, true);
 	info->init = false;
 	info->ic_status = PWR_ON;
-	pm_qos_add_request(&info->pm_qos_req, PM_QOS_CPU_DMA_LATENCY,
-		PM_QOS_DEFAULT_VALUE);
 	tsp_debug_info(true, &client->dev,
 		"MELFAS " CHIP_NAME " Touchscreen is initialized successfully\n");
-
 	return 0;
 
 
@@ -1539,7 +1524,6 @@ static int mms_remove(struct i2c_client *client)
 
 	input_unregister_device(info->input_dev);
 
-	pm_qos_remove_request(&info->pm_qos_req);
 	kfree(info->fw_name);
 	kfree(info);
 

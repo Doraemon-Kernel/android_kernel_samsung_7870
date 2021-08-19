@@ -1054,13 +1054,12 @@ static void __init_discard_policy(struct f2fs_sb_info *sbi,
 		dpolicy->min_interval = DEF_MIN_DISCARD_ISSUE_TIME;
 		dpolicy->mid_interval = DEF_MID_DISCARD_ISSUE_TIME;
 		dpolicy->max_interval = DEF_MAX_DISCARD_ISSUE_TIME;
-		// P190708-00895
-		dpolicy->io_aware = false;
+		dpolicy->io_aware = true;
 		dpolicy->sync = false;
 		dpolicy->ordered = true;
 		if (utilization(sbi) > DEF_DISCARD_URGENT_UTIL) {
 			dpolicy->granularity = 1;
-			dpolicy->max_interval = DEF_MAX_DISCARD_URGENT_ISSUE_TIME;
+			dpolicy->max_interval = DEF_MIN_DISCARD_ISSUE_TIME;
 		}
 	} else if (discard_type == DPOLICY_FORCE) {
 		dpolicy->min_interval = DEF_MIN_DISCARD_ISSUE_TIME;
@@ -1668,8 +1667,7 @@ static int issue_discard_thread(void *data)
 		wait_event_interruptible_timeout(*q,
 				kthread_should_stop() || freezing(current) ||
 				dcc->discard_wake,
-				msecs_to_jiffies((sbi->gc_mode == GC_URGENT) ?
-						 1 : wait_ms));
+				msecs_to_jiffies(wait_ms));
 
 		if (dcc->discard_wake)
 			dcc->discard_wake = 0;
@@ -3141,8 +3139,6 @@ void f2fs_do_write_meta_page(struct f2fs_sb_info *sbi, struct page *page,
 		.in_list = false,
 	};
 
-	f2fs_cond_set_fua(&fio);
-
 	if (unlikely(page->index >= MAIN_BLKADDR(sbi)))
 		fio.op_flags &= ~REQ_META;
 
@@ -3785,7 +3781,6 @@ void f2fs_flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 		unsigned int end = min(start_segno + SIT_ENTRY_PER_BLOCK,
 						(unsigned long)MAIN_SEGS(sbi));
 		unsigned int segno = start_segno;
-		int err = 0;
 
 		if (to_journal &&
 			!__has_cursum_space(journal, ses->entry_cnt, SIT_JOURNAL))
@@ -3823,16 +3818,16 @@ void f2fs_flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 							cpu_to_le32(segno);
 				seg_info_to_raw_sit(se,
 					&sit_in_journal(journal, offset));
-				err = check_block_count(sbi, segno,
+				check_block_count(sbi, segno,
 					&sit_in_journal(journal, offset));
 			} else {
 				sit_offset = SIT_ENTRY_OFFSET(sit_i, segno);
 				seg_info_to_raw_sit(se,
 						&raw_sit->entries[sit_offset]);
-				err = check_block_count(sbi, segno,
+				check_block_count(sbi, segno,
 						&raw_sit->entries[sit_offset]);
 			}
-			f2fs_bug_on(sbi, err);
+
 			__clear_bit(segno, bitmap);
 			sit_i->dirty_sentries--;
 			ses->entry_cnt--;
@@ -4204,13 +4199,7 @@ static int init_victim_secmap(struct f2fs_sb_info *sbi)
 								GFP_KERNEL);
 	if (!dirty_i->blacklist_victim_secmap)
 		return -ENOMEM;
-#if defined(CONFIG_SAMSUNG_USER_TRIAL) || !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-	/* W/A for GC failure due to Pinned File */
-	dirty_i->pblacklist_victim_secmap = f2fs_kvzalloc(sbi, bitmap_size,
-								GFP_KERNEL);
-	if (!dirty_i->pblacklist_victim_secmap)
-		return -ENOMEM;
-#endif
+
 	return 0;
 }
 
@@ -4358,10 +4347,6 @@ static void destroy_victim_secmap(struct f2fs_sb_info *sbi)
 
 	/* W/A for FG_GC failure due to Atomic Write File */    
 	kvfree(dirty_i->blacklist_victim_secmap);
-#if defined(CONFIG_SAMSUNG_USER_TRIAL) || !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-	/* W/A for GC failure due to Pinned File */
-	kvfree(dirty_i->pblacklist_victim_secmap);
-#endif
 }
 
 static void destroy_dirty_segmap(struct f2fs_sb_info *sbi)

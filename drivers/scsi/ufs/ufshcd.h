@@ -64,8 +64,6 @@
 #include <scsi/scsi_dbg.h>
 #include <scsi/scsi_eh.h>
 
-#define CUSTOMIZE_UPIU_FLAGS
-
 #include "ufs.h"
 #include "ufshci.h"
 
@@ -551,8 +549,7 @@ struct ufs_hba {
 
 	struct ufs_debug debug;
 	int			latency_hist_enabled;
-	struct io_latency_state io_lat_read;
-	struct io_latency_state io_lat_write;
+	struct io_latency_state io_lat_s;
 };
 
 /* Returns true if clocks can be gated. Otherwise false */
