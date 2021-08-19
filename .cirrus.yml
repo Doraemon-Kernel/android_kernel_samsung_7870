@@ -1,0 +1,49 @@
+env:
+    CIRRUS_CLONE_DEPTH: 1
+    CIRRUS_WORKING_DIR: "/tmp/ci"
+
+    rclone_conf: "ENCRYPTED[6ade1bbd9d15265109b65a5d3a7cfe3458dc65d71fd3243da4b947d6d183650fcd50d6c753e32e5baf930f43b59aab35]"
+
+task:
+  name: master
+  timeout_in: 2h
+  only_if: $CIRRUS_REPO_OWNER == 'Doraemon-Kernel'
+  container:
+    image: dopaemon/bionic:latest
+    cpu: 8
+    memory: 24G
+
+  ubuntu_script:
+    - rm -rf *
+    - sudo apt update
+    - sudo apt install -y rclone git-lfs bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libwxgtk3.0-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
+  github_script:
+    - git clone -b amd64 --single-branch https://github.com/EternalX-project/aarch64-linux-gnu.git gcc
+    - git clone -b master --single-branch https://github.com/Doraemon-Kernel/android_kernel_samsung_7870.git kernel
+  build_script:
+    - cd kernel
+    - ./CI/treble.sh
+  upload_script:
+    - mkdir -p ~/.config/rclone
+    - echo "$rclone_conf" > ~/.config/rclone/rclone.conf
+    - cd /tmp/ci/kernel/ARES/Product/
+    - ls /tmp/ci/kernel/ARES/Out/
+    - ls /tmp/ci/kernel/ARES/Product/
+    - export FOLDER="Doraemon-Kernel-$(date +%d_%m_%Y)"
+    - rclone copy AresKernel-V8.1-OC-A320X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-A320X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-A600X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-A600X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-G610X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-G610X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-J530X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-J530X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-J600X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-J600X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-J701X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-J701X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-J710X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-J710X-TREBLE.img drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-J730X-TREBLE.zip drive:$FOLDER/
+    - rclone copy AresKernel-V8.1-OC-J730X-TREBLE.img drive:$FOLDER/
+    - echo "Done"
