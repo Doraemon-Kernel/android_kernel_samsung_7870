@@ -4467,6 +4467,8 @@ CONFIG_NLS=y
 # CONFIG_NLS_MAC_ROMANIAN is not set
 # CONFIG_NLS_MAC_TURKISH is not set
 # CONFIG_DLM is not set
+CONFIG_VIRTUALIZATION=y
+CONFIG_KVM=y
 
 #
 # Kernel hacking
