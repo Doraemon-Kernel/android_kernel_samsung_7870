@@ -310,7 +310,7 @@ void hal_tui_exit(void)
 uint32_t hal_tui_alloc(tuiAllocBuffer_t *allocbuffer, size_t allocsize, uint32_t count)
 {
 	int ret = TUI_DCI_ERR_INTERNAL_ERROR;
-	ion_phys_addr_t phys_addr;
+	phys_addr_t phys_addr;
 	//unsigned long offset = 0;
 	size_t size;
 	size_t phy_size = 0;
