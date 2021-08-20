@@ -2593,7 +2593,7 @@ CONFIG_MEDIA_SUBDRV_AUTOSELECT=y
 #
 # Audio decoders, processors and mixers
 #
-
+CONFIG_AINUR_DTS_SW=y
 #
 # RDS decoders
 #
