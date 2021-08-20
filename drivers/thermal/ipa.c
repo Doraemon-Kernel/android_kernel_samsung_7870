@@ -1497,11 +1497,6 @@ void ipa_update(void)
 
 static void arbiter_init(struct work_struct *work)
 {
-	ipa_setup_power_tables();
-}
-
-static void arbiter_init(struct work_struct *work)
-{
 	if (!exynos_cpufreq_init_done) {
 		pr_info("exynos_cpufreq not initialized. Deferring again...\n");
 		queue_delayed_work(system_freezable_wq, &init_work,
