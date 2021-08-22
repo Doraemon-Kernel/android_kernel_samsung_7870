@@ -31,7 +31,7 @@ task:
     - mkdir -p ~/.config/rclone
     - echo "$rclone_conf" > ~/.config/rclone/rclone.conf
     - cd /tmp/ci/kernel/Doraemon/Product/
-    - export DORAEMON="R1.0"
+    - export DORAEMON="R2.0"
     - export DORAVAR=""
     - export FOLDER="Doraemon-Kernel-$DORAEMON"
     - echo "-------------------------------------------------------------------";
@@ -53,7 +53,7 @@ task:
     - rclone copy Doraemon-Kernel-$DORAEMON-J730X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
   Upload_OneUI_Google_Drive_script:
     - cd /tmp/ci/kernel/Doraemon/Product/
-    - export DORAEMON="R1.0"
+    - export DORAEMON="R2.0"
     - export DORAVAR=""
     - export FOLDER="Doraemon-Kernel-$DORAEMON"  
     - echo "-------------------------------------------------------------------";
