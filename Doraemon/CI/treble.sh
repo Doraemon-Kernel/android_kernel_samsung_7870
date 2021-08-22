@@ -1,6 +1,7 @@
 #!/bin/bash
 #
 # AresKernel script
+# Doraemon Kernel Script 2021
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -23,19 +24,19 @@ CR_DTS=arch/arm64/boot/dts
 CR_DTS_TREBLE=arch/arm64/boot/universal7870.dtsi
 CR_DTS_X6LTE=arch/arm64/boot/exynos7870_x6lte.dtsi
 # Define boot.img out dir
-CR_OUT=$CR_DIR/ARES/Out
-CR_PRODUCT=$CR_DIR/ARES/Product
+CR_OUT=$CR_DIR/Doraemon/Out
+CR_PRODUCT=$CR_DIR/Doraemon/Product
 # Presistant A.I.K Location
-CR_AIK=$CR_DIR/ARES/A.I.K
+CR_AIK=$CR_DIR/Doraemon/A.I.K
 # Main Ramdisk Location
-CR_RAMDISK=$CR_DIR/ARES/universal7870
+CR_RAMDISK=$CR_DIR/Doraemon/universal7870
 # Compiled image name and location (Image/zImage)
 CR_KERNEL=$CR_DIR/arch/arm64/boot/Image
 # Compiled dtb by dtbtool
 CR_DTB=$CR_DIR/boot.img-dtb
 # Kernel Name and Version
-CR_VERSION=V8.0
-CR_NAME=AresKernel
+CR_VERSION=R1.0
+CR_NAME=Doraemon-Kernel
 # Thread count
 CR_JOBS=$(nproc --all)
 # Target android version and platform (7/n/8/o/9/p)
@@ -93,7 +94,7 @@ CR_VARIANT_A600X=A600X
 CR_CONFIG_TREBLE=exynos7870-treble_defconfig
 CR_CONFIG_ONEUI=exynos7870-oneui_defconfig
 CR_CONFIG_SPLIT=NULL
-CR_CONFIG_ARES=exynos7870-ares_defconfig
+CR_CONFIG_DORA=exynos7870-dora_defconfig
 # Prefixes
 CR_ROOT="0"
 CR_PERMISSIVE="0"
@@ -101,8 +102,8 @@ CR_HALLIC="0"
 # Flashable Variables
 FL_MODEL=NULL
 FL_VARIANT=NULL
-FL_DIR=$CR_DIR/ARES/Flashable
-FL_EXPORT=$CR_DIR/ARES/Flashable_OUT
+FL_DIR=$CR_DIR/Doraemon/Flashable
+FL_EXPORT=$CR_DIR/Doraemon/Flashable_OUT
 FL_SCRIPT=$FL_EXPORT/META-INF/com/google/android/updater-script
 #####################################################
 
@@ -260,8 +261,8 @@ BUILD_GENERATE_CONFIG()
     echo " Copy $CR_CONFIG_USB "
     cat $CR_DIR/arch/$CR_ARCH/configs/$CR_CONFIG_USB >> $CR_DIR/arch/$CR_ARCH/configs/tmp_defconfig
   fi
-  echo " Copy $CR_CONFIG_ARES "
-  cat $CR_DIR/arch/$CR_ARCH/configs/$CR_CONFIG_ARES >> $CR_DIR/arch/$CR_ARCH/configs/tmp_defconfig
+  echo " Copy $CR_CONFIG_DORA "
+  cat $CR_DIR/arch/$CR_ARCH/configs/$CR_CONFIG_DORA >> $CR_DIR/arch/$CR_ARCH/configs/tmp_defconfig
   echo " Set $CR_VARIANT to generated config "
   CR_CONFIG=tmp_defconfig
 }
@@ -358,7 +359,7 @@ PACK_FLASHABLE()
 	echo " Target device : $CR_VARIANT "
   echo " Target image $CR_OUT/$CR_IMAGE_NAME.img "
   echo " Prepare Temporary Dirs"
-  FL_DEVICE=$FL_EXPORT/ARES/device/$FL_MODEL/boot.img
+  FL_DEVICE=$FL_EXPORT/Doraemon/device/$FL_MODEL/boot.img
   echo " Copy $FL_DIR to $FL_EXPORT"
   rm -rf $FL_EXPORT
   mkdir $FL_EXPORT
