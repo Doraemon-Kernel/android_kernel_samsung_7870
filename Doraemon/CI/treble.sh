@@ -35,7 +35,7 @@ CR_KERNEL=$CR_DIR/arch/arm64/boot/Image
 # Compiled dtb by dtbtool
 CR_DTB=$CR_DIR/boot.img-dtb
 # Kernel Name and Version
-CR_VERSION=R1.0
+CR_VERSION=R2.0
 CR_NAME=Doraemon-Kernel
 # Thread count
 CR_JOBS=$(nproc --all)
