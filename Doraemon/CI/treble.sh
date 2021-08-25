@@ -120,7 +120,7 @@ if [ $CR_CLEAN = 1 ]; then
      rm -rf $CR_DTS/.*.cmd
      rm -rf $CR_DTS/*.dtb
      rm -rf $CR_DIR/.config
-     rm -rf $CR_DTS/exynos7870.dtsi
+     # rm -rf $CR_DTS/exynos7870.dtsi
      rm -rf $CR_OUT/*.img
      rm -rf $CR_OUT/*.zip
 fi
@@ -132,7 +132,7 @@ if [ $CR_CLEAN = 0 ]; then
      rm -rf $CR_DTS/.*.cmd
      rm -rf $CR_DTS/*.dtb
      rm -rf $CR_DIR/.config
-     rm -rf $CR_DTS/exynos7870.dtsi
+     # rm -rf $CR_DTS/exynos7870.dtsi
 fi
 }
 
