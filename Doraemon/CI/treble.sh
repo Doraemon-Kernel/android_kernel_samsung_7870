@@ -107,7 +107,7 @@ FL_SCRIPT=$FL_EXPORT/META-INF/com/google/android/updater-script
 #####################################################
 
 # Script functions
-CR_CLEAN="1"
+CR_CLEAN="0"
 
 BUILD_CLEAN()
 {
@@ -120,7 +120,6 @@ if [ $CR_CLEAN = 1 ]; then
      rm -rf $CR_DTS/.*.cmd
      rm -rf $CR_DTS/*.dtb
      rm -rf $CR_DIR/.config
-     # rm -rf $CR_DTS/exynos7870.dtsi
      rm -rf $CR_OUT/*.img
      rm -rf $CR_OUT/*.zip
 fi
@@ -132,7 +131,6 @@ if [ $CR_CLEAN = 0 ]; then
      rm -rf $CR_DTS/.*.cmd
      rm -rf $CR_DTS/*.dtb
      rm -rf $CR_DIR/.config
-     # rm -rf $CR_DTS/exynos7870.dtsi
 fi
 }
 
@@ -262,7 +260,6 @@ BUILD_ZIMAGE()
 	echo " "
 	echo "Building zImage for $CR_VARIANT"
 	export LOCALVERSION=-$CR_IMAGE_NAME
-  	# cp $CR_DTB_MOUNT $CR_DTS/exynos7870.dtsi
 	echo "Make $CR_CONFIG"
 	make $CR_CONFIG
 	make -j$CR_JOBS
@@ -292,7 +289,6 @@ BUILD_DTB()
 	rm -rf $CR_DTS/.*.tmp
 	rm -rf $CR_DTS/.*.cmd
 	rm -rf $CR_DTS/*.dtb
-  # rm -rf $CR_DTS/exynos7870.dtsi
     du -k "$CR_DTB" | cut -f1 >sizdT
     sizdT=$(head -n 1 sizdT)
     rm -rf sizdT
