@@ -35,7 +35,7 @@ CR_KERNEL=$CR_DIR/arch/arm64/boot/Image
 # Compiled dtb by dtbtool
 CR_DTB=$CR_DIR/boot.img-dtb
 # Kernel Name and Version
-CR_VERSION=R3.0
+CR_VERSION=R3.5
 CR_NAME=Doraemon-Kernel
 # Thread count
 CR_JOBS=$(nproc --all)
@@ -91,13 +91,10 @@ CR_DTSFILES_A600X="exynos7870-a6lte_eur_open_00.dtb exynos7870-a6lte_eur_open_01
 CR_CONFG_A600X=exynos7870-a6lte_defconfig
 CR_VARIANT_A600X=A600X
 # Common configs
-CR_CONFIG_TREBLE=exynos7870-treble_defconfig
-CR_CONFIG_ONEUI=exynos7870-oneui_defconfig
 CR_CONFIG_SPLIT=NULL
 CR_CONFIG_DORA=exynos7870-dora_defconfig
 # Prefixes
 CR_ROOT="0"
-CR_PERMISSIVE="0"
 CR_HALLIC="0"
 # Flashable Variables
 FL_MODEL=NULL
@@ -109,22 +106,6 @@ FL_SCRIPT=$FL_EXPORT/META-INF/com/google/android/updater-script
 
 # Script functions
 CR_CLEAN="1"
-
-# TREBLE / OneUI
-CR_MODE="2"
-CR_PERMISSIVE="1"
-
-# Options
-# read -p "Kernel SU? (y/n) > " yn
-# if [ "$yn" = "Y" -o "$yn" = "y" ]; then
-#      echo " WARNING : KernelSU Enabled!"
-#      export CONFIG_ASSISTED_SUPERUSER=y
-#      CR_ROOT="1"
-# fi
-#   if [ $CR_HALLIC = "1" ]; then
-#     echo " Inverting HALL_IC Status"
-#     echo "CONFIG_HALL_EVENT_REVERSE=y" >> $CR_DIR/arch/$CR_ARCH/configs/tmp_defconfig
-#   fi
 
 BUILD_CLEAN()
 {
@@ -253,14 +234,6 @@ BUILD_GENERATE_CONFIG()
     echo " Copy $CR_CONFIG_SPLIT "
     cat $CR_DIR/arch/$CR_ARCH/configs/$CR_CONFIG_SPLIT >> $CR_DIR/arch/$CR_ARCH/configs/tmp_defconfig
   fi
-  if [ $CR_MODE = 2 ]; then
-    echo " Copy $CR_CONFIG_USB "
-    cat $CR_DIR/arch/$CR_ARCH/configs/$CR_CONFIG_USB >> $CR_DIR/arch/$CR_ARCH/configs/tmp_defconfig
-  fi
-  if [ $CR_MODE = 1 ]; then
-    echo " Copy $CR_CONFIG_USB "
-    cat $CR_DIR/arch/$CR_ARCH/configs/$CR_CONFIG_USB >> $CR_DIR/arch/$CR_ARCH/configs/tmp_defconfig
-  fi
   echo " Copy $CR_CONFIG_DORA "
   cat $CR_DIR/arch/$CR_ARCH/configs/$CR_CONFIG_DORA >> $CR_DIR/arch/$CR_ARCH/configs/tmp_defconfig
   echo " Set $CR_VARIANT to generated config "
@@ -386,22 +359,12 @@ PACK_FLASHABLE()
 }
 
 # Main Menu
-            echo "Starting $CR_VARIANT_A320X kernel build..."
+       echo "Starting $CR_VARIANT_A320X kernel build..."
             CR_CONFIG=$CR_CONFG_A320X
             CR_DTSFILES=$CR_DTSFILES_A320X
-            if [ $CR_MODE = "2" ]; then
-              echo " Building TREBLE variant "
-              CR_CONFIG_USB=$CR_CONFIG_TREBLE
-              CR_VARIANT=$CR_VARIANT_A320X-TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-            else
-              echo " Building OneUI variant "
-              CR_CONFIG_USB=$CR_CONFIG_ONEUI
-              CR_VARIANT=$CR_VARIANT_A320X-ONEUI
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-            fi
+            CR_VARIANT=$CR_VARIANT_A320X-TREBLE
+            CR_RAMDISK=$CR_RAMDISK
+            CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -410,22 +373,12 @@ PACK_FLASHABLE()
             BUILD_ROOT
             PACK_FLASHABLE
             BUILD_OUT
-            echo "Starting $CR_VARIANT_J530X kernel build..."
+       echo "Starting $CR_VARIANT_J530X kernel build..."
             CR_CONFIG=$CR_CONFG_J530X
             CR_DTSFILES=$CR_DTSFILES_J530X
-            if [ $CR_MODE = "2" ]; then
-              echo " Building TREBLE variant "
-              CR_CONFIG_USB=$CR_CONFIG_TREBLE
-              CR_VARIANT=$CR_VARIANT_J530X-TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-            else
-              echo " Building OneUI variant "
-              CR_CONFIG_USB=$CR_CONFIG_ONEUI
-              CR_VARIANT=$CR_VARIANT_J530X-ONEUI
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-            fi
+            CR_VARIANT=$CR_VARIANT_J530X-TREBLE
+            CR_RAMDISK=$CR_RAMDISK
+            CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -434,23 +387,13 @@ PACK_FLASHABLE()
             BUILD_ROOT
             PACK_FLASHABLE
             BUILD_OUT
-            echo "Starting $CR_VARIANT_J730X kernel build..."
+       echo "Starting $CR_VARIANT_J730X kernel build..."
             CR_VARIANT=$CR_VARIANT_J730X
             CR_CONFIG=$CR_CONFG_J730X
             CR_DTSFILES=$CR_DTSFILES_J730X
-            if [ $CR_MODE = "2" ]; then
-              echo " Building TREBLE variant "
-              CR_CONFIG_USB=$CR_CONFIG_TREBLE
-              CR_VARIANT=$CR_VARIANT_J730X-TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-            else
-              echo " Building OneUI variant "
-              CR_CONFIG_USB=$CR_CONFIG_ONEUI
-              CR_VARIANT=$CR_VARIANT_J730X-ONEUI
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-            fi
+            CR_VARIANT=$CR_VARIANT_J730X-TREBLE
+            CR_RAMDISK=$CR_RAMDISK
+            CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -459,25 +402,15 @@ PACK_FLASHABLE()
             BUILD_ROOT
             PACK_FLASHABLE
             BUILD_OUT
-            echo "Starting $CR_VARIANT_J710X kernel build..."
+       echo "Starting $CR_VARIANT_J710X kernel build..."
             # Build Nougat WiFi HAL
             export ANDROID_MAJOR_VERSION=$CR_ANDROID_J710X
             export PLATFORM_VERSION=$CR_PLATFORM_J710X
             CR_CONFIG=$CR_CONFG_J710X
             CR_DTSFILES=$CR_DTSFILES_J710X
-            if [ $CR_MODE = "2" ]; then
-              echo " Building TREBLE variant "
-              CR_CONFIG_USB=$CR_CONFIG_TREBLE
-              CR_VARIANT=$CR_VARIANT_J710X-TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-            else
-              echo " Building OneUI variant "
-              CR_CONFIG_USB=$CR_CONFIG_ONEUI
-              CR_VARIANT=$CR_VARIANT_J710X-ONEUI
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-            fi
+            CR_VARIANT=$CR_VARIANT_J710X-TREBLE
+            CR_RAMDISK=$CR_RAMDISK
+            CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -486,25 +419,15 @@ PACK_FLASHABLE()
             BUILD_ROOT
             PACK_FLASHABLE
             BUILD_OUT
-            echo "Starting $CR_VARIANT_J701X kernel build..."
+       echo "Starting $CR_VARIANT_J701X kernel build..."
             CR_CONFIG=$CR_CONFG_J701X
             CR_DTSFILES=$CR_DTSFILES_J701X
             # Build Oreo WiFi HAL
             export ANDROID_MAJOR_VERSION=$CR_ANDROID
             export PLATFORM_VERSION=$CR_PLATFORM
-            if [ $CR_MODE = "2" ]; then
-              echo " Building TREBLE variant "
-              CR_CONFIG_USB=$CR_CONFIG_TREBLE
-              CR_VARIANT=$CR_VARIANT_J701X-TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-            else
-              echo " Building OneUI variant "
-              CR_CONFIG_USB=$CR_CONFIG_ONEUI
-              CR_VARIANT=$CR_VARIANT_J701X-ONEUI
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-            fi
+            CR_VARIANT=$CR_VARIANT_J701X-TREBLE
+            CR_RAMDISK=$CR_RAMDISK
+            CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -513,25 +436,15 @@ PACK_FLASHABLE()
             BUILD_ROOT
             PACK_FLASHABLE
             BUILD_OUT
-            echo "Starting $CR_VARIANT_G610X kernel build..."
+       echo "Starting $CR_VARIANT_G610X kernel build..."
             CR_CONFIG=$CR_CONFG_G610X
             CR_DTSFILES=$CR_DTSFILES_G610X
             # Build Oreo WiFi HAL
             export ANDROID_MAJOR_VERSION=$CR_ANDROID
             export PLATFORM_VERSION=$CR_PLATFORM
-            if [ $CR_MODE = "2" ]; then
-              echo " Building TREBLE variant "
-              CR_CONFIG_USB=$CR_CONFIG_TREBLE
-              CR_VARIANT=$CR_VARIANT_G610X-TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-            else
-              echo " Building OneUI variant "
-              CR_CONFIG_USB=$CR_CONFIG_ONEUI
-              CR_VARIANT=$CR_VARIANT_G610X-ONEUI
-              CR_DTB_MOUNT=$CR_DTS_TREBLE
-              CR_RAMDISK=$CR_RAMDISK
-            fi
+            CR_VARIANT=$CR_VARIANT_G610X-TREBLE
+            CR_RAMDISK=$CR_RAMDISK
+            CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -540,7 +453,7 @@ PACK_FLASHABLE()
             BUILD_ROOT
             PACK_FLASHABLE
             BUILD_OUT
-            echo "Starting $CR_VARIANT_J600X kernel build..."
+       echo "Starting $CR_VARIANT_J600X kernel build..."
             CR_DTSFILES=$CR_DTSFILES_J600X
             CR_RAMDISK=$CR_RAMDISK
             CR_CONFIG=$CR_CONFG_J600X
@@ -548,15 +461,7 @@ PACK_FLASHABLE()
             # Build Oreo WiFi HAL
             export ANDROID_MAJOR_VERSION=$CR_ANDROID
             export PLATFORM_VERSION=$CR_PLATFORM
-            if [ $CR_MODE = "2" ]; then
-              echo " Building TREBLE variant "
-              CR_CONFIG_USB=$CR_CONFIG_TREBLE
-              CR_VARIANT=$CR_VARIANT_J600X-TREBLE
-            else
-              echo " Building OneUI variant "
-              CR_CONFIG_USB=$CR_CONFIG_ONEUI
-              CR_VARIANT=$CR_VARIANT_J600X-ONEUI
-            fi
+            CR_VARIANT=$CR_VARIANT_J600X-TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -565,7 +470,7 @@ PACK_FLASHABLE()
             BUILD_ROOT
             PACK_FLASHABLE
             BUILD_OUT
-            echo "Starting $CR_VARIANT_A600X kernel build..."
+       echo "Starting $CR_VARIANT_A600X kernel build..."
             CR_DTSFILES=$CR_DTSFILES_A600X
             CR_RAMDISK=$CR_RAMDISK
             CR_CONFIG=$CR_CONFG_A600X
@@ -573,15 +478,7 @@ PACK_FLASHABLE()
             # Build Oreo WiFi HAL
             export ANDROID_MAJOR_VERSION=$CR_ANDROID
             export PLATFORM_VERSION=$CR_PLATFORM
-            if [ $CR_MODE = "2" ]; then
-              echo " Building TREBLE variant "
-              CR_CONFIG_USB=$CR_CONFIG_TREBLE
-              CR_VARIANT=$CR_VARIANT_A600X-TREBLE
-            else
-              echo " Building OneUI variant "
-              CR_CONFIG_USB=$CR_CONFIG_ONEUI
-              CR_VARIANT=$CR_VARIANT_A600X-ONEUI
-            fi
+            CR_VARIANT=$CR_VARIANT_A600X-TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
