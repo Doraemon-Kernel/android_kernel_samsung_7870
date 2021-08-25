@@ -292,7 +292,7 @@ BUILD_DTB()
 	rm -rf $CR_DTS/.*.tmp
 	rm -rf $CR_DTS/.*.cmd
 	rm -rf $CR_DTS/*.dtb
-  rm -rf $CR_DTS/exynos7870.dtsi
+  # rm -rf $CR_DTS/exynos7870.dtsi
     du -k "$CR_DTB" | cut -f1 >sizdT
     sizdT=$(head -n 1 sizdT)
     rm -rf sizdT
