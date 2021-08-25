@@ -43,6 +43,7 @@ CR_JOBS=$(nproc --all)
 CR_ANDROID=q
 CR_PLATFORM=10.0.0
 # Target ARCH
+ARCH=arm64
 CR_ARCH=arm64
 # Init build
 export CROSS_COMPILE=$CR_TC
