@@ -22,6 +22,7 @@ task:
     - echo "-------------------------------------------------------------------";
     - git clone -b master --single-branch https://github.com/Doraemon-Kernel/android_kernel_samsung_7870.git kernel
   Compile_Kernel_Treble_script:
+    - export ARCH=arm64 && export SUBARCH=arm64
     - cd /tmp/ci/kernel
     - export CCACHE_DIR=/tmp/ccache
     - export CCACHE_EXEC=$(which ccache)
