@@ -21,8 +21,8 @@ CR_DIR=$(pwd)
 CR_TC=../gcc/bin/aarch64-linux-gnu-
 # Define proper arch and dir for dts files
 CR_DTS=arch/arm64/boot/dts
-CR_DTS_TREBLE=arch/arm64/boot/universal7870.dtsi
-CR_DTS_X6LTE=arch/arm64/boot/exynos7870_x6lte.dtsi
+# CR_DTS_TREBLE=arch/arm64/boot/universal7870.dtsi
+# CR_DTS_X6LTE=arch/arm64/boot/exynos7870_x6lte.dtsi
 # Define boot.img out dir
 CR_OUT=$CR_DIR/Doraemon/Out
 CR_PRODUCT=$CR_DIR/Doraemon/Product
@@ -43,6 +43,7 @@ CR_JOBS=$(nproc --all)
 CR_ANDROID=q
 CR_PLATFORM=10.0.0
 # Target ARCH
+ARCH=arm64
 CR_ARCH=arm64
 # Init build
 export CROSS_COMPILE=$CR_TC
@@ -50,6 +51,7 @@ export CROSS_COMPILE=$CR_TC
 export ANDROID_MAJOR_VERSION=$CR_ANDROID
 export PLATFORM_VERSION=$CR_PLATFORM
 export $CR_ARCH
+export ARCH=arm64
 # J710X Specific
 CR_ANDROID_J710X=q
 CR_PLATFORM_J710X=10.0.0
@@ -105,7 +107,7 @@ FL_SCRIPT=$FL_EXPORT/META-INF/com/google/android/updater-script
 #####################################################
 
 # Script functions
-CR_CLEAN="1"
+CR_CLEAN="0"
 
 BUILD_CLEAN()
 {
@@ -118,7 +120,6 @@ if [ $CR_CLEAN = 1 ]; then
      rm -rf $CR_DTS/.*.cmd
      rm -rf $CR_DTS/*.dtb
      rm -rf $CR_DIR/.config
-     rm -rf $CR_DTS/exynos7870.dtsi
      rm -rf $CR_OUT/*.img
      rm -rf $CR_OUT/*.zip
 fi
@@ -130,7 +131,6 @@ if [ $CR_CLEAN = 0 ]; then
      rm -rf $CR_DTS/.*.cmd
      rm -rf $CR_DTS/*.dtb
      rm -rf $CR_DIR/.config
-     rm -rf $CR_DTS/exynos7870.dtsi
 fi
 }
 
@@ -260,7 +260,6 @@ BUILD_ZIMAGE()
 	echo " "
 	echo "Building zImage for $CR_VARIANT"
 	export LOCALVERSION=-$CR_IMAGE_NAME
-  cp $CR_DTB_MOUNT $CR_DTS/exynos7870.dtsi
 	echo "Make $CR_CONFIG"
 	make $CR_CONFIG
 	make -j$CR_JOBS
@@ -290,7 +289,6 @@ BUILD_DTB()
 	rm -rf $CR_DTS/.*.tmp
 	rm -rf $CR_DTS/.*.cmd
 	rm -rf $CR_DTS/*.dtb
-  rm -rf $CR_DTS/exynos7870.dtsi
     du -k "$CR_DTB" | cut -f1 >sizdT
     sizdT=$(head -n 1 sizdT)
     rm -rf sizdT
@@ -364,7 +362,7 @@ PACK_FLASHABLE()
             CR_DTSFILES=$CR_DTSFILES_A320X
             CR_VARIANT=$CR_VARIANT_A320X-TREBLE
             CR_RAMDISK=$CR_RAMDISK
-            CR_DTB_MOUNT=$CR_DTS_TREBLE
+            # CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -378,7 +376,7 @@ PACK_FLASHABLE()
             CR_DTSFILES=$CR_DTSFILES_J530X
             CR_VARIANT=$CR_VARIANT_J530X-TREBLE
             CR_RAMDISK=$CR_RAMDISK
-            CR_DTB_MOUNT=$CR_DTS_TREBLE
+            # CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -393,7 +391,7 @@ PACK_FLASHABLE()
             CR_DTSFILES=$CR_DTSFILES_J730X
             CR_VARIANT=$CR_VARIANT_J730X-TREBLE
             CR_RAMDISK=$CR_RAMDISK
-            CR_DTB_MOUNT=$CR_DTS_TREBLE
+            # CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -410,7 +408,7 @@ PACK_FLASHABLE()
             CR_DTSFILES=$CR_DTSFILES_J710X
             CR_VARIANT=$CR_VARIANT_J710X-TREBLE
             CR_RAMDISK=$CR_RAMDISK
-            CR_DTB_MOUNT=$CR_DTS_TREBLE
+            # CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -427,7 +425,7 @@ PACK_FLASHABLE()
             export PLATFORM_VERSION=$CR_PLATFORM
             CR_VARIANT=$CR_VARIANT_J701X-TREBLE
             CR_RAMDISK=$CR_RAMDISK
-            CR_DTB_MOUNT=$CR_DTS_TREBLE
+            # CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -444,7 +442,7 @@ PACK_FLASHABLE()
             export PLATFORM_VERSION=$CR_PLATFORM
             CR_VARIANT=$CR_VARIANT_G610X-TREBLE
             CR_RAMDISK=$CR_RAMDISK
-            CR_DTB_MOUNT=$CR_DTS_TREBLE
+            # CR_DTB_MOUNT=$CR_DTS_TREBLE
             BUILD_IMAGE_NAME
             BUILD_GENERATE_CONFIG
             BUILD_ZIMAGE
@@ -457,7 +455,7 @@ PACK_FLASHABLE()
             CR_DTSFILES=$CR_DTSFILES_J600X
             CR_RAMDISK=$CR_RAMDISK
             CR_CONFIG=$CR_CONFG_J600X
-            CR_DTB_MOUNT=$CR_DTS_X6LTE
+            # CR_DTB_MOUNT=$CR_DTS_X6LTE
             # Build Oreo WiFi HAL
             export ANDROID_MAJOR_VERSION=$CR_ANDROID
             export PLATFORM_VERSION=$CR_PLATFORM
@@ -474,7 +472,7 @@ PACK_FLASHABLE()
             CR_DTSFILES=$CR_DTSFILES_A600X
             CR_RAMDISK=$CR_RAMDISK
             CR_CONFIG=$CR_CONFG_A600X
-            CR_DTB_MOUNT=$CR_DTS_X6LTE
+            # CR_DTB_MOUNT=$CR_DTS_X6LTE
             # Build Oreo WiFi HAL
             export ANDROID_MAJOR_VERSION=$CR_ANDROID
             export PLATFORM_VERSION=$CR_PLATFORM
