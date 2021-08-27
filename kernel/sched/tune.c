@@ -11,7 +11,6 @@
 #include "sched.h"
 #include "tune.h"
 
-unsigned int sysctl_sched_cfs_boost __read_mostly = 0;
 
 /* Performance Boost region (B) threshold params */
 static int perf_boost_idx;
