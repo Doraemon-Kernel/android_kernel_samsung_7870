@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-export DORAEMON_VERSION=R3.5
+export DORAEMON_VERSION=R3.5-EAS
 export DORAEMON_NAME=Doraemon-Kernel
 export LOCALVERSION=-$DORAEMON_NAME-$DORAEMON_VERSION
 export FOLDERVERSION=$DORAEMON_NAME-$DORAEMON_VERSION
