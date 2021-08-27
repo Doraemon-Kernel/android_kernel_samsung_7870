@@ -47,7 +47,6 @@ task:
     - wget https://forum.xda-developers.com/attachments/aik-linux-v3-8-all-tar-gz.5300923/
     - mv index.html aik.tar.gz
     - tar -xf aik.tar.gz
-  SAMSUNG_Galaxy_J7_Prime_G610X_on7xelte_script:
     - source ~/.compile
     - wget https://github.com/Doraemon-Kernel/android_kernel_samsung_7870/releases/download/SPK/SimpleV2-on7xelte.img
     - mv SimpleV2-on7xelte.img /tmp/ci/AIK-Linux/boot.img
@@ -67,7 +66,6 @@ task:
     - ./repackimg.sh
     - mv image-new.img G610X.img
     - rclone copy -v G610X.img drive:
-  SAMSUNG_Galaxy_J6_2018_J600X_j6lte_script:
     - source ~/.compile
     - mkdir -p /tmp/ci/J600X
     - cd $LINUXDIR
@@ -77,7 +75,6 @@ task:
     - mv out/arch/arm64/boot/dtb.img /tmp/ci/J600X/boot.img-dtb
     - mv out/arch/arm64/boot/Image /tmp/ci/J600X/boot.img-zImage
     - rm -rvf out
-  SAMSUNG_Galaxy_A3_2017_A320X_a3y17lte_script:
     - source ~/.compile
     - mkdir -p /tmp/ci/A320X
     - cd $LINUXDIR
@@ -87,7 +84,6 @@ task:
     - mv out/arch/arm64/boot/dtb.img /tmp/ci/A320X/boot.img-dtb
     - mv out/arch/arm64/boot/Image /tmp/ci/A320X/boot.img-zImage
     - rm -rvf out
-  SAMSUNG_Galaxy_A6_2018_A600X_a6lte_script:
     - source ~/.compile
     - mkdir -p /tmp/ci/A600X
     - cd $LINUXDIR
@@ -97,7 +93,6 @@ task:
     - mv out/arch/arm64/boot/dtb.img /tmp/ci/A600X/boot.img-dtb
     - mv out/arch/arm64/boot/Image /tmp/ci/A600X/boot.img-zImage
     - rm -rvf out
-  SAMSUNG_Galaxy_J5_2017_J530X_j5y17lte_script:
     - source ~/.compile
     - mkdir -p /tmp/ci/J530X
     - cd $LINUXDIR
@@ -107,7 +102,6 @@ task:
     - mv out/arch/arm64/boot/dtb.img /tmp/ci/J530X/boot.img-dtb
     - mv out/arch/arm64/boot/Image /tmp/ci/J530X/boot.img-zImage
     - rm -rvf out
-  SAMSUNG_Galaxy_J7_Neo_J701X_j7velte_script:
     - source ~/.compile
     - mkdir -p /tmp/ci/J701X
     - cd $LINUXDIR
@@ -117,7 +111,6 @@ task:
     - mv out/arch/arm64/boot/dtb.img /tmp/ci/J701X/boot.img-dtb
     - mv out/arch/arm64/boot/Image /tmp/ci/J701X/boot.img-zImage
     - rm -rvf out
-  SAMSUNG_Galaxy_J7_2016_J710X_j7xelte_script:
     - source ~/.compile
     - mkdir -p /tmp/ci/J710X
     - cd $LINUXDIR
@@ -127,7 +120,6 @@ task:
     - mv out/arch/arm64/boot/dtb.img /tmp/ci/J710X/boot.img-dtb
     - mv out/arch/arm64/boot/Image /tmp/ci/J710X/boot.img-zImage
     - rm -rvf out
-  SAMSUNG_Galaxy_J7_2017_J730X_j7y17lte_script:
     - source ~/.compile
     - mkdir -p /tmp/ci/J730X
     - cd $LINUXDIR
