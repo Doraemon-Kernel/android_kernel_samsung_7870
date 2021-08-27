@@ -1,7 +1,8 @@
 env:
     CIRRUS_CLONE_DEPTH: 1
     CIRRUS_WORKING_DIR: "/tmp/ci"
-    RCLONE_CONF: "ENCRYPTED[6ade1bbd9d15265109b65a5d3a7cfe3458dc65d71fd3243da4b947d6d183650fcd50d6c753e32e5baf930f43b59aab35]"
+
+    rclone_conf: "ENCRYPTED[6ade1bbd9d15265109b65a5d3a7cfe3458dc65d71fd3243da4b947d6d183650fcd50d6c753e32e5baf930f43b59aab35]"
 
 task:
   name: master
@@ -40,7 +41,7 @@ task:
     - echo "ccache -z" >> ~/.compile
   Setup_rclone_config_script:
     - mkdir -p ~/.config/rclone
-    - echo "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+    - echo "$rclone_conf" > ~/.config/rclone/rclone.conf
   AIK_Unpack_Repack_img_script:
     - cd /tmp/ci/
     - wget https://forum.xda-developers.com/attachments/aik-linux-v3-8-all-tar-gz.5300923/
