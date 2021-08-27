@@ -25,20 +25,9 @@ task:
     - cd /tmp/ci
     - git clone -b master --single-branch https://github.com/Doraemon-Kernel/android_kernel_samsung_7870.git Linux
   Setup_ENV_script:
-    - cd /tmp/ci/kernel
+    - cd /tmp/ci/Linux
     - touch ~/.compile
-    - echo "export ARCH=arm64" >> ~/.compile
-    - echo "export SUBARCH=arm64" >> ~/.compile
-    - echo "export CROSS_COMPILE=/tmp/ci/gcc/bin/aarch64-linux-gnu-" >> ~/.compile
-    - echo "export ANDROID_MAJOR_VERSION=q" >> ~/.compile
-    - echo "export PLATFORM_VERSION=10.0.0" >> ~/.compile
-    - echo "export CCACHE_DIR=/tmp/ccache" >> ~/.compile
-    - echo "export CCACHE_EXEC=$(which ccache)" >> ~/.compile
-    - echo "export USE_CCACHE=1" >> ~/.compile
-    - echo "ccache -M 20G" >> ~/.compile
-    - echo "ccache -o compression=true" >> ~/.compile
-    - echo "export LINUXDIR=/tmp/ci/Linux/" >> ~/.compile
-    - echo "ccache -z" >> ~/.compile
+    - ./env.sh
   Setup_rclone_config_script:
     - mkdir -p ~/.config/rclone
     - echo "$rclone_conf" > ~/.config/rclone/rclone.conf
