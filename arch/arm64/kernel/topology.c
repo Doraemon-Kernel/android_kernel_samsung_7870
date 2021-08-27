@@ -244,7 +244,6 @@ static inline
 const struct sched_group_energy * const cpu_cluster_energy(int cpu)
 {
 	struct sched_group_energy *sge = sge_array[cpu][SD_LEVEL1];
->>>>>>> 417b3e063e20 (sched, cpufreq, topology: revert almost all of Samsung's changes)
 
 	if (!sge) {
 		pr_warn("Invalid sched_group_energy for Cluster%d\n", cpu);
