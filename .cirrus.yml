@@ -1,8 +1,7 @@
 env:
     CIRRUS_CLONE_DEPTH: 1
     CIRRUS_WORKING_DIR: "/tmp/ci"
-
-    rclone_conf: "ENCRYPTED[6ade1bbd9d15265109b65a5d3a7cfe3458dc65d71fd3243da4b947d6d183650fcd50d6c753e32e5baf930f43b59aab35]"
+    RCLONE_CONF: "ENCRYPTED[6ade1bbd9d15265109b65a5d3a7cfe3458dc65d71fd3243da4b947d6d183650fcd50d6c753e32e5baf930f43b59aab35]"
 
 task:
   name: master
@@ -13,47 +12,127 @@ task:
     cpu: 8
     memory: 24G
 
-  Install_Packages_Ubuntu_script:
+  Delete_script:
     - rm -rf *
+  Install_Packages_Ubuntu_script:
     - sudo apt-get update
     - sudo apt-get install -y ccache rclone git-lfs bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libwxgtk3.0-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
   Git_Clone_From_Github_script:
+    - cd /tmp/ci
     - git clone -b amd64 --single-branch https://github.com/EternalX-project/aarch64-linux-gnu.git gcc
     - echo "-------------------------------------------------------------------";
-    - git clone -b master --single-branch https://github.com/Doraemon-Kernel/android_kernel_samsung_7870.git kernel
-  Compile_Kernel_Treble_script:
-    - export ARCH=arm64 && export SUBARCH=arm64
+    - cd /tmp/ci
+    - git clone -b master --single-branch https://github.com/Doraemon-Kernel/android_kernel_samsung_7870.git Linux
+  Setup_ENV_script:
     - cd /tmp/ci/kernel
-    - export CCACHE_DIR=/tmp/ccache
-    - export CCACHE_EXEC=$(which ccache)
-    - export USE_CCACHE=1
-    - ccache -M 20G
-    - ccache -o compression=true
-    - ccache -z
-    - ./Doraemon/CI/treble.sh
-  Upload_Treble_Google_Drive_script:
+    - touch ~/.compile
+    - echo "export ARCH=arm64" >> ~/.compile
+    - echo "export SUBARCH=arm64" >> ~/.compile
+    - echo "export CROSS_COMPILE=/tmp/ci/gcc/bin/aarch64-linux-gnu-" >> ~/.compile
+    - echo "export ANDROID_MAJOR_VERSION=q" >> ~/.compile
+    - echo "export PLATFORM_VERSION=10.0.0" >> ~/.compile
+    - echo "export CCACHE_DIR=/tmp/ccache" >> ~/.compile
+    - echo "export CCACHE_EXEC=$(which ccache)" >> ~/.compile
+    - echo "export USE_CCACHE=1" >> ~/.compile
+    - echo "ccache -M 20G" >> ~/.compile
+    - echo "ccache -o compression=true" >> ~/.compile
+    - echo "export LINUXDIR=/tmp/ci/Linux/" >> ~/.compile
+    - echo "ccache -z" >> ~/.compile
+  Setup_rclone_config_script:
     - mkdir -p ~/.config/rclone
-    - echo "$rclone_conf" > ~/.config/rclone/rclone.conf
-    - cd /tmp/ci/kernel/Doraemon/Product/
-    - export DORAEMON="R3.5"
-    - export DORAVAR=""
-    - export FOLDER="Doraemon-Kernel-$DORAEMON"
-    - echo "-------------------------------------------------------------------";
-    - rclone copy Doraemon-Kernel-$DORAEMON-A320X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-A320X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-A600X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-A600X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-G610X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-G610X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J530X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J530X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J600X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J600X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J701X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J701X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J710X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J710X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J730X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J730X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - echo "-------------------------------------------------------------------";
-    - echo "Done"
+    - echo "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+  AIK_Unpack_Repack_img_script:
+    - cd /tmp/ci/
+    - wget https://forum.xda-developers.com/attachments/aik-linux-v3-8-all-tar-gz.5300923/
+    - mv index.html aik.tar.gz
+    - tar -xf aik.tar.gz
+  SAMSUNG_Galaxy_J7_Prime_G610X_on7xelte_script:
+    - source ~/.compile
+    - wget https://github.com/Doraemon-Kernel/android_kernel_samsung_7870/releases/download/SPK/SimpleV2-on7xelte.img
+    - mv SimpleV2-on7xelte.img /tmp/ci/AIK-Linux/boot.img
+    - cd /tmp/ci/AIK-Linux/
+    - ./unpackimg.sh
+    - mkdir -p /tmp/ci/G610X
+    - cd $LINUXDIR
+    - make O=out exynos7870-on7xelte_defconfig
+    - make O=out -j$(nproc --all)
+    - make O=out exynos7870-on7xelte_defconfig dtb.img
+    - rm -rf /tmp/ci/AIK-Linux/split_img/boot.img-zImage
+    - rm -rf /tmp/ci/AIK-Linux/split_img/boot.img-dtb
+    - mv out/arch/arm64/boot/dtb.img /tmp/ci/AIK-Linux/split_img/boot.img-dtb
+    - mv out/arch/arm64/boot/Image /tmp/ci/AIK-Linux/split_img/boot.img-zImage
+    - rm -rvf out
+    - cd /tmp/ci/AIK-Linux/
+    - ./repackimg.sh
+    - mv image-new.img G610X.img
+    - rclone copy -v G610X.img drive:
+  SAMSUNG_Galaxy_J6_2018_J600X_j6lte_script:
+    - source ~/.compile
+    - mkdir -p /tmp/ci/J600X
+    - cd $LINUXDIR
+    - make O=out exynos7870-j6lte_defconfig
+    - make O=out -j$(nproc --all)
+    - make O=out exynos7870-j6lte_defconfig dtb.img
+    - mv out/arch/arm64/boot/dtb.img /tmp/ci/J600X/boot.img-dtb
+    - mv out/arch/arm64/boot/Image /tmp/ci/J600X/boot.img-zImage
+    - rm -rvf out
+  SAMSUNG_Galaxy_A3_2017_A320X_a3y17lte_script:
+    - source ~/.compile
+    - mkdir -p /tmp/ci/A320X
+    - cd $LINUXDIR
+    - make O=out exynos7870-a3y17lte_defconfig
+    - make O=out -j$(nproc --all)
+    - make O=out exynos7870-a3y17lte_defconfig dtb.img
+    - mv out/arch/arm64/boot/dtb.img /tmp/ci/A320X/boot.img-dtb
+    - mv out/arch/arm64/boot/Image /tmp/ci/A320X/boot.img-zImage
+    - rm -rvf out
+  SAMSUNG_Galaxy_A6_2018_A600X_a6lte_script:
+    - source ~/.compile
+    - mkdir -p /tmp/ci/A600X
+    - cd $LINUXDIR
+    - make O=out exynos7870-a6lte_defconfig
+    - make O=out -j$(nproc --all)
+    - make O=out exynos7870-a6lte_defconfig dtb.img
+    - mv out/arch/arm64/boot/dtb.img /tmp/ci/A600X/boot.img-dtb
+    - mv out/arch/arm64/boot/Image /tmp/ci/A600X/boot.img-zImage
+    - rm -rvf out
+  SAMSUNG_Galaxy_J5_2017_J530X_j5y17lte_script:
+    - source ~/.compile
+    - mkdir -p /tmp/ci/J530X
+    - cd $LINUXDIR
+    - make O=out exynos7870-j5y17lte_defconfig
+    - make O=out -j$(nproc --all)
+    - make O=out exynos7870-j5y17lte_defconfig dtb.img
+    - mv out/arch/arm64/boot/dtb.img /tmp/ci/J530X/boot.img-dtb
+    - mv out/arch/arm64/boot/Image /tmp/ci/J530X/boot.img-zImage
+    - rm -rvf out
+  SAMSUNG_Galaxy_J7_Neo_J701X_j7velte_script:
+    - source ~/.compile
+    - mkdir -p /tmp/ci/J701X
+    - cd $LINUXDIR
+    - make O=out exynos7870-j7velte_defconfig
+    - make O=out -j$(nproc --all)
+    - make O=out exynos7870-j7velte_defconfig dtb.img
+    - mv out/arch/arm64/boot/dtb.img /tmp/ci/J701X/boot.img-dtb
+    - mv out/arch/arm64/boot/Image /tmp/ci/J701X/boot.img-zImage
+    - rm -rvf out
+  SAMSUNG_Galaxy_J7_2016_J710X_j7xelte_script:
+    - source ~/.compile
+    - mkdir -p /tmp/ci/J710X
+    - cd $LINUXDIR
+    - make O=out exynos7870-j7xelte_defconfig
+    - make O=out -j$(nproc --all)
+    - make O=out exynos7870-j7xelte_defconfig dtb.img
+    - mv out/arch/arm64/boot/dtb.img /tmp/ci/J710X/boot.img-dtb
+    - mv out/arch/arm64/boot/Image /tmp/ci/J710X/boot.img-zImage
+    - rm -rvf out
+  SAMSUNG_Galaxy_J7_2017_J730X_j7y17lte_script:
+    - source ~/.compile
+    - mkdir -p /tmp/ci/J730X
+    - cd $LINUXDIR
+    - make O=out exynos7870-j7y17lte_defconfig
+    - make O=out -j$(nproc --all)
+    - make O=out exynos7870-j7y17lte_defconfig dtb.img
+    - mv out/arch/arm64/boot/dtb.img /tmp/ci/J730X/boot.img-dtb
+    - mv out/arch/arm64/boot/Image /tmp/ci/J730X/boot.img-zImage
+    - rm -rvf out
