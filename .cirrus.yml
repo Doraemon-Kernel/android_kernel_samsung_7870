@@ -11,7 +11,7 @@ task:
   container:
     image: dopaemon/bionic:latest
     cpu: 8
-    memory: 24G
+    memory: 8G
 
   Install_Packages_Ubuntu_script:
     - rm -rf *
@@ -21,7 +21,10 @@ task:
     - git clone -b amd64 --single-branch https://github.com/EternalX-project/aarch64-linux-gnu.git gcc
     - echo "-------------------------------------------------------------------";
     - git clone -b master --single-branch https://github.com/Doraemon-Kernel/android_kernel_samsung_7870.git kernel
-  Compile_Kernel_Treble_script:
+  Rclone_Configure_script:
+    - mkdir -p ~/.config/rclone
+    - echo "$rclone_conf" > ~/.config/rclone/rclone.conf
+  Compile_Kernel_script:
     - cd /tmp/ci/kernel
     - export CCACHE_DIR=/tmp/ccache
     - export CCACHE_EXEC=$(which ccache)
@@ -29,30 +32,4 @@ task:
     - ccache -M 20G
     - ccache -o compression=true
     - ccache -z
-    - ./Doraemon/CI/treble.sh
-  Upload_Treble_Google_Drive_script:
-    - mkdir -p ~/.config/rclone
-    - echo "$rclone_conf" > ~/.config/rclone/rclone.conf
-    - cd /tmp/ci/kernel/Doraemon/Product/
-    - export DORAEMON="R3.5"
-    - export DORAVAR=""
-    - export FOLDER="Doraemon-Kernel-$DORAEMON"
-    - echo "-------------------------------------------------------------------";
-    - rclone copy Doraemon-Kernel-$DORAEMON-A320X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-A320X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-A600X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-A600X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-G610X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-G610X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J530X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J530X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J600X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J600X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J701X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J701X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J710X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J710X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J730X-TREBLE.zip drive:Share/Devices/Exynos7870/$FOLDER/Treble/Flashble/
-    - rclone copy Doraemon-Kernel-$DORAEMON-J730X-TREBLE.img drive:Share/Devices/Exynos7870/$FOLDER/Treble/Image/
-    - echo "-------------------------------------------------------------------";
-    - echo "Done"
+    - ./Doraemon/CI/build.sh
